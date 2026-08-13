@@ -17,16 +17,40 @@ import com.squareup.kotlinpoet.TypeSpec
  *
  * The `when` is exhaustive over the sealed [Scope] hierarchy with no `else`, so a future
  * fourth scope breaks the build here rather than falling through silently (D17).
+ *
+ * The nested type gets a *fresh* root [NameScope] rather than `names.child()`: a nested
+ * (non-`inner`) class cannot see an enclosing type's members, so there is nothing for one of
+ * its constructor parameters to shadow, and chaining would only rename it for no reason,
+ * changing the generated public API. `typeSpec`'s detached path already does this; this makes
+ * the attached path agree. `inner class` is the one case where a same-named parameter really
+ * would shadow an outer member — accepted as-is rather than special-cased: renaming the
+ * parameter would change the public API, which is worse than the shadowing. Member *bodies*
+ * (Task 19's local functions and beyond) still chain through `BlockScope.child`, which is the
+ * case ADR 0009's shadowing rationale actually describes — this only changes how a *type's own*
+ * scope is rooted.
  */
 internal fun Scope.declareType(
     builder: TypeSpec.Builder,
     kindName: String,
+    name: String,
     localAllowed: Boolean,
     annotations: Annotations?,
     modifiers: Modifiers?,
     body: TypeScope.() -> Unit,
 ) {
-    val scope = TypeScope(builder.addModifiers(modifiers.toList()), names.child(), id.child("type"))
+    if (this is BlockScope) {
+        check(localAllowed) {
+            "A local $kindName is not valid Kotlin. Declare it at file or type level."
+        }
+    }
+    // Types only: Kotlin permits function overloads, so duplicate `fun` names are legal and
+    // must never go through `declaredTypeNames`.
+    check(name !in declaredTypeNames) {
+        "A $kindName named \"$name\" is already declared in this scope."
+    }
+    declaredTypeNames += name
+
+    val scope = TypeScope(builder.addModifiers(modifiers.toList()), NameScope(null), id.child("type"))
     scope.addAll(annotations)
     scope.body()
     val spec = scope.finish()
@@ -34,13 +58,10 @@ internal fun Scope.declareType(
         is FileScope -> this.builder.addType(spec)
         is TypeScope -> this.builder.addType(spec)
         is BlockScope -> {
-            check(localAllowed) {
-                "A local $kindName is not valid Kotlin. Declare it at file or type level."
-            }
             // A local class *is* valid Kotlin, but KotlinPoet 2.3.0 cannot render one. See
             // `localClassIsUnrenderable` below; the guard is here rather than at the call site
             // so the two reasons stay distinguishable in the message.
-            localClassIsUnrenderable(kindName)
+            localClassIsUnrenderable()
         }
     }
 }
@@ -49,7 +70,7 @@ internal fun Scope.declareType(
  * Rejects a local class instead of emitting Kotlin that does not compile (Global Constraint 26).
  *
  * `TypeSpec.emit` hardcodes `implicitModifiers = setOf(PUBLIC)` when it calls
- * `CodeWriter.emitModifiers` (KotlinPoet 2.3.0, `TypeSpec.kt:182-185`), and
+ * `CodeWriter.emitModifiers` (KotlinPoet 2.3.0, `TypeSpec.kt:183-186`), and
  * `CodeWriter.shouldEmitPublicModifier` (`CodeWriter.kt:670-690`) then emits an explicit
  * visibility keyword for **every** `TypeSpec`: `public` when none was set, or the one that was.
  * `CodeBlock.of("%L", spec)` therefore always yields `public class Name`, and Kotlin rejects
@@ -64,8 +85,8 @@ internal fun Scope.declareType(
  * `local class rendering is still blocked by KotlinPoet` test in `TypeScopeTest` is the canary
  * that fails when that happens. Task 19's local functions hit the identical wall.
  */
-private fun localClassIsUnrenderable(kindName: String): Nothing = error(
-    "A local $kindName cannot be rendered: KotlinPoet 2.3.0 emits an explicit visibility " +
+private fun localClassIsUnrenderable(): Nothing = error(
+    "A local class cannot be rendered: KotlinPoet 2.3.0 emits an explicit visibility " +
         "modifier on every type, and Kotlin allows none on a local class. Declare it at file " +
         "or type level.",
 )
@@ -76,13 +97,13 @@ private fun localClassIsUnrenderable(kindName: String): Nothing = error(
  */
 context(s: Scope)
 public fun `class`(name: String, body: TypeScope.() -> Unit) {
-    s.declareType(TypeSpec.classBuilder(name), "class", localAllowed = true, null, null, body)
+    s.declareType(TypeSpec.classBuilder(name), "class", name, localAllowed = true, null, null, body)
 }
 
 /** `class Name { … }` with modifiers, e.g. `` `class`(DATA.toModifiers(), "User") { … } ``. */
 context(s: Scope)
 public fun `class`(modifiers: Modifiers, name: String, body: TypeScope.() -> Unit) {
-    s.declareType(TypeSpec.classBuilder(name), "class", localAllowed = true, null, modifiers, body)
+    s.declareType(TypeSpec.classBuilder(name), "class", name, localAllowed = true, null, modifiers, body)
 }
 
 /** Alias of [`class`]. */
@@ -100,25 +121,41 @@ public fun klass(modifiers: Modifiers, name: String, body: TypeScope.() -> Unit)
 /** `object Name { … }`. Not valid inside a function body — Kotlin has no local named objects. */
 context(s: Scope)
 public fun `object`(name: String, body: TypeScope.() -> Unit) {
-    s.declareType(TypeSpec.objectBuilder(name), "named object", localAllowed = false, null, null, body)
+    s.declareType(TypeSpec.objectBuilder(name), "named object", name, localAllowed = false, null, null, body)
 }
 
 /** `object Name { … }` with modifiers. Not valid inside a function body. */
 context(s: Scope)
 public fun `object`(modifiers: Modifiers, name: String, body: TypeScope.() -> Unit) {
-    s.declareType(TypeSpec.objectBuilder(name), "named object", localAllowed = false, null, modifiers, body)
+    s.declareType(
+        TypeSpec.objectBuilder(name),
+        "named object",
+        name,
+        localAllowed = false,
+        null,
+        modifiers,
+        body,
+    )
 }
 
 /** `interface Name { … }`. Not valid inside a function body. */
 context(s: Scope)
 public fun `interface`(name: String, body: TypeScope.() -> Unit) {
-    s.declareType(TypeSpec.interfaceBuilder(name), "interface", localAllowed = false, null, null, body)
+    s.declareType(TypeSpec.interfaceBuilder(name), "interface", name, localAllowed = false, null, null, body)
 }
 
 /** `interface Name { … }` with modifiers. Not valid inside a function body. */
 context(s: Scope)
 public fun `interface`(modifiers: Modifiers, name: String, body: TypeScope.() -> Unit) {
-    s.declareType(TypeSpec.interfaceBuilder(name), "interface", localAllowed = false, null, modifiers, body)
+    s.declareType(
+        TypeSpec.interfaceBuilder(name),
+        "interface",
+        name,
+        localAllowed = false,
+        null,
+        modifiers,
+        body,
+    )
 }
 
 /**

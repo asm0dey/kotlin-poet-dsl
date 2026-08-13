@@ -17,6 +17,7 @@ import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCompilerApi::class)
 class TypeScopeTest {
@@ -77,6 +78,42 @@ class TypeScopeTest {
 
             """.trimIndent(),
             out,
+        )
+    }
+
+    /**
+     * Important 1: a nested (non-`inner`) class cannot see its enclosing type's members, so
+     * there is nothing for a same-named constructor parameter to shadow. Before the fix,
+     * `declareType` chained `names.child()` from the enclosing scope, so `Inner`'s `id` was
+     * silently renamed to `id2` — changing `Inner`'s public constructor signature for no
+     * reason. This asserts the nested parameter keeps its own name.
+     */
+    @Test
+    fun `a nested type's constructor parameter keeps its name even when an enclosing type uses it`() {
+        val rendered = file("com.example", "Outer") {
+            `class`("Outer") {
+                constructorParam(VAL, "id", STRING)
+                `class`("Inner") {
+                    constructorParam(VAL, "id", STRING)
+                }
+            }
+        }.toString()
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.String
+
+            public class Outer(
+              public val id: String,
+            ) {
+              public class Inner(
+                public val id: String,
+              )
+            }
+
+            """.trimIndent(),
+            rendered,
         )
     }
 
@@ -175,6 +212,13 @@ class TypeScopeTest {
                 .build()
         }.toString()
 
+        // Checked before the exact-text comparison below: on an upstream KotlinPoet fix, the
+        // exact-text comparison would fail first (different rendered text) and this hint would
+        // never print, so the actionable message has to sit on the assertion that fires first.
+        assertTrue(
+            rendered.contains("public class Local"),
+            "KotlinPoet can now render a local class — delete the guard in declareType",
+        )
         assertEquals(
             """
             package com.example
@@ -192,11 +236,7 @@ class TypeScopeTest {
             rendered,
         )
         val result = compile(rendered)
-        assertEquals(
-            KotlinCompilation.ExitCode.COMPILATION_ERROR,
-            result.exitCode,
-            "KotlinPoet can now render a local class — delete the guard in declareType",
-        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode)
         assertEquals(
             true,
             result.messages.contains("Modifier 'public' is not applicable to 'local class'"),
@@ -226,6 +266,63 @@ class TypeScopeTest {
             "A local interface is not valid Kotlin. Declare it at file or type level.",
             thrown.message,
         )
+    }
+
+    // --- Important 2: duplicate type names ------------------------------------------------
+
+    /**
+     * KotlinPoet does not deduplicate types on its own: `TypeSpec.Builder.addType` just
+     * appends, and `FileSpec` has no check, so two types named the same in one file would
+     * render as two `public class A` — invalid Kotlin, no error. This asserts `declareType`
+     * catches it before either type is emitted.
+     */
+    @Test
+    fun `declaring two types with the same name in one file is rejected`() {
+        val thrown = assertFailsWith<IllegalStateException> {
+            file("com.example", "Api") {
+                `class`("A") { }
+                `class`("A") { }
+            }
+        }
+        assertEquals("A class named \"A\" is already declared in this scope.", thrown.message)
+    }
+
+    @Test
+    fun `declaring two types with the same name in one type is rejected`() {
+        val thrown = assertFailsWith<IllegalStateException> {
+            file("com.example", "Api") {
+                `class`("Outer") {
+                    `class`("A") { }
+                    `object`("A") { }
+                }
+            }
+        }
+        assertEquals("A named object named \"A\" is already declared in this scope.", thrown.message)
+    }
+
+    /** The check is per-container: a name reused in an unrelated or nested container is fine. */
+    @Test
+    fun `the same type name in different containers does not collide`() {
+        val rendered = file("com.example", "Api") {
+            `class`("A") { }
+            `class`("B") {
+                `class`("A") { }
+            }
+        }.toString()
+        assertEquals(
+            """
+            package com.example
+
+            public class A
+
+            public class B {
+              public class A
+            }
+
+            """.trimIndent(),
+            rendered,
+        )
+        assertCompiles(rendered)
     }
 
     @Test
@@ -299,9 +396,15 @@ class TypeScopeTest {
                 constructorParam(VAR, "mutable", STRING)
             }
         }.toString()
-        assertEquals(true, rendered.contains("  plain: String,"))
-        assertEquals(true, rendered.contains("  public val readOnly: String,"))
-        assertEquals(true, rendered.contains("  public var mutable: String,"))
+        assertTrue(rendered.contains("  plain: String,"), "null kind should be a plain parameter: $rendered")
+        assertTrue(
+            rendered.contains("  public val readOnly: String,"),
+            "VAL should add a read-only property: $rendered",
+        )
+        assertTrue(
+            rendered.contains("  public var mutable: String,"),
+            "VAR should add a mutable property: $rendered",
+        )
     }
 
     @Test
@@ -354,7 +457,20 @@ class TypeScopeTest {
                 assertEquals("name2", second.toString())
             }
         }.toString()
-        assertEquals(true, rendered.contains("public val name2: String"))
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.String
+
+            public class User(
+              public val name: String,
+              public val name2: String,
+            )
+
+            """.trimIndent(),
+            rendered,
+        )
     }
 
     /** `%T` must reach KotlinPoet unrendered, or the import cannot be emitted. */

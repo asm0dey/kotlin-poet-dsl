@@ -22,7 +22,17 @@ import com.squareup.kotlinpoet.TypeSpec
 public sealed class Scope protected constructor(
     internal val names: NameScope,
     internal val id: ScopeId,
-)
+) {
+    /**
+     * Type names declared directly in this scope (not chained to a parent — a type at file
+     * level and a same-named type nested inside another type do not collide). KotlinPoet does
+     * not deduplicate types on its own (`TypeSpec.Builder.addType` just appends, and `FileSpec`
+     * has no check), so two types named the same in one container would silently render as
+     * invalid Kotlin without this. `fun` is deliberately exempt: Kotlin permits overloads, so
+     * duplicate function names are legal and must not go through this set.
+     */
+    internal val declaredTypeNames: MutableSet<String> = mutableSetOf()
+}
 
 /** The file-level scope. */
 @FileDsl
