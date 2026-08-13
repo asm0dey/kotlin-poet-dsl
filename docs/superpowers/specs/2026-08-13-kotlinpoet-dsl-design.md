@@ -135,12 +135,14 @@ Context parameters cannot prevent a smuggled handle: `context(b: BlockScope)` pr
 Literals and references:
 
 ```kotlin
-1.lit  ·  "s".lit          // %S, escaping handled
-true.lit  ·  nul
-ref<Collaborator>()        // %T, import resolved
-member("kotlin", "lazy")   // %M, import resolved — alias: mem
+1.literal  ·  "s".literal        // %S, escaping handled — alias: .lit
+true.literal  ·  nullLiteral     // alias: nul
+reference<Collaborator>()        // %T, import resolved — alias: ref
+member("kotlin", "lazy")         // %M, import resolved — alias: mem
 expression("%T.of(%L)", cls, x)  // escape hatch, placeholders intact — alias: expr
 ```
+
+Examples throughout this document use the short aliases for readability; both spellings are permanent public API.
 
 Calls, three receiverless forms plus member calls:
 
@@ -188,8 +190,8 @@ Strings inside `expr` bypass scope checking. Accepted trade-off.
 All of these are `context(BlockScope)` functions.
 
 ```kotlin
-stmt(x) · statement(x) · +x
-ret(x) · ret() · brk · cont · `throw`(x)
+statement(x) · stmt(x) · +x
+`return`(x) · `return`() · `break` · `continue` · `throw`(x)   // aliases: ret, brk, cont, throwIt
 `val`(name, type, init)     // returns handle; type = null to omit
 `var`(name, type, init)
 x assign y · x += y · x -= y · x *= y · x /= y · x %= y
@@ -248,7 +250,7 @@ file("com.example", "User") {
 
 Property declarations take `init =` for an initializer and `by =` for a delegate, mapping to KotlinPoet's `PropertySpec.initializer` and `PropertySpec.delegate`. KotlinPoet requires an explicit type on every property, so `by lazy` cannot infer — the type is mandatory in the DSL even where Kotlin would infer it.
 
-`ctorParam(VAL | VAR | null, …)` adds a `ParameterSpec` to the primary constructor and, for `VAL`/`VAR`, a matching `PropertySpec` with `initializer("%N", param)`. It returns a handle visible to every sibling member — no nesting, no arity ceiling. Passing `null` makes it a plain parameter.
+`constructorParam(VAL | VAR | null, …)` (alias `ctorParam`) adds a `ParameterSpec` to the primary constructor and, for `VAL`/`VAR`, a matching `PropertySpec` with `initializer("%N", param)`. It returns a handle visible to every sibling member — no nesting, no arity ceiling. Passing `null` makes it a plain parameter.
 
 Pure declaration forms follow the same detached-scope pattern as `stmts { }`, and return KotlinPoet specs directly, so interop with hand-written KotlinPoet is free:
 
@@ -262,7 +264,7 @@ One detached builder per declaration kind (`funSpec`, `typeSpec`, `propertySpec`
 
 ### Function and constructor arities
 
-Parameters are lambda-bound, so they cannot be `vararg` — the lambda's arity must match. `` `fun` `` and `ctor` are generated for arities **0–26**, in three modifier variants (none, single `KModifier`, `Modifiers`) and two annotation variants: ≈162 overloads per family. Kotlin removed the `Function22` ceiling in 1.3, so arities above 22 use big-arity `FunctionN`; the boxing cost is irrelevant at generation time.
+Parameters are lambda-bound, so they cannot be `vararg` — the lambda's arity must match. `` `fun` `` and `` `constructor` `` are generated for arities **0–26**, in three modifier variants (none, single `KModifier`, `Modifiers`) and two annotation variants: ≈162 overloads per family. Kotlin removed the `Function22` ceiling in 1.3, so arities above 22 use big-arity `FunctionN`; the boxing cost is irrelevant at generation time.
 
 A `buildSrc` Gradle task emits `FunArity.kt` and `CtorArity.kt` into `build/generated/source/dsl`, written with plain KotlinPoet — no bootstrap circularity. Roughly 60 lines of generator.
 
@@ -276,7 +278,7 @@ Above 26 parameters, or for dynamically sized parameter lists:
 
 ### Return type inference
 
-`ret(x)` infers the function's return type when `x.type` is known — literals, parameters, and declared `val`/`var` all carry one. Unknown type (`ret(x.call("foo"))` — the callee's return type is unknowable) raises a build-time error naming the fix: pass `returns = …`. No `ret` at all means `Unit`, with the type omitted from output. The rule is *infer when provable, error when not* — never silently wrong.
+`` `return`(x) `` infers the function's return type when `x.type` is known — literals, parameters, and declared `val`/`var` all carry one. Unknown type (`` `return`(x.call("foo")) `` — the callee's return type is unknowable) raises a build-time error naming the fix: pass `returns = …`. No return at all means `Unit`, with the type omitted from output. The rule is *infer when provable, error when not* — never silently wrong.
 
 ### Modifiers
 
@@ -336,11 +338,20 @@ Every backticked keyword has a full-word alias, so bulk codegen need not fight b
 | `` `when` `` | `whenOn` |
 | `` `try` `` | `tryCatch` |
 | `` `throw` `` | `throwIt` |
+| `` `return` `` | `ret` |
+| `` `break` `` | `brk` |
+| `` `continue` `` | `cont` |
 | `annotation` | `ann` |
 | `member` | `mem` |
 | `expression` | `expr` |
+| `reference` | `ref` |
+| `.literal` | `.lit` |
+| `nullLiteral` | `nul` |
+| `statement` | `stmt` |
+| `constructorParam` | `ctorParam` |
+| `` `constructor` `` | `ctor` |
 
-The convention is **full word is canonical, short form is the alias** — `annotation`/`ann`, `member`/`mem`, `expression`/`expr` — with backticked keywords canonical where a Kotlin keyword is the natural name. Full alias table is fixed during implementation; both spellings are supported permanently. Note that `property` (declaration) and `prop` (property *access* on an `Expr`) are deliberately different names — they live in different scopes but would read alike.
+The convention is **full word is canonical, short form is the alias**, applied without exception — `annotation`/`ann`, `member`/`mem`, `expression`/`expr`, `reference`/`ref`, `literal`/`lit`, `statement`/`stmt`, `constructorParam`/`ctorParam`. Where the natural full name is a Kotlin keyword it is backticked and canonical (`` `return` ``/`ret`, `` `break` ``/`brk`, `` `continue` ``/`cont`, `` `constructor` ``/`ctor`). Full alias table is fixed during implementation; both spellings are supported permanently. Note that `property` (declaration) and `prop` (property *access* on an `Expr`) are deliberately different names — they live in different scopes but would read alike.
 
 ## Naming and scope
 
