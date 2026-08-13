@@ -470,6 +470,38 @@ class TypeScopeTest {
         )
     }
 
+    /**
+     * D21 rejects a duplicate *within* one constructor (above), but the check is per-container:
+     * two unrelated sibling classes each get their own `TypeScope` and constructor-parameter
+     * registry, so the same parameter name in both is not a collision — both render with the
+     * requested name.
+     */
+    @Test
+    fun `the same constructor parameter name in two unrelated sibling classes does not collide`() {
+        val rendered = file("com.example", "Api") {
+            `class`("A") { constructorParam(VAL, "id", STRING) }
+            `class`("B") { constructorParam(VAL, "id", STRING) }
+        }.toString()
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.String
+
+            public class A(
+              public val id: String,
+            )
+
+            public class B(
+              public val id: String,
+            )
+
+            """.trimIndent(),
+            rendered,
+        )
+        assertCompiles(rendered)
+    }
+
     /** `%T` must reach KotlinPoet unrendered, or the import cannot be emitted. */
     @Test
     fun `a constructor parameter type keeps its placeholder and becomes an import`() {

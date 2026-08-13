@@ -172,6 +172,69 @@ class BindingsTest {
         )
     }
 
+    /**
+     * D21 rejects a duplicate *within* one container (above), but the check is per-container:
+     * an outer class and its nested class each get their own `TypeScope` with a fresh registry,
+     * so the same property name in both is not a collision at all — both render with the
+     * requested name, uniquified against nothing.
+     */
+    @Test
+    fun `the same property name in an outer class and a nested class does not collide`() {
+        val out = file("com.example", "Api") {
+            `class`("Outer") {
+                `val`("username", STRING, init = "a".lit)
+                `class`("Inner") {
+                    `val`("username", STRING, init = "b".lit)
+                }
+            }
+        }.toString()
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.String
+
+            public class Outer {
+              public val username: String = "a"
+
+              public class Inner {
+                public val username: String = "b"
+              }
+            }
+
+            """.trimIndent(),
+            out,
+        )
+        assertCompiles(out)
+    }
+
+    /** Same non-collision, one level shallower: file level and inside a class at that file's top. */
+    @Test
+    fun `the same property name at file level and inside a class does not collide`() {
+        val out = file("com.example", "Api") {
+            `val`("username", STRING, init = "a".lit)
+            `class`("Holder") {
+                `val`("username", STRING, init = "b".lit)
+            }
+        }.toString()
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.String
+
+            public val username: String = "a"
+
+            public class Holder {
+              public val username: String = "b"
+            }
+
+            """.trimIndent(),
+            out,
+        )
+        assertCompiles(out)
+    }
+
     @Test
     fun `a var property is mutable and a file-level binding takes modifiers`() {
         val out = file("com.example", "Config") {

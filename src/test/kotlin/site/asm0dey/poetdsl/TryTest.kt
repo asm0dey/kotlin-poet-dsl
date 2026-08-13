@@ -125,6 +125,44 @@ class TryTest {
         assertEquals("close: this try/catch/finally chain is already closed.", failure.message)
     }
 
+    // --- a stale chain at nesting depth > 0 rejects reattaching to the enclosing `if` ------------
+
+    @Test
+    fun `catch on a chain closed by an unrelated statement at nesting depth greater than zero throws instead of reattaching to the outer if`() {
+        lateinit var stale: TryChain
+        val failure = assertFailsWith<IllegalStateException> {
+            renderBlock {
+                `if`(expression("x")) {
+                    stale = `try` { +call("risky") }
+                    +call("after")
+                    stale.`catch`("e", reference<Exception>()) { +call("handle") }
+                }
+            }
+        }
+        assertEquals(
+            "catch: this try/catch/finally chain is already closed and cannot take another clause.",
+            failure.message,
+        )
+    }
+
+    @Test
+    fun `finally on a chain closed by an unrelated statement at nesting depth greater than zero throws instead of reattaching to the outer if`() {
+        lateinit var stale: TryChain
+        val failure = assertFailsWith<IllegalStateException> {
+            renderBlock {
+                `if`(expression("x")) {
+                    stale = `try` { +call("risky") }
+                    +call("after")
+                    stale.finally { +call("cleanup") }
+                }
+            }
+        }
+        assertEquals(
+            "finally: this try/catch/finally chain is already closed and cannot take another clause.",
+            failure.message,
+        )
+    }
+
     // --- two live PendingFlow implementors sharing one `pending` slot ----------------------------
 
     @Test
