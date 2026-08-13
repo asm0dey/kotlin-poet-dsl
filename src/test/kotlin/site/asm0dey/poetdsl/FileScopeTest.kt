@@ -14,6 +14,7 @@ import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotSame
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -109,6 +110,143 @@ class FileScopeTest {
             seen += level()
         }
         assertEquals(listOf("file", "type", "block", "type", "file"), seen)
+    }
+
+    /**
+     * D17: the twelve spec-emission declarations dispatch on the runtime `Scope`, so a spec
+     * spliced inside a `class` body lands on the class builder, not the enclosing file's.
+     * Before D17 all twelve were `context(f: FileScope)`, and `FileScope` stayed in context
+     * inside a nested `TypeScope`, so `+someFunSpec` inside a class silently added to the
+     * file instead — Global Constraint 26 forbids exactly this. Each spec type is checked
+     * against a rendered file so the class/file distinction is visible in the output, not
+     * just in which builder was called.
+     */
+    @Test
+    fun `a FunSpec emitted inside a class body lands on the class, not the file`() {
+        val rendered = file("com.example", "Api") {
+            val type = TypeScope(TypeSpec.classBuilder("User"), names.child(), id.child("class User"))
+            with(type) {
+                +FunSpec.builder("greet").build()
+            }
+            +type.finish()
+        }.toString()
+
+        assertEquals(
+            """
+            package com.example
+
+            public class User {
+              public fun greet() {
+              }
+            }
+            """.trimIndent() + "\n",
+            rendered,
+        )
+    }
+
+    @Test
+    fun `a TypeSpec emitted inside a class body lands on the class, not the file`() {
+        val rendered = file("com.example", "Api") {
+            val type = TypeScope(TypeSpec.classBuilder("User"), names.child(), id.child("class User"))
+            with(type) {
+                +TypeSpec.classBuilder("Nested").build()
+            }
+            +type.finish()
+        }.toString()
+
+        assertEquals(
+            """
+            package com.example
+
+            public class User {
+              public class Nested
+            }
+            """.trimIndent() + "\n",
+            rendered,
+        )
+    }
+
+    @Test
+    fun `a PropertySpec emitted inside a class body lands on the class, not the file`() {
+        val rendered = file("com.example", "Api") {
+            val type = TypeScope(TypeSpec.classBuilder("User"), names.child(), id.child("class User"))
+            with(type) {
+                +PropertySpec.builder("name", STRING).initializer("%S", "x").build()
+            }
+            +type.finish()
+        }.toString()
+
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.String
+
+            public class User {
+              public val name: String = "x"
+            }
+            """.trimIndent() + "\n",
+            rendered,
+        )
+    }
+
+    /**
+     * Regression: emission at file level must still land on the file after D17's rewrite from
+     * `context(f: FileScope)` to `context(s: Scope)` with a runtime dispatch. The four-way
+     * tests above already cover this per spec type; this test additionally confirms a
+     * `FunSpec`, `TypeSpec` and `PropertySpec` emitted side by side in the same file body all
+     * land at file level together, not nested into one another.
+     */
+    @Test
+    fun `specs emitted at file level still land on the file, side by side`() {
+        val rendered = file("com.example", "Api") {
+            +FunSpec.builder("helper").build()
+            +TypeSpec.classBuilder("User").build()
+            +PropertySpec.builder("greeting", STRING).initializer("%S", "hi").build()
+        }.toString()
+
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.String
+
+            public fun helper() {
+            }
+
+            public class User
+
+            public val greeting: String = "hi"
+            """.trimIndent() + "\n",
+            rendered,
+        )
+    }
+
+    @Test
+    fun `splicing a FunSpec into a block body throws and names the construct`() {
+        val block = BlockScope(CodeBlock.builder(), NameScope(null), ScopeId(null, "fun f"), mutableListOf())
+        val thrown = assertFailsWith<IllegalStateException> {
+            with(block) { +FunSpec.builder("x").build() }
+        }
+        assertEquals("+FunSpec: a function spec cannot be spliced into a block body.", thrown.message)
+    }
+
+    @Test
+    fun `splicing a TypeSpec into a block body throws and names the construct`() {
+        val block = BlockScope(CodeBlock.builder(), NameScope(null), ScopeId(null, "fun f"), mutableListOf())
+        val thrown = assertFailsWith<IllegalStateException> {
+            with(block) { +TypeSpec.classBuilder("x").build() }
+        }
+        assertEquals("+TypeSpec: a type spec cannot be spliced into a block body.", thrown.message)
+    }
+
+    @Test
+    fun `splicing a PropertySpec into a block body throws and names the construct`() {
+        val block = BlockScope(CodeBlock.builder(), NameScope(null), ScopeId(null, "fun f"), mutableListOf())
+        val thrown = assertFailsWith<IllegalStateException> {
+            with(block) { +PropertySpec.builder("x", STRING).initializer("%S", "x").build() }
+        }
+        assertEquals("+PropertySpec: a property spec cannot be spliced into a block body.", thrown.message)
     }
 
     @Test

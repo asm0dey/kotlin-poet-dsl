@@ -87,62 +87,74 @@ public fun file(packageName: String, fileName: String, body: FileScope.() -> Uni
     return scope.builder.build()
 }
 
-context(f: FileScope)
+context(s: Scope)
 public operator fun FunSpec.unaryPlus() {
-    f.builder.addFunction(this)
+    when (s) {
+        is FileScope -> s.builder.addFunction(this)
+        is TypeScope -> s.builder.addFunction(this)
+        is BlockScope -> error("+FunSpec: a function spec cannot be spliced into a block body.")
+    }
 }
 
-context(f: FileScope)
+context(s: Scope)
 public operator fun FunSpec.invoke() {
     +this
 }
 
-context(f: FileScope)
+context(s: Scope)
 public fun emit(spec: FunSpec) {
     +spec
 }
 
-context(f: FileScope)
+context(s: Scope)
 public fun add(spec: FunSpec) {
     +spec
 }
 
-context(f: FileScope)
+context(s: Scope)
 public operator fun TypeSpec.unaryPlus() {
-    f.builder.addType(this)
+    when (s) {
+        is FileScope -> s.builder.addType(this)
+        is TypeScope -> s.builder.addType(this)
+        is BlockScope -> error("+TypeSpec: a type spec cannot be spliced into a block body.")
+    }
 }
 
-context(f: FileScope)
+context(s: Scope)
 public operator fun TypeSpec.invoke() {
     +this
 }
 
-context(f: FileScope)
+context(s: Scope)
 public fun emit(spec: TypeSpec) {
     +spec
 }
 
-context(f: FileScope)
+context(s: Scope)
 public fun add(spec: TypeSpec) {
     +spec
 }
 
-context(f: FileScope)
+context(s: Scope)
 public operator fun PropertySpec.unaryPlus() {
-    f.builder.addProperty(this)
+    when (s) {
+        is FileScope -> s.builder.addProperty(this)
+        is TypeScope -> s.builder.addProperty(this)
+        is BlockScope -> error("+PropertySpec: a property spec cannot be spliced into a block body.")
+    }
 }
 
-context(f: FileScope)
+context(s: Scope)
 public operator fun PropertySpec.invoke() {
     +this
 }
 
-context(f: FileScope)
+context(s: Scope)
 public fun emit(spec: PropertySpec) {
     +spec
 }
 
-context(f: FileScope)
+context(s: Scope)
 public fun add(spec: PropertySpec) {
     +spec
 }
