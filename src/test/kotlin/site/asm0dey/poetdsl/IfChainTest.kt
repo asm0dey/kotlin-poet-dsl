@@ -10,6 +10,7 @@ import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 @OptIn(ExperimentalCompilerApi::class)
 class IfChainTest {
@@ -65,6 +66,52 @@ class IfChainTest {
             renderBlock { `if`(x) { +call("a") } },
             renderBlock { ifThen(x) { +call("a") } },
         )
+    }
+
+    // --- a closed chain rejects reattachment -----------------------------------------------------
+
+    @Test
+    fun `elseIf on a chain closed by an unrelated statement at nesting depth greater than zero throws instead of reattaching to the outer if`() {
+        lateinit var stale: IfChain
+        val failure = assertFailsWith<IllegalStateException> {
+            renderBlock {
+                `if`(x) {
+                    stale = `if`(x) { +call("inner1") }
+                    +call("after")
+                    stale.elseIf(x) { +call("inner2") }
+                        .`else` { +call("inner3") }
+                }
+            }
+        }
+        assertEquals(
+            "elseIf: this if/elseIf/else chain is already closed and cannot take another branch.",
+            failure.message,
+        )
+    }
+
+    @Test
+    fun `elseIf on a chain closed by an unrelated statement at top level throws the domain check`() {
+        lateinit var stale: IfChain
+        val failure = assertFailsWith<IllegalStateException> {
+            renderBlock {
+                stale = `if`(x) { +call("inner1") }
+                +call("after")
+                stale.elseIf(x) { +call("inner2") }
+            }
+        }
+        assertEquals(
+            "elseIf: this if/elseIf/else chain is already closed and cannot take another branch.",
+            failure.message,
+        )
+    }
+
+    @Test
+    fun `calling close directly on an already-closed chain throws`() {
+        val block = attachedBlock()
+        val chain = with(block) { `if`(x) { +call("inner1") } }
+        chain.close()
+        val failure = assertFailsWith<IllegalStateException> { chain.close() }
+        assertEquals("close: this if/elseIf/else chain is already closed.", failure.message)
     }
 
     // --- the output is real Kotlin -------------------------------------------------------------

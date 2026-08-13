@@ -148,11 +148,24 @@ public fun ret() {
 
 /**
  * An `if` whose block is still open. Emitting anything else in the enclosing scope, or
- * closing that scope, flushes the chain. An unbalanced chain cannot be expressed.
+ * closing that scope, flushes the chain. A chain that is still open cannot render unbalanced
+ * braces; once closed — by a flush or by [close] — every entry point rejects it instead of
+ * reattaching its branches to whatever `if` now happens to be open.
  */
 public class IfChain internal constructor(private val owner: BlockScope) : PendingFlow {
+    /**
+     * True once this chain has been closed, by a flush elsewhere in [owner] or by a direct
+     * [close] call. A closed handle held past that point is stale: [owner]'s builder has moved
+     * on (possibly into a different, unrelated `if`), so blindly calling `nextControlFlow` or
+     * `endControlFlow` on it again would either throw KotlinPoet's opaque unindent error or —
+     * worse, the common case at nesting depth > 0 — silently reattach the branch to whatever
+     * control flow happens to be open at the time, with no exception at all.
+     */
+    private var closed: Boolean = false
+
     /** `else if (condition) { … }`. */
     public fun elseIf(condition: Expr, body: BlockScope.() -> Unit): IfChain {
+        check(!closed) { "elseIf: this if/elseIf/else chain is already closed and cannot take another branch." }
         owner.checkOwned(condition)
         owner.builder.nextControlFlow("else·if·(%L)", condition.code)
         owner.runNested("elseIf", body = body)
@@ -161,11 +174,19 @@ public class IfChain internal constructor(private val owner: BlockScope) : Pendi
 
     /** `else { … }`. */
     public fun `else`(body: BlockScope.() -> Unit) {
+        check(!closed) { "else: this if/elseIf/else chain is already closed and cannot take another branch." }
         owner.builder.nextControlFlow("else")
         owner.runNested("else", body = body)
     }
 
     override fun close() {
+        check(!closed) { "close: this if/elseIf/else chain is already closed." }
+        closed = true
+        // A normal flush (BlockScope.flushPending) already nulled owner.pending before calling
+        // here, so this is a no-op on that path. It only fires when close() is called directly,
+        // bypassing the flush — clearing owner.pending here keeps it from staying stale and
+        // triggering a second, misattributed close() the next time this scope flushes.
+        if (owner.pending === this) owner.pending = null
         owner.builder.endControlFlow()
     }
 }
