@@ -28,8 +28,24 @@ public val Float.lit: Expr get() = literal
 public val Boolean.literal: Expr get() = Expr(CodeBlock.of("%L", this), BOOLEAN)
 public val Boolean.lit: Expr get() = literal
 
-public val Char.literal: Expr get() = Expr(CodeBlock.of("%L", "'$this'"), CHAR)
+public val Char.literal: Expr get() = Expr(CodeBlock.of("%L", "'${escapeCharLiteral(this)}'"), CHAR)
 public val Char.lit: Expr get() = literal
+
+/**
+ * Escapes a single character for use inside a Kotlin char literal (the body between the
+ * quotes). KotlinPoet 2.3.0 has no public `%C`-style specifier or exposed helper for this
+ * (`characterLiteralWithoutSingleQuotes` in its `Util.kt` is `internal`), so this is a
+ * minimal, from-scratch implementation covering the JLS/Kotlin escape set.
+ */
+private fun escapeCharLiteral(c: Char): String = when (c) {
+    '\\' -> "\\\\"
+    '\'' -> "\\'"
+    '\n' -> "\\n"
+    '\r' -> "\\r"
+    '\t' -> "\\t"
+    '\b' -> "\\b"
+    else -> if (c.isISOControl()) "\\u%04x".format(c.code) else c.toString()
+}
 
 /** A string literal. Escaping is KotlinPoet's `%S`. */
 public val String.literal: Expr get() = Expr(CodeBlock.of("%S", this), STRING)

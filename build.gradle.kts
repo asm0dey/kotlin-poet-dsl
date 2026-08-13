@@ -14,6 +14,7 @@ dependencies {
     api(libs.kotlinpoet)
     implementation(kotlin("reflect"))
     testImplementation(kotlin("test"))
+    testImplementation(libs.kctfork.core)
 }
 
 kotlin {
