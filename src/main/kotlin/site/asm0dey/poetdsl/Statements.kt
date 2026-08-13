@@ -26,8 +26,15 @@ internal fun BlockScope.flushPending() {
  * can actually be judged (ADR 0008). Only genuinely foreign scopes are recorded — a scope this
  * fragment declared itself already encloses the use site, and reporting it would make the
  * fragment unspliceable anywhere.
+ *
+ * Every owner that reaches here is recorded in [BlockScope.captured] first, accepted or not. That
+ * record decides nothing — the accept/reject/record logic below is untouched by it — but a lambda
+ * body needs it: an *attached* body accepts a handle from the block it was built in and writes
+ * nothing to [BlockScope.referenced], so without [BlockScope.captured] the escaping lambda value
+ * would carry no trace of what it captured (see [lambdaOf]).
  */
 internal fun BlockScope.checkOwned(owner: ScopeId) {
+    captured += owner
     val encloses = owner.isAncestorOf(id)
     if (detachedRoot) {
         if (!encloses) referenced += owner
@@ -56,8 +63,14 @@ internal fun BlockScope.checkOwned(stmt: Stmt) {
  * property delegate, each of which KotlinPoet emits as a statement of its own. A body built with
  * `addStatement` throws "Can't open a new statement until the current statement is closed" in all
  * three positions (measured on KotlinPoet 2.3.0, `CodeWriter.emitCode`), which is why nothing this
- * DSL emits carries markers. Nothing is lost: every space the DSL emits is KotlinPoet's
- * non-breaking `·`, so `addStatement`'s line wrapping had no break point to use in the first place.
+ * DSL emits carries markers.
+ *
+ * This is not a rendering-preserving swap. `addStatement` indents the continuation lines of a
+ * multi-line statement two extra levels; `add` does not. So every multi-line statement renders
+ * differently here: under `addStatement`, `+items.call("map") { … }` put the body at +6 and the
+ * closing brace at +4. `add` is the wanted behaviour — [lambdaCode] already indents its own body,
+ * and a statement-level indent on top of it would double it. `StatementsTest` pins this directly;
+ * `LambdasTest`'s golden strings depend on it throughout.
  */
 internal fun BlockScope.emitCode(code: CodeBlock) {
     flushPending()

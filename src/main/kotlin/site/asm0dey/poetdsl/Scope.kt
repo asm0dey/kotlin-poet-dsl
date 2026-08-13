@@ -89,6 +89,14 @@ public class BlockScope internal constructor(
      * splice (ADR 0008).
      */
     internal val referenced: MutableSet<ScopeId> = mutableSetOf(),
+    /**
+     * Every scope [checkOwned] validated anywhere in this block tree, whether it accepted or
+     * recorded it — [referenced] only ever holds the *foreign* ones, and only in a detached tree.
+     * Shared with children like [referenced], so a handle used in a nested block still lands here,
+     * but a lambda body starts a fresh set: a lambda is a value that can escape the block it was
+     * built in, so what its body captured has to be attributable to that body alone (ADR 0008).
+     */
+    internal val captured: MutableSet<ScopeId> = mutableSetOf(),
 ) : Scope(names, id) {
     internal var pending: PendingFlow? = null
 }
@@ -99,8 +107,14 @@ public class BlockScope internal constructor(
  * @param isolateReturns true for lambda bodies, whose `return` is a non-local return and
  *   must not drive the enclosing function's inferred return type (ADR 0007). Control-flow
  *   bodies pass false and share the list.
+ * @param isolateCaptures true for lambda bodies, whose captures belong to the value they
+ *   produce rather than to the enclosing block. Control-flow bodies pass false and share the set.
  */
-internal fun BlockScope.child(label: String, isolateReturns: Boolean = false): BlockScope =
+internal fun BlockScope.child(
+    label: String,
+    isolateReturns: Boolean = false,
+    isolateCaptures: Boolean = false,
+): BlockScope =
     BlockScope(
         builder = CodeBlock.builder(),
         names = names.child(),
@@ -110,6 +124,7 @@ internal fun BlockScope.child(label: String, isolateReturns: Boolean = false): B
         // Never isolated, unlike `returns`: a lambda body inside a pure form still has to report
         // the outer handles it captured, or the splice would validate an incomplete set.
         referenced = referenced,
+        captured = if (isolateCaptures) mutableSetOf() else captured,
     )
 
 /** Builds a `.kt` file. */

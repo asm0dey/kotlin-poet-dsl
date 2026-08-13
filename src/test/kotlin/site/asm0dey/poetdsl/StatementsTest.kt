@@ -27,6 +27,15 @@ class StatementsTest {
     }
 
     @Test
+    fun `a multi-line statement keeps its own indentation`() {
+        // Pins `emitCode`'s `add`: `addStatement` would indent the continuation lines two extra
+        // levels, rendering this as "f({\n      g()\n    })" and doubling the indentation
+        // `lambdaCode` already applies to every lambda body.
+        val multi = CodeBlock.builder().add("f({\n").indent().add("g()\n").unindent().add("})").build()
+        assertEquals("f({\n  g()\n})\n", renderBlock { +Expr(multi) })
+    }
+
+    @Test
     fun `a pure Stmt can be spliced into another block`() {
         val guard: Stmt = stmts { +call("check") }
         assertEquals("check()\n", renderBlock { +guard })

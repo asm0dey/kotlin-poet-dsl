@@ -286,6 +286,46 @@ class LambdasTest {
     }
 
     @Test
+    fun `a lambda smuggled out of the block whose handle it captured is rejected`() {
+        // The construct ADR 0008's safety layer 2 exists for: a lambda is a *value*, so a Kotlin
+        // `var` can carry it into an unrelated function, taking the captured local's name with it.
+        // Task 12's `val` is the intended spelling of `x`; the handle is built directly until then.
+        val a = attachedBlock("fun a")
+        val x = Expr(CodeBlock.of("x"), name = "x", scope = a.id)
+        lateinit var smuggled: Expr
+        with(a) { smuggled = lambda { +x.call("inc") } }
+        assertEquals(setOf(a.id), smuggled.usedScopes, "the lambda must carry what its body captured")
+
+        with(a) { +smuggled }
+        assertEquals("{\n  x.inc()\n}\n", a.builder.build().toString(), "still legal where it was built")
+
+        val failure = assertFailsWith<IllegalStateException> { with(attachedBlock("fun b")) { +smuggled } }
+        assertEquals(
+            "Handle from scope 'fun a' does not enclose the current scope 'fun b'.",
+            failure.message,
+        )
+    }
+
+    @Test
+    fun `a capture from a nested block inside a lambda body travels with the lambda`() {
+        val a = attachedBlock("fun a")
+        val x = Expr(CodeBlock.of("x"), name = "x", scope = a.id)
+        lateinit var smuggled: Expr
+        with(a) { smuggled = items.call("map") { p -> runNested("if") { +x.call("inc") } } }
+        assertEquals(setOf(a.id), smuggled.usedScopes, "nesting must not swallow the capture")
+        assertFailsWith<IllegalStateException> { with(attachedBlock("fun b")) { +smuggled } }
+    }
+
+    @Test
+    fun `a lambda's own parameters are not reported as captures`() {
+        val block = attachedBlock()
+        lateinit var lam: Expr
+        with(block) { lam = lambda("x") { x -> +x.call("inc") } }
+        assertTrue(lam.usedScopes.isEmpty(), "a scope inside the lambda encloses every use site it has")
+        with(attachedBlock("fun b")) { +lam }
+    }
+
+    @Test
     fun `a lambda handle used outside its own lambda is rejected`() {
         var escaped: Expr? = null
         val block = attachedBlock()
@@ -367,12 +407,6 @@ class LambdasTest {
         assertCompiles(FileSpec.builder("demo", "Holder").addType(holder).build().toString())
     }
 }
-
-/** Renders the value a builder returns, without emitting it. */
-internal fun renderValue(body: BlockScope.() -> Expr): String =
-    BlockScope(CodeBlock.builder(), NameScope(null), ScopeId(null, "block"), mutableListOf())
-        .body()
-        .toString()
 
 @OptIn(ExperimentalCompilerApi::class)
 private fun assertCompiles(source: String) {

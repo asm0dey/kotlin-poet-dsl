@@ -29,11 +29,11 @@ internal fun lambdaCode(params: List<String>, body: CodeBlock): CodeBlock =
  *
  * Inside a block the body is an ordinary child: it shares the enclosing [BlockScope.referenced]
  * set, so a foreign handle used inside the lambda still reaches the `stmts` root that reports it
- * for the splice (ADR 0008). Outside a block — a lambda at property-initializer or
- * property-delegate position, where only a [FileScope] or [TypeScope] is in scope — there is no
- * enclosing block to inherit from, so the body is its own detached root and [lambdaOf] hands the
- * scopes it recorded to the [Expr] it returns, which carries them to wherever that lambda is
- * finally spliced.
+ * for the splice (ADR 0008). Its [BlockScope.captured] set is fresh, though — see [lambdaOf].
+ * Outside a block — a lambda at property-initializer or property-delegate position, where only a
+ * [FileScope] or [TypeScope] is in scope — there is no enclosing block to inherit from, so the body
+ * is its own detached root and [lambdaOf] hands the scopes it recorded to the [Expr] it returns,
+ * which carries them to wherever that lambda is finally spliced.
  *
  * Names chain in every case, so a lambda parameter that would shadow an enclosing binding is
  * uniquified rather than shadowing it (ADR 0009). Returns are isolated in every case: a `return`
@@ -41,7 +41,7 @@ internal fun lambdaCode(params: List<String>, body: CodeBlock): CodeBlock =
  * return type (ADR 0007).
  */
 private fun Scope.lambdaBlock(): BlockScope = when (this) {
-    is BlockScope -> child("lambda", isolateReturns = true)
+    is BlockScope -> child("lambda", isolateReturns = true, isolateCaptures = true)
     is FileScope, is TypeScope -> BlockScope(
         builder = CodeBlock.builder(),
         names = names.child(),
@@ -53,6 +53,13 @@ private fun Scope.lambdaBlock(): BlockScope = when (this) {
 
 /**
  * Builds a lambda body in a nested scope and returns it as a value, emitting nothing.
+ *
+ * The returned [Expr] carries every scope the body captured that is not declared inside the
+ * lambda itself — including scopes that *enclose* the lambda. That is not redundant with the
+ * ownership check the body already passed: the lambda is a value, and a `var` can carry it out of
+ * the block it was built in, so the block it is finally emitted into has to re-judge those scopes
+ * (ADR 0008, safety layer 2). The body's own parameters and nested blocks are filtered out — they
+ * are declared inside the lambda, so they enclose every use site the lambda has.
  *
  * @param requested one entry per parameter. `null` renders the handle as `it` and emits no
  *   parameter list; a name is uniquified against the enclosing scope and emitted. The rendered
@@ -73,9 +80,14 @@ internal fun Scope.lambdaOf(requested: List<String?>, body: BlockScope.(List<Exp
     return Expr(
         code = lambdaCode(rendered.filterNotNull(), scope.builder.build()),
         prec = Prec.ATOM,
-        // A block-level body shares its `referenced` set with the enclosing chain, which already
-        // reports it; a detached one is the only owner of what it recorded.
-        usedScopes = if (this is BlockScope) emptySet() else scope.referenced.toSet(),
+        usedScopes = if (this is BlockScope) {
+            scope.captured.filterNot(scope.id::isAncestorOf).toSet()
+        } else {
+            // A body built outside every block is a detached root: it recorded the genuinely
+            // foreign scopes itself, and the file or type it was built in encloses the property
+            // position it can be used at, so only the record travels.
+            scope.referenced.toSet()
+        },
     )
 }
 
@@ -195,7 +207,8 @@ public fun lambda(params: List<String?>, body: BlockScope.(List<Expr>) -> Unit):
  * The brief's `lambda(body, detached = true)` spelling is gone: the flag was never read, and the
  * overload was ambiguous with the context-parameter [lambda] (D4). Like [stmts], the body is a
  * detached root, so handles from elsewhere are recorded rather than rejected and travel with the
- * returned [Expr] to be judged where it is spliced (ADR 0008).
+ * returned [Expr] to be judged where it is spliced (ADR 0008) — [lambdaOf] puts them there, since
+ * nothing outside the body's own subtree can be a scope this root declared.
  */
 public fun detachedLambda(body: BlockScope.() -> Unit): Expr {
     val root = BlockScope(
@@ -205,8 +218,7 @@ public fun detachedLambda(body: BlockScope.() -> Unit): Expr {
         returns = mutableListOf(),
         detachedRoot = true,
     )
-    val lam = root.lambdaOf(emptyList()) { body() }
-    return Expr(lam.code, prec = Prec.ATOM, usedScopes = root.referenced.toSet())
+    return root.lambdaOf(emptyList()) { body() }
 }
 
 // --- receiver.name(args) { … } ----------------------------------------------------------------

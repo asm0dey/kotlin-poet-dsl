@@ -13,6 +13,12 @@ internal fun renderBlock(body: BlockScope.() -> Unit): String = stmts(body).code
 internal fun attachedBlock(label: String = "fun f"): BlockScope =
     BlockScope(CodeBlock.builder(), NameScope(null), ScopeId(null, label), mutableListOf())
 
+/** Renders the value a builder returns, without emitting it. */
+internal fun renderValue(body: BlockScope.() -> Expr): String =
+    BlockScope(CodeBlock.builder(), NameScope(null), ScopeId(null, "block"), mutableListOf())
+        .body()
+        .toString()
+
 /**
  * Stands in for the control-flow builders of Tasks 15-18: closing it ends the block that
  * [openFlow] opened. Counts its closes, so a test can prove the flush happens exactly once.
