@@ -89,8 +89,10 @@ public class TypeScope internal constructor(
      * Whether a secondary `` `constructor` `` was already declared. Kotlin requires every secondary
      * constructor of a class that has a primary one to delegate to it with `: this(…)`, and this DSL
      * has no way to express that call, so the two constructs are mutually exclusive here — see the
-     * guards in [addConstructorParam] and in the `` `constructor` `` builders. Tracked in both
-     * directions because the two can be written in either order and the broken output is the same.
+     * guards in [addConstructorParam] and in [beginSecondaryConstructor], which every generated
+     * `` `constructor` `` overload runs. Tracked in both directions because the two can be written
+     * in either order and the broken output is the same. [superclass] arguments carried in the class
+     * header are the same problem in a second place, and are guarded the same way.
      */
     internal var hasSecondaryCtor: Boolean = false
 

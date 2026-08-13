@@ -42,6 +42,15 @@ Generated total: 9 arities × 6 variants = 54 `fun` overloads and 54 `constructo
 overloads, once each — ADR 0001's single-declaration-on-`Scope` rule removes the
 `FileScope`/`TypeScope` duplication the spec assumed.
 
+**Amended by deviations D23 and D24.** `` `class` `` takes primary-constructor parameters
+in its signature and is generated over the same 0–8 arities, and the list form is generated
+from this same table rather than hand-written, so it carries the six variants too — a
+`private constructor` or a `data class` past the cap would otherwise be inexpressible.
+That makes each parameter-taking construct 10 shapes × 6 variants × 2 spellings = 120
+overloads, for `` `fun` ``/`func`, `` `constructor` ``/`ctor` and `` `class` ``/`klass`
+alike. The parameters themselves are `param(kind, name, type)` descriptors, not the
+scope-emitting `constructorParam`; see its KDoc for why the two cannot be one declaration.
+
 ## Consequences
 
 - `buildSrc/ArityGenerator.kt` emits `FunArity.kt`, `CtorArity.kt`, and the ADR 0002
