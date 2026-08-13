@@ -133,6 +133,43 @@ class BindingsTest {
         )
     }
 
+    /**
+     * D21: two properties named the same in one container is a compile error in Kotlin with no
+     * valid output to preserve, so the second is rejected rather than renamed to `username2` —
+     * unlike a property colliding with a *different* construct, which still uniquifies (see the
+     * test above).
+     */
+    @Test
+    fun `a duplicate property name in one type is rejected, naming the construct`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "User") {
+                `class`("User") {
+                    `val`("username", STRING, init = "a".lit)
+                    `val`("username", STRING, init = "b".lit)
+                }
+            }
+        }
+        assertEquals(
+            "A property named \"username\" is already declared in this scope.",
+            failure.message,
+        )
+    }
+
+    /** The same rejection applies at file level, where `propertyOf` is also used. */
+    @Test
+    fun `a duplicate property name at file level is rejected, naming the construct`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "Config") {
+                `val`("limit", INT, init = 10.lit)
+                `val`("limit", INT, init = 20.lit)
+            }
+        }
+        assertEquals(
+            "A property named \"limit\" is already declared in this scope.",
+            failure.message,
+        )
+    }
+
     @Test
     fun `a var property is mutable and a file-level binding takes modifiers`() {
         val out = file("com.example", "Config") {

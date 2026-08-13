@@ -43,3 +43,12 @@ iterable handle's name (`items` → `item`, `users` → `user`), else `item`.
   generated code is consistent, just not literally what was asked for.
 - Uniquification is already required for loop variables and lambda parameters, so this
   adds no machinery.
+- **Amendment (D21).** The paragraph above describes a collision between *different*
+  constructs — a local shadowing a property, a property colliding with a constructor
+  parameter — where valid Kotlin exists either way and renaming preserves it. It does not
+  cover two declarations of the *same* construct in the same container: two properties both
+  named `username`, or two constructor parameters both named `id`. That is a compile error
+  in Kotlin with no valid output to preserve, so renaming would only invent a public API
+  name nobody asked for. `propertyOf` and `addConstructorParam` reject that case outright
+  with a named `check`, the same way a duplicate type name is already rejected — cross-construct
+  collisions are unaffected and still uniquify as above.

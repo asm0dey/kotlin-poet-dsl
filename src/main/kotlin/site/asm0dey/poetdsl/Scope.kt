@@ -32,6 +32,18 @@ public sealed class Scope protected constructor(
      * duplicate function names are legal and must not go through this set.
      */
     internal val declaredTypeNames: MutableSet<String> = mutableSetOf()
+
+    /**
+     * Property names declared directly in this scope via [propertyOf] — not chained to a
+     * parent, mirroring [declaredTypeNames]. A second `` `val`("username", …) `` in the same
+     * container is a compile error in Kotlin (two properties, one name), and there is no valid
+     * output for [NameScope.unique] to preserve by renaming it, so this set exists to reject it
+     * outright instead (ADR 0009, amended by D21). Deliberately a *separate* set from
+     * [TypeScope.declaredConstructorParamNames]: a property colliding with a constructor
+     * parameter is a collision between different constructs, which ADR 0009's uniquifier still
+     * has to handle — sharing one registry between the two would rebuff that case as well.
+     */
+    internal val declaredPropertyNames: MutableSet<String> = mutableSetOf()
 }
 
 /** The file-level scope. */
@@ -58,6 +70,15 @@ public class TypeScope internal constructor(
 ) : Scope(names, id), Annotatable {
     internal val ctor: FunSpec.Builder by lazy(LazyThreadSafetyMode.NONE) { FunSpec.constructorBuilder() }
     internal var hasCtor: Boolean = false
+
+    /**
+     * Constructor parameter names declared directly in this type via [addConstructorParam].
+     * Same rationale and same "reject, don't rename" treatment as [declaredPropertyNames] — two
+     * constructor parameters named `id` is a compile error with no valid output to preserve —
+     * kept as its own set for the same reason: a parameter colliding with a *property* name is a
+     * cross-construct collision that still has to uniquify (ADR 0009, amended by D21).
+     */
+    internal val declaredConstructorParamNames: MutableSet<String> = mutableSetOf()
 
     internal fun finish(): TypeSpec {
         if (hasCtor) builder.primaryConstructor(ctor.build())

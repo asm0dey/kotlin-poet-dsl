@@ -447,29 +447,26 @@ class TypeScopeTest {
         )
     }
 
+    /**
+     * D21: two constructor parameters named the same is a compile error in Kotlin with no valid
+     * output to preserve, so it is rejected outright rather than renamed to `name2` — unlike a
+     * parameter colliding with a *different* construct, which still uniquifies (see
+     * `a member name colliding with a constructor parameter is uniquified, never shadowed` in
+     * BindingsTest).
+     */
     @Test
-    fun `colliding constructor parameter names are made unique`() {
-        val rendered = file("com.example", "User") {
-            `class`("User") {
-                val first = constructorParam(VAL, "name", STRING)
-                val second = constructorParam(VAL, "name", STRING)
-                assertEquals("name", first.toString())
-                assertEquals("name2", second.toString())
+    fun `a duplicate constructor parameter name is rejected, naming the construct`() {
+        val thrown = assertFailsWith<IllegalStateException> {
+            file("com.example", "User") {
+                `class`("User") {
+                    constructorParam(VAL, "name", STRING)
+                    constructorParam(VAL, "name", STRING)
+                }
             }
-        }.toString()
+        }
         assertEquals(
-            """
-            package com.example
-
-            import kotlin.String
-
-            public class User(
-              public val name: String,
-              public val name2: String,
-            )
-
-            """.trimIndent(),
-            rendered,
+            "A constructor parameter named \"name\" is already declared in this scope.",
+            thrown.message,
         )
     }
 

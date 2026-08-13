@@ -215,6 +215,16 @@ internal fun TypeScope.addConstructorParam(
     name: String,
     type: TypeName,
 ): Expr {
+    // A second constructor parameter named `name` is a compile error in Kotlin with no valid
+    // output to preserve, so it is rejected outright rather than renamed to `name2` (ADR 0009,
+    // amended by D21) — the same treatment `propertyOf` gives a duplicate property, and for the
+    // same reason `declaredConstructorParamNames` is its own set rather than shared with
+    // `declaredPropertyNames`: a parameter colliding with a *property* name is a cross-construct
+    // collision that still has to uniquify.
+    check(name !in declaredConstructorParamNames) {
+        "A constructor parameter named \"$name\" is already declared in this scope."
+    }
+    declaredConstructorParamNames += name
     val unique = names.unique(name)
     val param = ParameterSpec.builder(unique, type)
         .apply { annotations?.list?.forEach { addAnnotation(it) } }

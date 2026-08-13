@@ -53,10 +53,13 @@ private fun BlockScope.bindLocal(
  * KotlinPoet cannot infer, so the type is mandatory here — the single rule that makes a property
  * more than a local with a different parent (ADR 0003).
  *
- * A duplicate name is *not* an error, unlike a duplicate type name (see [Scope.declaredTypeNames]):
- * properties go through the [NameScope] uniquifier, so the second `username` is declared — and
- * handed back — as `username2` (ADR 0009). Types bypass the uniquifier entirely, which is why they
- * need a check and this does not.
+ * A duplicate name *is* an error (ADR 0009, amended by D21): two properties named `username` in
+ * one container is a compile error in Kotlin, and there is no valid output for renaming to
+ * preserve, so the second `username` is rejected rather than invented as `username2`.
+ * [Scope.declaredPropertyNames] catches that before the [NameScope] uniquifier ever runs. A
+ * property colliding with a *different* construct — most notably a constructor parameter — is
+ * untouched by this check and still goes through the uniquifier, exactly as ADR 0009 originally
+ * prescribed.
  */
 private fun Scope.propertyOf(
     mutable: Boolean,
@@ -70,6 +73,10 @@ private fun Scope.propertyOf(
     checkNotNull(type) {
         "Property '$name' requires an explicit type; KotlinPoet cannot infer it."
     }
+    check(name !in declaredPropertyNames) {
+        "A property named \"$name\" is already declared in this scope."
+    }
+    declaredPropertyNames += name
     return PropertySpec.builder(names.unique(name), type, modifiers.toList())
         .mutable(mutable)
         .apply {
