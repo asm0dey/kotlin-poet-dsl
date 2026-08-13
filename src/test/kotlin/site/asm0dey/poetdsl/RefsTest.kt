@@ -3,6 +3,7 @@ package site.asm0dey.poetdsl
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.MemberName
 import kotlin.reflect.KFunction
 import kotlin.test.Test
@@ -121,6 +122,45 @@ class RefsTest {
         )
     }
 
+    @Test
+    fun `the reference lambda form works at property delegate position from a TypeScope`() {
+        // D3: a lambda is just as valid at property-delegate position as inside a block. Before
+        // widening `context(b: BlockScope)` to `context(s: Scope)`, this line failed to compile at
+        // all — "no context argument for 'b: BlockScope' found" — because a TypeScope is not a
+        // BlockScope. The `MemberName` twin (`call(member(...), ...) { ... }`) already compiled here.
+        val rendered = file("com.example", "X") {
+            `class`("Holder") {
+                `val`("cached", INT, by = call(::topLevelHelper, 1.lit) { +2.lit })
+            }
+        }.toString()
+        assertTrue(rendered.contains("import site.asm0dey.poetdsl.topLevelHelper"), rendered)
+        assertTrue(rendered.contains("topLevelHelper(1) {"), rendered)
+    }
+
+    // --- visibility: metadata-kind alone is not enough ------------------------------------------
+
+    @Test
+    fun `a private top-level function is rejected`() {
+        val failure = assertFailsWith<IllegalStateException> { call(::secretHelper) }
+        assertEquals(
+            "Cannot resolve a MemberName for 'secretHelper': it is private, so no import can ever " +
+                "reach it. Make 'secretHelper' public, or reference it directly from within its " +
+                "declaring file instead.",
+            failure.message,
+        )
+    }
+
+    @Test
+    fun `an internal top-level function is rejected`() {
+        val failure = assertFailsWith<IllegalStateException> { call(::internalHelper) }
+        assertEquals(
+            "Cannot resolve a MemberName for 'internalHelper': it is internal, so its import only " +
+                "compiles when the generated output lands in the same module. Make 'internalHelper' " +
+                "public, or use member(\"pkg\", \"name\") only if you control that placement.",
+            failure.message,
+        )
+    }
+
     // --- everything reflection cannot place, failing loudly ------------------------------------
 
     @Test
@@ -194,3 +234,9 @@ class RefsTest {
 }
 
 fun topLevelHelper(n: Int): Int = n
+
+/** Passes the metadata-kind check (owner is this file's facade) but must still be rejected. */
+private fun secretHelper(): Int = 1
+
+/** Same as [secretHelper], the other non-public case: usable in-module, unlike `private`. */
+internal fun internalHelper(): Int = 1
