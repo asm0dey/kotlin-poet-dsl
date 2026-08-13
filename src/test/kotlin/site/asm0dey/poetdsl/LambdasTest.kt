@@ -358,13 +358,28 @@ class LambdasTest {
     }
 
     @Test
-    fun `a type scope's own handles are not foreign to a lambda declared in it`() {
+    fun `a type scope's own handles travel with a lambda declared in it`() {
         lateinit var delegate: Expr
+        lateinit var seed: Expr
         typeSpec(name = "Holder") {
-            val seed = constructorParam(VAL, "seed", INT)
+            seed = constructorParam(VAL, "seed", INT)
             delegate = call(member("kotlin", "lazy")) { +seed.call("inc") }
         }
-        assertTrue(delegate.usedScopes.isEmpty(), "the enclosing type already encloses the use site")
+        // Not "not foreign, therefore silent": the type's own id is reported like any other
+        // captured scope, so a block outside the type rejects the delegate. Inside the type the
+        // type's id encloses the use site, so the same value is still accepted there.
+        assertEquals(setOf(seed.scope), delegate.usedScopes, "the declaring type must travel with the value")
+        assertFailsWith<IllegalStateException> { with(attachedBlock()) { +delegate } }
+
+        // A block nested in the declaring type — the shape a member `fun` body gets in Task 19.
+        val member = BlockScope(
+            CodeBlock.builder(),
+            NameScope(null),
+            seed.scope!!.child("fun member"),
+            mutableListOf(),
+        )
+        with(member) { +delegate }
+        assertTrue(member.builder.build().toString().isNotEmpty(), "still legal inside its own type")
     }
 
     @Test
@@ -373,6 +388,28 @@ class LambdasTest {
         val lam = detachedLambda { +Expr(CodeBlock.of("leaked"), scope = foreign).call("use") }
         assertEquals(setOf(foreign), lam.usedScopes)
         assertFailsWith<IllegalStateException> { with(attachedBlock()) { +lam } }
+    }
+
+    @Test
+    fun `a nested lambda's parameter escaping into a detached lambda's body is reported`() {
+        // The scope that is declared *inside* the detached lambda yet still does not enclose its
+        // use site: `it` belongs to the inner `map` lambda and is used after that lambda closed.
+        // Filtering by "declared inside the lambda" alone would drop it and emit `it.use()` where
+        // nothing binds `it`, so the record has to survive to the splice.
+        var escaped: Expr? = null
+        val lam = detachedLambda {
+            +items.call("map") { p ->
+                escaped = p
+                +p
+            }
+            +escaped!!.call("use")
+        }
+        assertEquals(setOf(escaped!!.scope), lam.usedScopes, "the inner lambda's scope must be reported")
+        val failure = assertFailsWith<IllegalStateException> { with(attachedBlock()) { +lam } }
+        assertEquals(
+            "Handle from scope 'lambda' does not enclose the current scope 'fun f'.",
+            failure.message,
+        )
     }
 
     // --- the output is real Kotlin -----------------------------------------------------------
