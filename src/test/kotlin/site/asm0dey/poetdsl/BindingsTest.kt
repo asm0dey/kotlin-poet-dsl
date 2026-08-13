@@ -10,10 +10,12 @@ import com.tschuchort.compiletesting.KotlinCompilation
 import com.tschuchort.compiletesting.SourceFile
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import site.asm0dey.poetdsl.ParamKind.VAL
+import site.asm0dey.poetdsl.ParamKind.VAR
 import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 
 @OptIn(ExperimentalCompilerApi::class)
 class BindingsTest {
@@ -233,6 +235,90 @@ class BindingsTest {
             file("com.example", "A") { `class`("A") { `val`("x", INT, init = 1.lit) } }.toString(),
             file("com.example", "A") { `class`("A") { property("x", INT, init = 1.lit) } }.toString(),
         )
+    }
+
+    // --- mutability (D22) ----------------------------------------------------------------------
+
+    @Test
+    fun `assign rejects a val handle, naming the binding`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            renderBlock {
+                val x = `val`("x", INT, 1.lit)
+                x assign 2.lit
+            }
+        }
+        assertEquals("assign: 'x' is a val and cannot be reassigned.", failure.message)
+    }
+
+    @Test
+    fun `compound assignment rejects a val handle, naming the binding and operator`() {
+        val plusFailure = assertFailsWith<IllegalStateException> {
+            renderBlock {
+                val x = `val`("x", INT, 1.lit)
+                x += 1.lit
+            }
+        }
+        assertEquals("plusAssign: 'x' is a val and cannot be reassigned.", plusFailure.message)
+
+        val minusFailure = assertFailsWith<IllegalStateException> {
+            renderBlock {
+                val x = `val`("x", INT, 1.lit)
+                x -= 1.lit
+            }
+        }
+        assertEquals("minusAssign: 'x' is a val and cannot be reassigned.", minusFailure.message)
+    }
+
+    @Test
+    fun `a var handle is accepted by assign, rendering as before`() {
+        val out = renderBlock {
+            val total = `var`("total", INT, 0.lit)
+            total assign 5.lit
+        }
+        assertEquals("var total: kotlin.Int = 0\ntotal = 5\n", out)
+    }
+
+    @Test
+    fun `assign accepts an unknown (null) handle - a call result and an escape hatch expression`() {
+        assertNull(call("f").mutable)
+        assertNull(expression("t").mutable)
+        assertEquals("f() = 1\n", renderBlock { call("f") assign 1.lit })
+        assertEquals("t = 1\n", renderBlock { expression("t") assign 1.lit })
+    }
+
+    @Test
+    fun `a property or call derived from a val handle does not inherit its mutability`() {
+        lateinit var derivedProp: Expr
+        lateinit var derivedCall: Expr
+        val out = renderBlock {
+            val x = `val`("x", INT, 1.lit)
+            assertEquals(false, x.mutable)
+            derivedProp = x.prop("field")
+            derivedCall = x.call("hashCode")
+            // null (unknown), not the val's `false` - a fabricated `false` would make this throw.
+            derivedProp assign 2.lit
+        }
+        assertNull(derivedProp.mutable, "a property access derived from a val is not the val itself")
+        assertNull(derivedCall.mutable, "a call derived from a val is not the val itself")
+        assertEquals("val x: kotlin.Int = 1\nx.field = 2\n", out)
+    }
+
+    @Test
+    fun `constructorParam(VAL) is rejected by assign, constructorParam(VAR) is accepted`() {
+        lateinit var valHandle: Expr
+        lateinit var varHandle: Expr
+        typeSpec(name = "Widget") {
+            valHandle = constructorParam(VAL, "x", INT)
+            varHandle = constructorParam(VAR, "y", INT)
+        }
+        assertEquals(false, valHandle.mutable)
+        assertEquals(true, varHandle.mutable)
+
+        val failure = assertFailsWith<IllegalStateException> {
+            renderBlock { valHandle assign 1.lit }
+        }
+        assertEquals("assign: 'x' is a val and cannot be reassigned.", failure.message)
+        assertEquals("y = 1\n", renderBlock { varHandle assign 1.lit })
     }
 
     // --- ownership (ADR 0008) -----------------------------------------------------------------

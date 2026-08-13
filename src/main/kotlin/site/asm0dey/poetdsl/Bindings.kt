@@ -8,8 +8,8 @@ import com.squareup.kotlinpoet.TypeName
  * The handle a binding hands back: the (possibly uniquified) name it was actually declared
  * under, tagged with the scope that declared it so ADR 0008 can judge it at every later use.
  */
-private fun Scope.handle(unique: String, type: TypeName?): Expr =
-    Expr(CodeBlock.of("%L", unique), type, Prec.ATOM, unique, id)
+private fun Scope.handle(unique: String, type: TypeName?, mutable: Boolean? = null): Expr =
+    Expr(CodeBlock.of("%L", unique), type, Prec.ATOM, unique, id, mutable = mutable)
 
 /**
  * `val name: T = init` / `var name by delegate` as a local statement.
@@ -44,7 +44,7 @@ private fun BlockScope.bindLocal(
         }
         .build()
     emitCode(code)
-    return handle(unique, type ?: init?.type)
+    return handle(unique, type ?: init?.type, mutable)
 }
 
 /**
@@ -117,13 +117,13 @@ private fun Scope.bind(
         is FileScope -> {
             val spec = propertyOf(mutable, annotations, modifiers, name, type, init, by)
             builder.addProperty(spec)
-            handle(spec.name, type)
+            handle(spec.name, type, mutable)
         }
 
         is TypeScope -> {
             val spec = propertyOf(mutable, annotations, modifiers, name, type, init, by)
             builder.addProperty(spec)
-            handle(spec.name, type)
+            handle(spec.name, type, mutable)
         }
     }
 }
@@ -177,13 +177,19 @@ public fun `var`(
 /** `a = b`. Named because `=` is not overloadable. */
 context(b: BlockScope)
 public infix fun Expr.assign(value: Expr) {
+    check(mutable != false) {
+        "assign: '${name ?: this}' is a val and cannot be reassigned."
+    }
     b.checkOwned(this)
     b.checkOwned(value)
     b.emitCode(CodeBlock.of("%L·=·%L", code, value.code))
 }
 
 /** `a op= b`, for the five compound assignments Kotlin defines. */
-private fun BlockScope.compound(target: Expr, op: String, value: Expr) {
+private fun BlockScope.compound(target: Expr, op: String, opName: String, value: Expr) {
+    check(target.mutable != false) {
+        "$opName: '${target.name ?: target}' is a val and cannot be reassigned."
+    }
     checkOwned(target)
     checkOwned(value)
     emitCode(CodeBlock.of("%L·%L·%L", target.code, op, value.code))
@@ -196,29 +202,29 @@ private fun BlockScope.compound(target: Expr, op: String, value: Expr) {
 /** `a += b`. */
 context(b: BlockScope)
 public operator fun Expr.plusAssign(value: Expr) {
-    b.compound(this, "+=", value)
+    b.compound(this, "+=", "plusAssign", value)
 }
 
 /** `a -= b`. */
 context(b: BlockScope)
 public operator fun Expr.minusAssign(value: Expr) {
-    b.compound(this, "-=", value)
+    b.compound(this, "-=", "minusAssign", value)
 }
 
 /** `a *= b`. */
 context(b: BlockScope)
 public operator fun Expr.timesAssign(value: Expr) {
-    b.compound(this, "*=", value)
+    b.compound(this, "*=", "timesAssign", value)
 }
 
 /** `a /= b`. */
 context(b: BlockScope)
 public operator fun Expr.divAssign(value: Expr) {
-    b.compound(this, "/=", value)
+    b.compound(this, "/=", "divAssign", value)
 }
 
 /** `a %= b`. */
 context(b: BlockScope)
 public operator fun Expr.remAssign(value: Expr) {
-    b.compound(this, "%=", value)
+    b.compound(this, "%=", "remAssign", value)
 }

@@ -239,7 +239,16 @@ internal fun TypeScope.addConstructorParam(
                 .build(),
         )
     }
-    return Expr(CodeBlock.of("%L", unique), type, Prec.ATOM, unique, id)
+    // A bare parameter (kind == null, no property) is still immutable — Kotlin has no `var`
+    // constructor parameter without a property — so it is `false`, same as ParamKind.VAL.
+    return Expr(
+        CodeBlock.of("%L", unique),
+        type,
+        Prec.ATOM,
+        unique,
+        id,
+        mutable = kind == ParamKind.VAR,
+    )
 }
 
 /** Detached type builder; returns a KotlinPoet spec, so interop with hand-written KotlinPoet is free. */
