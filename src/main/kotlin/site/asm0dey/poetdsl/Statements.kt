@@ -71,10 +71,20 @@ internal fun BlockScope.checkOwned(stmt: Stmt) {
  * closing brace at +4. `add` is the wanted behaviour — [lambdaCode] already indents its own body,
  * and a statement-level indent on top of it would double it. `StatementsTest` pins this directly;
  * `LambdasTest`'s golden strings depend on it throughout.
+ *
+ * `add(code)`, not `add("%L\n", code)`: the two render identical text, but they build different
+ * `CodeBlock`s. Wrapping the statement as a `%L` *argument* makes `formatParts[0]` the literal
+ * `"%L"`, and `FunSpec.asExpressionBody` (`FunSpec.kt:237-259`) matches `formatParts`
+ * **positionally** against `"return·"` via `CodeBlock.withoutPrefix` (`CodeBlock.kt:76-101`) — so
+ * a one-`return` body could never become `= expr`. Splicing inline puts the `return·` part where
+ * the prefix match can see it, and single-`return` functions render as expression bodies, which
+ * is what the spec asks for. This still adds no `«…»` statement markers, so the reason
+ * `addStatement` was rejected above is untouched: a body built this way is still legal in a
+ * property delegate (`by lazy { … }`), a property initializer or a nested statement.
  */
 internal fun BlockScope.emitCode(code: CodeBlock) {
     flushPending()
-    builder.add("%L\n", code)
+    builder.add(code).add("\n")
 }
 
 /**

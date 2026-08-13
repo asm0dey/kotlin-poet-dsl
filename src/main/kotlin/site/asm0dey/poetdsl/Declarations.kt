@@ -225,6 +225,9 @@ internal fun TypeScope.addConstructorParam(
     check(name !in declaredConstructorParamNames) {
         "A constructor parameter named \"$name\" is already declared in this scope."
     }
+    // The other half of the guard in `constructor`, for the reverse writing order. Same broken
+    // output either way, so the same message names both constructs.
+    check(!hasSecondaryCtor) { PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE }
     declaredConstructorParamNames += name
     val unique = names.unique(name)
     val param = ParameterSpec.builder(unique, type)
@@ -312,6 +315,18 @@ internal fun buildFun(
         detachedRoot = parent == null,
     )
 
+    // Two parameters of one function with the same name is a compile error in Kotlin with no valid
+    // output to preserve, so it is rejected rather than uniquified to `x2` (D21) — the same call
+    // `addConstructorParam` and `propertyOf` make. This is *not* the shadowing case below: a
+    // parameter colliding with an *enclosing* binding still renames, because there the output is
+    // valid and only the name has to move. Function *names* are deliberately exempt from any such
+    // check: Kotlin permits overloads.
+    params.map { it.name }.groupingBy { it }.eachCount().forEach { (paramName, count) ->
+        check(count == 1) {
+            "param: a parameter named \"$paramName\" is already declared in this function."
+        }
+    }
+
     val declared = params.map { p ->
         val unique = names.unique(p.name)
         if (unique == p.name) p else p.toBuilder(name = unique).build()
@@ -325,6 +340,17 @@ internal fun buildFun(
     }
     scope.body(handles)
     scope.flushPending()
+
+    // A constructor's body is a `Unit` body, so `return 1` in one is `e: Return type mismatch`.
+    // Inference is skipped for a constructor (see `inferReturnType`), which means nothing else
+    // would ever look at what the body recorded — `recorded` is non-empty only if a *value*
+    // `return` ran, since the valueless `ret()` records nothing and is legal here. Reachable
+    // through a spliced fragment too (`ctor { +stmts { ret(1.lit) } }`), which replays its
+    // recorded types into this list at the splice.
+    check(!isConstructor || recorded.isEmpty()) {
+        "constructor: a constructor cannot return a value. Remove the returned expression, or " +
+            "move the code to a function."
+    }
 
     val builder = if (isConstructor) FunSpec.constructorBuilder() else FunSpec.builder(name)
     return builder
@@ -464,15 +490,33 @@ public fun func(name: String, returns: TypeName? = null, body: BlockScope.() -> 
     `fun`(name, returns, body)
 }
 
+/**
+ * The message both halves of the primary/secondary guard raise.
+ *
+ * A class with a primary constructor requires every secondary constructor to delegate to it with
+ * `: this(…)`. KotlinPoet can express that (`FunSpec.Builder.callThisConstructor`), but this DSL
+ * exposes no way to say *which* arguments to pass, and there is no correct default — so the pair is
+ * rejected outright rather than rendered as `public constructor(other: String) { … }` under a
+ * primary constructor, which is `e: Primary constructor call expected.` (Global Constraint 26).
+ */
+private const val PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE: String =
+    "constructor: a class cannot have both a primary constructor (from constructorParam) and a " +
+        "secondary `constructor`, because the DSL cannot express the required `: this(…)` " +
+        "delegation call. Fold the parameters into one constructor."
+
 /** A constructor written as a member; it has no return type and none is inferred. */
 context(t: TypeScope)
 public fun `constructor`(body: BlockScope.() -> Unit) {
+    check(!t.hasCtor) { PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE }
+    t.hasSecondaryCtor = true
     t.builder.addFunction(buildFun("<init>", true, null, null, emptyList(), null, t) { body() })
 }
 
 /** [`constructor`] with one parameter; the body receives its handle. */
 context(t: TypeScope)
 public fun `constructor`(p1: ParameterSpec, body: BlockScope.(Expr) -> Unit) {
+    check(!t.hasCtor) { PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE }
+    t.hasSecondaryCtor = true
     t.builder.addFunction(buildFun("<init>", true, null, null, listOf(p1), null, t) { (a) -> body(a) })
 }
 

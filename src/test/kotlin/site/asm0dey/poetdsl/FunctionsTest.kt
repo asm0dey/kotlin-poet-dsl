@@ -34,9 +34,11 @@ class FunctionsTest {
     }
 
     /**
-     * A block body, not KotlinPoet's `= 1` expression body: `FunSpec.asExpressionBody` matches
-     * `formatParts` positionally against the literal `"return·"`, and `emitCode` wraps every
-     * statement as a `%L` argument, so `formatParts[0]` is always `"%L"`. Same function either way.
+     * KotlinPoet's expression body, `= 1`, not a block body: `FunSpec.asExpressionBody` matches
+     * `formatParts` positionally against the literal `"return·"`, so it only fires when the
+     * `return` sits in `formatParts[0]`. `emitCode` splices its `CodeBlock` inline
+     * (`add(code).add("\n")`) rather than hiding it behind a `%L` argument, which is what makes
+     * the prefix visible to the match.
      */
     @Test
     fun `return type is inferred from a literal`() {
@@ -46,9 +48,7 @@ class FunctionsTest {
 
             import kotlin.Int
 
-            public fun one(): Int {
-              return 1
-            }
+            public fun one(): Int = 1
 
             """.trimIndent(),
             file("com.example", "Api") { `fun`("one") { ret(1.lit) } }.toString(),
@@ -63,9 +63,7 @@ class FunctionsTest {
 
             import kotlin.String
 
-            public fun echo(s: String): String {
-              return s
-            }
+            public fun echo(s: String): String = s
 
             """.trimIndent(),
             file("com.example", "Api") { `fun`("echo", param("s", STRING)) { s -> ret(s) } }.toString(),
@@ -158,9 +156,7 @@ class FunctionsTest {
             import kotlin.Int
             import kotlin.String
 
-            public fun mystery(x: String): Int {
-              return x.foo()
-            }
+            public fun mystery(x: String): Int = x.foo()
 
             """.trimIndent(),
             file("com.example", "Api") {
@@ -282,8 +278,7 @@ class FunctionsTest {
         val out = file("com.example", "Api") {
             `fun`("echo", param("value", STRING)) { anythingAtAll -> ret(anythingAtAll) }
         }.toString()
-        assertTrue(out.contains("public fun echo(`value`: String): String {"), out)
-        assertTrue(out.contains("return `value`"), out)
+        assertTrue(out.contains("public fun echo(`value`: String): String = `value`"), out)
     }
 
     /** D22: a Kotlin function parameter is immutable, so its handle is a `val`, not "unknown". */
@@ -393,9 +388,7 @@ class FunctionsTest {
             import kotlin.Int
 
             public fun run() {
-              public fun helper(): Int {
-                return 1
-              }
+              public fun helper(): Int = 1
               println(helper())
             }
 
@@ -468,7 +461,7 @@ class FunctionsTest {
             true,
             file("com.example", "Api") { +funSpec(name = "helper") { ret(1.lit) } }
                 .toString()
-                .contains("public fun helper(): Int {"),
+                .contains("public fun helper(): Int = 1"),
         )
     }
 
@@ -477,9 +470,7 @@ class FunctionsTest {
         val spec = funSpec(PRIVATE.toModifiers(), "twice", param("x", INT)) { x -> ret(x + x) }
         assertEquals(
             """
-            private fun twice(x: kotlin.Int): kotlin.Int {
-              return x + x
-            }
+            private fun twice(x: kotlin.Int): kotlin.Int = x + x
 
             """.trimIndent(),
             spec.toString(),
@@ -544,9 +535,7 @@ class FunctionsTest {
 
             import kotlin.Int
 
-            public fun f(): Int {
-              return 1
-            }
+            public fun f(): Int = 1
 
             """.trimIndent(),
             file("com.example", "Api") { `fun`("f") { +guard } }.toString(),
@@ -561,7 +550,183 @@ class FunctionsTest {
         assertEquals(false, out.contains("public fun g():"), out)
         assertTrue(out.contains("public fun g() {"), out)
     }
+
+    /**
+     * `buildFun`'s closing `scope.flushPending()` is the only thing that closes a control-flow
+     * block left open at the very *end* of a function body: every other flush is triggered by
+     * whatever statement comes next, and here nothing does. Without it this renders `if (flag) {`
+     * with no closing brace — `e: Syntax error: Expecting '}'` — so the golden text and the
+     * compile below are what pin the call. No other test's body shape ends in an open block.
+     */
+    @Test
+    fun `a function body ending in an open control-flow block is closed`() {
+        val out = file("com.example", "Api") {
+            `fun`("f", param("flag", BOOLEAN)) { flag ->
+                `if`(flag) { +call("println", "yes".lit) }
+            }
+        }.toString()
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Boolean
+
+            public fun f(flag: Boolean) {
+              if (flag) {
+                println("yes")
+              }
+            }
+
+            """.trimIndent(),
+            out,
+        )
+        assertCompiles(out)
+    }
+
+    /**
+     * Parameters are declared in a *child* [NameScope] that is discarded when the body ends, so two
+     * sibling functions each get their own `x`. Declaring into the parent scope instead would leave
+     * `x` taken after the first function and rename the second's parameter to `x2` — a public API
+     * name nobody asked for, in a signature with nothing to shadow. The brief names this behaviour
+     * explicitly, and `a parameter that would shadow an enclosing binding is renamed` above is the
+     * other half: chaining to the parent is what makes a genuine *enclosing* binding still win.
+     */
+    @Test
+    fun `sibling functions each get their own parameter names`() {
+        val out = file("com.example", "Api") {
+            `fun`("first", param("x", INT)) { x -> +call("println", x) }
+            `fun`("second", param("x", INT)) { x -> +call("println", x) }
+        }.toString()
+        assertTrue(out.contains("public fun first(x: Int)"), out)
+        assertTrue(out.contains("public fun second(x: Int)"), out)
+        assertEquals(false, out.contains("x2"), out)
+        assertCompiles(out)
+    }
+
+    /**
+     * A detached [funSpec] has no parent scope, so `buildFun` builds its body with
+     * `detachedRoot = true` and an outer handle is *recorded* rather than rejected — the same call
+     * `stmts { }` and `typeSpec { }` make. Building it with `detachedRoot = false` instead would
+     * reject every handle the caller legitimately brought in from outside, which is the whole point
+     * of a detached builder. Nothing re-judges the record afterwards, because a `FunSpec` has no
+     * channel to carry it to a splice; that is inherent to returning a KotlinPoet spec.
+     */
+    @Test
+    fun `a detached funSpec accepts a foreign handle instead of rejecting it`() {
+        var escaped: Expr? = null
+        file("com.example", "Api") { `fun`("a") { escaped = `val`("x", INT, 1.lit) } }
+        assertEquals(
+            """
+            public fun b() {
+              x
+            }
+
+            """.trimIndent(),
+            funSpec(name = "b") { +escaped!! }.toString(),
+        )
+    }
+
+    /**
+     * D21's rationale, applied to function parameters: two declarations of one construct with the
+     * same name in the same container is not valid Kotlin, and there is no valid output for the
+     * uniquifier to rescue — renaming would only invent a public API name nobody asked for. The
+     * *shadowing* case is different and still renames, because there the output is valid.
+     */
+    @Test
+    fun `two parameters of one function may not share a name`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "Api") {
+                `fun`("f", params = listOf(param("x", INT), param("x", STRING))) { }
+            }
+        }
+        assertEquals(
+            "param: a parameter named \"x\" is already declared in this function.",
+            failure.message,
+        )
+    }
+
+    /**
+     * Kotlin requires a secondary constructor of a class that has a primary one to delegate with
+     * `: this(…)`, and the DSL cannot express that call, so the pair renders
+     * `public class Box(public val size: Int) { public constructor(other: String) { … } }` —
+     * `e: Primary constructor call expected.` Rejected with a diagnostic instead.
+     */
+    @Test
+    fun `a primary and a secondary constructor together are rejected`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "Box") {
+                `class`("Box") {
+                    constructorParam(VAL, "size", INT)
+                    `constructor`(param("other", STRING)) { other -> +call("println", other) }
+                }
+            }
+        }
+        assertEquals(PRIMARY_PLUS_SECONDARY, failure.message)
+    }
+
+    /** The same guard in the other writing order — the broken output is identical. */
+    @Test
+    fun `a secondary constructor followed by a constructor parameter is rejected`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "Box") {
+                `class`("Box") {
+                    ctor { +call("println", "made".lit) }
+                    constructorParam(VAL, "size", INT)
+                }
+            }
+        }
+        assertEquals(PRIMARY_PLUS_SECONDARY, failure.message)
+    }
+
+    /**
+     * Inference is skipped for a constructor, so nothing else would ever look at what its body
+     * recorded and `ctor { ret(1.lit) }` would render `public constructor() { return 1 }` —
+     * `e: Return type mismatch: expected 'Unit', actual 'Int'.`
+     */
+    @Test
+    fun `a value return inside a constructor is rejected`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "Box") { `class`("Box") { ctor { ret(1.lit) } } }
+        }
+        assertEquals(
+            "constructor: a constructor cannot return a value. Remove the returned expression, " +
+                "or move the code to a function.",
+            failure.message,
+        )
+    }
+
+    /** The same, reached through a spliced fragment, which replays its recorded types at the splice. */
+    @Test
+    fun `a value return spliced into a constructor is rejected`() {
+        val guard = stmts { ret(1.lit) }
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "Box") { `class`("Box") { ctor { +guard } } }
+        }
+        assertEquals(
+            "constructor: a constructor cannot return a value. Remove the returned expression, " +
+                "or move the code to a function.",
+            failure.message,
+        )
+    }
+
+    /** A valueless `return` records no type, so it stays legal in a constructor — and it is. */
+    @Test
+    fun `a valueless return inside a constructor is allowed`() {
+        val out = file("com.example", "Box") {
+            `class`("Box") {
+                ctor { `if`(1.lit eq 1.lit) { ret() } }
+            }
+        }.toString()
+        assertTrue(out.contains("return"), out)
+        assertCompiles(out)
+    }
 }
+
+/** The message both halves of the primary/secondary constructor guard raise. */
+private const val PRIMARY_PLUS_SECONDARY: String =
+    "constructor: a class cannot have both a primary constructor (from constructorParam) and a " +
+        "secondary `constructor`, because the DSL cannot express the required `: this(…)` " +
+        "delegation call. Fold the parameters into one constructor."
 
 /** A one-statement lambda value, built outside every scope, for the delegate tests above. */
 private fun oneValueLambda(): Expr = detachedLambda { +1.lit }

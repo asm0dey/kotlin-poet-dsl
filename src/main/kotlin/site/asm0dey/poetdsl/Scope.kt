@@ -72,6 +72,15 @@ public class TypeScope internal constructor(
     internal var hasCtor: Boolean = false
 
     /**
+     * Whether a secondary `` `constructor` `` was already declared. Kotlin requires every secondary
+     * constructor of a class that has a primary one to delegate to it with `: this(…)`, and this DSL
+     * has no way to express that call, so the two constructs are mutually exclusive here — see the
+     * guards in [addConstructorParam] and in the `` `constructor` `` builders. Tracked in both
+     * directions because the two can be written in either order and the broken output is the same.
+     */
+    internal var hasSecondaryCtor: Boolean = false
+
+    /**
      * Constructor parameter names declared directly in this type via [addConstructorParam].
      * Same rationale and same "reject, don't rename" treatment as [declaredPropertyNames] — two
      * constructor parameters named `id` is a compile error with no valid output to preserve —
