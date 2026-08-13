@@ -1,6 +1,7 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.CodeBlock
+import com.squareup.kotlinpoet.TypeName
 
 // --- for ---------------------------------------------------------------------------------------
 
@@ -283,3 +284,106 @@ public fun whenTrue(body: WhenScope.() -> Unit) {
     scope.closed = true
     b.builder.endControlFlow()
 }
+
+// --- try / catch / finally ----------------------------------------------------------------------
+
+/**
+ * A `try` whose block is still open. Emitting anything else in the enclosing scope, or closing
+ * that scope, flushes the chain. Chainable with [catch] and [finally], the same shape as
+ * [IfChain] — and, with this construct, [BlockScope.pending] gets its *second* implementor.
+ *
+ * That is new: until now [IfChain] alone occupied [BlockScope.pending], so the identity check
+ * `owner.pending === this` and a per-instance [closed] flag were provably interchangeable (see
+ * [IfChain]'s doc). With two implementors that interchangeability still holds for [catch] and
+ * [finally] — at the moment either runs on a *live* chain, [owner]'s `pending` is either still
+ * this exact instance or has already moved on to something else entirely (a different `TryChain`,
+ * an `IfChain`, or null), so the two checks agree. But it does **not** hold for [close] itself:
+ * [BlockScope.flushPending] nulls `pending` *before* calling `close()`, so on the normal flush
+ * path `owner.pending === this` is already false the instant `close()` runs — an identity check
+ * there would reject every legitimate flush. [close] needs its own [closed] flag regardless of
+ * how many implementors [PendingFlow] has; [IfChain] already made that choice for the same
+ * reason, and this class keeps it for both entry points that can be called directly, out of
+ * order, on a chain some *other* flush already closed. Every entry point below checks [closed]
+ * before touching [owner]'s builder or any shared state, so a stale `TryChain` — whether closed by
+ * its own [close], by a flush that moved on to an unrelated statement, or by a flush that opened a
+ * competing `IfChain` on the same owner — is rejected outright instead of reattaching its clause
+ * to whatever control flow now happens to be open.
+ */
+public class TryChain internal constructor(private val owner: BlockScope) : PendingFlow {
+    /** See the class doc: mirrors [IfChain.closed], independently re-derived for this class. */
+    private var closed: Boolean = false
+
+    /**
+     * Names reserved by this chain's own `catch` parameters, shared across every [catch] call on
+     * this instance so a second `e` uniquifies to `e2` (they are siblings of *this* `try`, not of
+     * unrelated ones) — but a child of [owner]'s own names, never [owner.names] itself, so nothing
+     * declared here is visible once this chain is discarded. That is the same "frees when the
+     * body ends" shape as [`for`]'s loop variable and [lambdaOf]'s parameters, just shared across
+     * more than one body because Kotlin's own catch clauses are siblings of each other.
+     */
+    private val paramNames: NameScope = owner.names.child()
+
+    /** `catch (name: type) { … }`. The handle is passed to the body. */
+    public fun `catch`(name: String, type: TypeName, body: BlockScope.(Expr) -> Unit): TryChain {
+        check(!closed) { "catch: this try/catch/finally chain is already closed and cannot take another clause." }
+        val unique = paramNames.unique(name)
+        owner.builder.nextControlFlow("catch·(%L:·%T)", unique, type)
+        val inner = BlockScope(
+            builder = CodeBlock.builder(),
+            names = paramNames.child(),
+            id = owner.id.child("catch"),
+            returns = owner.returns,
+            detachedRoot = owner.detachedRoot,
+            referenced = owner.referenced,
+            captured = owner.captured,
+        )
+        // A catch parameter is a `val` in Kotlin — kotlinc rejects `catch (var e: T)` outright —
+        // so unlike a derived expression this mutability is genuinely known, not merely unset;
+        // `mutable = false` lets `assign` reject a reassignment with a domain error instead of
+        // deferring to kotlinc (D22).
+        inner.body(
+            Expr(
+                CodeBlock.of("%L", unique),
+                type = type,
+                prec = Prec.ATOM,
+                name = unique,
+                scope = inner.id,
+                mutable = false,
+            ),
+        )
+        inner.flushPending()
+        owner.builder.add(inner.builder.build())
+        return this
+    }
+
+    /** `finally { … }`. */
+    public fun finally(body: BlockScope.() -> Unit) {
+        check(!closed) { "finally: this try/catch/finally chain is already closed and cannot take another clause." }
+        owner.builder.nextControlFlow("finally")
+        owner.runNested("finally", body = body)
+    }
+
+    override fun close() {
+        check(!closed) { "close: this try/catch/finally chain is already closed." }
+        closed = true
+        // Mirrors IfChain.close(): a normal flush already nulled owner.pending before calling
+        // here, so this is a no-op on that path. It only fires when close() is called directly,
+        // keeping owner.pending from staying stale and triggering a second, misattributed close()
+        // the next time this scope flushes.
+        if (owner.pending === this) owner.pending = null
+        owner.builder.endControlFlow()
+    }
+}
+
+/** `try { … }`, chainable with [TryChain.catch] and [TryChain.finally]. */
+context(b: BlockScope)
+public fun `try`(body: BlockScope.() -> Unit): TryChain {
+    b.flushPending()
+    b.builder.beginControlFlow("try")
+    b.runNested("try", body = body)
+    return TryChain(b).also { b.pending = it }
+}
+
+/** Alias of [`try`]. */
+context(b: BlockScope)
+public fun tryCatch(body: BlockScope.() -> Unit): TryChain = `try`(body)
