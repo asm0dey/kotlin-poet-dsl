@@ -46,6 +46,17 @@ class LoopsTest {
     }
 
     @Test
+    fun `loop variable name is freed once the loop closes`() {
+        assertEquals(
+            "for (item in items) {\n  item\n}\nval item = 1\n",
+            renderBlock {
+                `for`(expression("items")) { item -> +item }
+                `val`("item", init = 1.lit)
+            },
+        )
+    }
+
+    @Test
     fun `while and doWhile`() {
         assertEquals(
             "var n: kotlin.Int = 0\nwhile (n < 10) {\n  n += 1\n}\ndo {\n  n -= 1\n} while (n > 0)\n",

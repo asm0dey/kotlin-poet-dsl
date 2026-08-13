@@ -12,15 +12,17 @@ import com.squareup.kotlinpoet.CodeBlock
  *
  * @param name the loop variable's rendered name (ADR 0005). Defaults to the singular of the
  *   iterable handle's name (`items` → `item`), falling back to `item` when the handle has none.
- *   Always uniquified against the enclosing scope.
+ *   Uniquified against the loop body's own child scope, not [b] itself — matching [lambdaOf]'s
+ *   treatment of a lambda parameter — so the name is free again once the loop closes. Because
+ *   [NameScope.child] chains to its parent, this still never collides with an enclosing name.
  */
 context(b: BlockScope)
 public fun `for`(items: Expr, name: String? = null, body: BlockScope.(Expr) -> Unit) {
     b.checkOwned(items)
-    val chosen = b.names.unique(name ?: items.name?.let(::singularize) ?: "item")
     b.flushPending()
-    b.builder.beginControlFlow("for·(%L·in·%L)", chosen, items.code)
     val inner = b.child("for")
+    val chosen = inner.names.unique(name ?: items.name?.let(::singularize) ?: "item")
+    b.builder.beginControlFlow("for·(%L·in·%L)", chosen, items.code)
     inner.body(Expr(CodeBlock.of("%L", chosen), name = chosen, scope = inner.id))
     inner.flushPending()
     b.builder.add(inner.builder.build())
@@ -65,7 +67,7 @@ public fun doWhile(condition: Expr, body: BlockScope.() -> Unit) {
 
 // --- break / continue ------------------------------------------------------------------------
 
-/** `break`. */
+/** `break`. Does not check that it is inside a loop; an out-of-place `break` is left for `kotlinc` to reject. */
 context(b: BlockScope)
 public fun `break`() {
     b.emitCode(CodeBlock.of("break"))
@@ -77,7 +79,7 @@ public fun brk() {
     `break`()
 }
 
-/** `continue`. */
+/** `continue`. Does not check that it is inside a loop; an out-of-place `continue` is left for `kotlinc` to reject. */
 context(b: BlockScope)
 public fun `continue`() {
     b.emitCode(CodeBlock.of("continue"))
