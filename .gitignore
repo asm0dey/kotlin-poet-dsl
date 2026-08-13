@@ -1,0 +1,5 @@
+.superpowers/
+build/
+.gradle/
+buildSrc/build/
+.kotlin/

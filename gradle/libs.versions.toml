@@ -1,0 +1,13 @@
+[versions]
+kotlin = "2.4.10"
+kotlinpoet = "2.3.0"
+kctfork = "0.13.0"
+bcv = "0.18.1"
+
+[libraries]
+kotlinpoet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinpoet" }
+kctfork-core = { module = "dev.zacsweers.kctfork:core", version.ref = "kctfork" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+bcv = { id = "org.jetbrains.kotlinx.binary-compatibility-validator", version.ref = "bcv" }
