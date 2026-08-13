@@ -87,73 +87,85 @@ public fun file(packageName: String, fileName: String, body: FileScope.() -> Uni
     return scope.builder.build()
 }
 
+/** Emits [this] into the innermost scope's builder; a block body is not a legal target. */
 context(s: Scope)
 public operator fun FunSpec.unaryPlus() {
     when (s) {
         is FileScope -> s.builder.addFunction(this)
         is TypeScope -> s.builder.addFunction(this)
-        is BlockScope -> error("+FunSpec: a function spec cannot be spliced into a block body.")
+        is BlockScope -> error("FunSpec: a function spec cannot be emitted into a block body.")
     }
 }
 
+/** Alias for [unaryPlus]. */
 context(s: Scope)
 public operator fun FunSpec.invoke() {
     +this
 }
 
+/** Alias for [unaryPlus]. */
 context(s: Scope)
 public fun emit(spec: FunSpec) {
     +spec
 }
 
+/** Alias for [unaryPlus]. */
 context(s: Scope)
 public fun add(spec: FunSpec) {
     +spec
 }
 
+/** Emits [this] into the innermost scope's builder; a block body is not a legal target. */
 context(s: Scope)
 public operator fun TypeSpec.unaryPlus() {
     when (s) {
         is FileScope -> s.builder.addType(this)
         is TypeScope -> s.builder.addType(this)
-        is BlockScope -> error("+TypeSpec: a type spec cannot be spliced into a block body.")
+        is BlockScope -> error("TypeSpec: a type spec cannot be emitted into a block body.")
     }
 }
 
+/** Alias for [unaryPlus]. */
 context(s: Scope)
 public operator fun TypeSpec.invoke() {
     +this
 }
 
+/** Alias for [unaryPlus]. */
 context(s: Scope)
 public fun emit(spec: TypeSpec) {
     +spec
 }
 
+/** Alias for [unaryPlus]. */
 context(s: Scope)
 public fun add(spec: TypeSpec) {
     +spec
 }
 
+/** Emits [this] into the innermost scope's builder; a block body is not a legal target. */
 context(s: Scope)
 public operator fun PropertySpec.unaryPlus() {
     when (s) {
         is FileScope -> s.builder.addProperty(this)
         is TypeScope -> s.builder.addProperty(this)
-        is BlockScope -> error("+PropertySpec: a property spec cannot be spliced into a block body.")
+        is BlockScope -> error("PropertySpec: a property spec cannot be emitted into a block body.")
     }
 }
 
+/** Alias for [unaryPlus]. */
 context(s: Scope)
 public operator fun PropertySpec.invoke() {
     +this
 }
 
+/** Alias for [unaryPlus]. */
 context(s: Scope)
 public fun emit(spec: PropertySpec) {
     +spec
 }
 
+/** Alias for [unaryPlus]. */
 context(s: Scope)
 public fun add(spec: PropertySpec) {
     +spec

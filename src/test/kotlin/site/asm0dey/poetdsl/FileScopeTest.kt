@@ -122,26 +122,30 @@ class FileScopeTest {
      * just in which builder was called.
      */
     @Test
-    fun `a FunSpec emitted inside a class body lands on the class, not the file`() {
-        val rendered = file("com.example", "Api") {
-            val type = TypeScope(TypeSpec.classBuilder("User"), names.child(), id.child("class User"))
-            with(type) {
-                +FunSpec.builder("greet").build()
-            }
-            +type.finish()
-        }.toString()
-
-        assertEquals(
-            """
+    fun `a FunSpec emitted inside a class body lands on the class, not the file, via all four forms`() {
+        val expected = """
             package com.example
 
             public class User {
               public fun greet() {
               }
             }
-            """.trimIndent() + "\n",
-            rendered,
-        )
+
+            """.trimIndent()
+
+        fun renderWith(emitInto: TypeScope.(FunSpec) -> Unit): String =
+            file("com.example", "Api") {
+                val type = TypeScope(TypeSpec.classBuilder("User"), names.child(), id.child("class User"))
+                val f = FunSpec.builder("greet").build()
+                with(type) { emitInto(f) }
+                +type.finish()
+            }.toString()
+
+        val plus = renderWith { f -> +f }
+        assertEquals(expected, plus)
+        assertEquals(plus, renderWith { f -> f() })
+        assertEquals(plus, renderWith { f -> emit(f) })
+        assertEquals(plus, renderWith { f -> add(f) })
     }
 
     @Test
@@ -228,7 +232,7 @@ class FileScopeTest {
         val thrown = assertFailsWith<IllegalStateException> {
             with(block) { +FunSpec.builder("x").build() }
         }
-        assertEquals("+FunSpec: a function spec cannot be spliced into a block body.", thrown.message)
+        assertEquals("FunSpec: a function spec cannot be emitted into a block body.", thrown.message)
     }
 
     @Test
@@ -237,7 +241,7 @@ class FileScopeTest {
         val thrown = assertFailsWith<IllegalStateException> {
             with(block) { +TypeSpec.classBuilder("x").build() }
         }
-        assertEquals("+TypeSpec: a type spec cannot be spliced into a block body.", thrown.message)
+        assertEquals("TypeSpec: a type spec cannot be emitted into a block body.", thrown.message)
     }
 
     @Test
@@ -246,7 +250,7 @@ class FileScopeTest {
         val thrown = assertFailsWith<IllegalStateException> {
             with(block) { +PropertySpec.builder("x", STRING).initializer("%S", "x").build() }
         }
-        assertEquals("+PropertySpec: a property spec cannot be spliced into a block body.", thrown.message)
+        assertEquals("PropertySpec: a property spec cannot be emitted into a block body.", thrown.message)
     }
 
     @Test
@@ -274,16 +278,16 @@ class FileScopeTest {
         val without = TypeScope(TypeSpec.classBuilder("User"), NameScope(null), ScopeId(null, "type"))
         assertEquals("public class User\n", without.finish().toString())
 
-        val with = TypeScope(TypeSpec.classBuilder("User"), NameScope(null), ScopeId(null, "type"))
-        with.ctor.addParameter("name", STRING)
-        with.hasCtor = true
+        val withCtor = TypeScope(TypeSpec.classBuilder("User"), NameScope(null), ScopeId(null, "type"))
+        withCtor.ctor.addParameter("name", STRING)
+        withCtor.hasCtor = true
         assertEquals(
             """
             public class User(
               name: kotlin.String,
             )
             """.trimIndent() + "\n",
-            with.finish().toString(),
+            withCtor.finish().toString(),
         )
     }
 
