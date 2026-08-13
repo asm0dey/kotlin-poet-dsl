@@ -3,6 +3,7 @@ package site.asm0dey.poetdsl
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.MemberName
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -108,14 +109,14 @@ class StatementsTest {
 
     @Test
     fun `a pure form may reference handles from the block it is spliced into`() {
-        // Task 12's `val` is the intended spelling of `x`; until it lands the handle is built
-        // directly, which exercises the identical path — an Expr carrying the outer scope's id.
         val block = attachedBlock()
-        val x = Expr(CodeBlock.of("x"), name = "x", scope = block.id)
+        val x = with(block) { `val`("x", INT, init = 1.lit) }
         val fragment = stmts { +x.call("inc") }
+        // The fragment reports the outer block it borrowed from, which is what makes the splice
+        // below the point where ownership is finally judged (ADR 0008).
         assertEquals(setOf(block.id), fragment.usedScopes)
         with(block) { +fragment }
-        assertEquals("x.inc()\n", block.builder.build().toString())
+        assertEquals("val x: kotlin.Int = 1\nx.inc()\n", block.builder.build().toString())
     }
 
     @Test
