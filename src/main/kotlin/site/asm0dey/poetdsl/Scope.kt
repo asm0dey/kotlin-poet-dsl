@@ -67,7 +67,21 @@ public class TypeScope internal constructor(
     internal val builder: TypeSpec.Builder,
     names: NameScope,
     id: ScopeId,
+    /**
+     * What is being declared — `"class"`, `"named object"`, `"interface"` — as [declareType] names it
+     * in its messages. Kept because a [TypeSpec.Builder] does not expose its own kind, and
+     * [superclass] has to reject an interface with a message that says which construct to use
+     * instead. Defaulted to `"class"` for the detached [typeSpec] builder, which only ever builds one.
+     */
+    internal val kindName: String = "class",
 ) : Scope(names, id), Annotatable {
+    /**
+     * Whether [superclass] already ran. KotlinPoet tracks the same fact but keeps it internal, and
+     * its own `check` message ("superclass already set to …") names neither this DSL's construct nor
+     * the type it happened in.
+     */
+    internal var hasSuperclass: Boolean = false
+
     internal val ctor: FunSpec.Builder by lazy(LazyThreadSafetyMode.NONE) { FunSpec.constructorBuilder() }
     internal var hasCtor: Boolean = false
 

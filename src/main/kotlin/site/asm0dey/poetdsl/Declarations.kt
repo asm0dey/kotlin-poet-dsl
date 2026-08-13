@@ -59,7 +59,12 @@ internal fun Scope.declareType(
     }
     declaredTypeNames += name
 
-    val scope = TypeScope(builder.addModifiers(modifiers.toList()), NameScope(null), id.child("type"))
+    val scope = TypeScope(
+        builder.addModifiers(modifiers.toList()),
+        NameScope(null),
+        id.child("type"),
+        kindName,
+    )
     scope.addAll(annotations)
     // The primary-constructor parameters of D23's signature form go in before the body runs, so the
     // body sees their handles — and so a `superclass(…, x)` written in the body can pass one. They
@@ -435,12 +440,20 @@ internal const val PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE: String =
 
 /**
  * What every generated `` `constructor` ``/`ctor` overload runs before it builds the secondary
- * constructor: what the *type* has to be asked about, stated once instead of inlined into ~120
- * generated bodies — and the one place D25 has to touch to relax the primary/secondary rule once
- * `: this(…)` is expressible.
+ * constructor: the two things the *type* has to be asked about, stated once instead of inlined into
+ * ~120 generated bodies.
+ *
+ * Both are about a delegation call the DSL cannot yet write — `: this(…)` for a primary constructor,
+ * `: super(…)` for superclass arguments carried in the class header — so both are guards on the same
+ * gap, and both are rejections rather than broken output (Global Constraint 26). D25 adds those two
+ * calls and must revisit both checks here together: with `: this(…)` available, a primary
+ * constructor *and* a delegating secondary one become legal, and so does a header
+ * `superclass(Bar, x)` alongside them; a secondary constructor with no primary one still cannot
+ * carry header arguments, because that is precisely what its own `: super(…)` is for.
  */
 internal fun TypeScope.beginSecondaryConstructor() {
     check(!hasCtor) { PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE }
+    check(builder.superclassConstructorParameters.isEmpty()) { SUPERCLASS_ARGS_PLUS_SECONDARY }
     hasSecondaryCtor = true
 }
 
