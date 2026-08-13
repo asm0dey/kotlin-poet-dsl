@@ -6,9 +6,9 @@ import com.squareup.kotlinpoet.CodeBlock
 internal fun renderBlock(body: BlockScope.() -> Unit): String = stmts(body).code.toString()
 
 /**
- * An *attached* block, the shape a `fun` body will have once Task 19 lands. Ownership checks
- * only fire here: a detached root legitimately accepts foreign handles, which is what makes
- * `stmts { }` usable for building fragments up front (deviation D6).
+ * An *attached* block — the shape a `fun` body has. Ownership checks only fire here: a detached
+ * root legitimately accepts foreign handles, which is what makes `stmts { }` usable for building
+ * fragments up front (deviation D6).
  */
 internal fun attachedBlock(label: String = "fun f"): BlockScope =
     BlockScope(CodeBlock.builder(), NameScope(null), ScopeId(null, label), mutableListOf())

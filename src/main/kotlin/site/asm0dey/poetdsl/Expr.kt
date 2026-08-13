@@ -29,10 +29,19 @@ public class Expr internal constructor(
     override fun toString(): String = code.toString()
 }
 
-/** A generated statement produced by the pure form, plus the scopes it referenced. */
+/**
+ * A generated statement produced by the pure form, plus the scopes it referenced.
+ *
+ * @property returns the types this fragment's own `return` statements recorded, replayed into the
+ *   enclosing block when the fragment is spliced. ADR 0007 counts a `return` in a spliced fragment
+ *   as a real function return — only a *lambda* body is isolated — so a fragment's `return` has to
+ *   reach the inference of whichever function it lands in, and a fragment spliced into two
+ *   functions informs both.
+ */
 public class Stmt internal constructor(
     internal val code: CodeBlock,
     internal val usedScopes: Set<ScopeId> = emptySet(),
+    internal val returns: List<TypeName?> = emptyList(),
 ) {
     override fun toString(): String = code.toString()
 }

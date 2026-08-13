@@ -1,6 +1,7 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.CodeBlock
+import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.ParameterSpec
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeName
@@ -260,4 +261,260 @@ public fun typeSpec(modifiers: Modifiers? = null, name: String, body: TypeScope.
     )
     scope.body()
     return scope.finish()
+}
+
+// --- functions --------------------------------------------------------------------------------
+
+/**
+ * A function parameter. Type-position annotations come free: `param("x", INT.annotated<Positive>())`.
+ *
+ * [name] is a *request*, not a guarantee: a parameter that would shadow a binding of the enclosing
+ * scope is uniquified when the function is built, exactly as a lambda parameter is (ADR 0009). The
+ * handle the body receives always carries the name actually rendered.
+ */
+public fun param(name: String, type: TypeName): ParameterSpec = ParameterSpec.builder(name, type).build()
+
+/**
+ * The single implementation behind every function overload, including the detached builders.
+ *
+ * Names live in a *child* [NameScope] of the parent's, so a parameter that would shadow an
+ * enclosing property or constructor parameter is renamed at declaration — and the name is released
+ * again when the body ends, the same shape `lambdaOf`, `` `for` `` and `TryChain`'s catch parameters
+ * use. Renaming means rebuilding the [ParameterSpec], since the signature and the body handle have
+ * to agree on the name.
+ *
+ * The body block's [ScopeId] is a child of the parent's, so [checkOwned] accepts a handle declared
+ * by any enclosing scope — a constructor parameter or property of the surrounding type, for
+ * instance — and rejects one smuggled out of a sibling body (ADR 0008). With no parent, the body is
+ * a detached root and records foreign scopes instead of rejecting them, exactly like [typeSpec].
+ *
+ * Return-type inference follows ADR 0007 and is done here because this is the only place that sees
+ * both the explicit [returns] and the types the body recorded.
+ */
+internal fun buildFun(
+    name: String,
+    isConstructor: Boolean,
+    annotations: Annotations?,
+    modifiers: Modifiers?,
+    params: List<ParameterSpec>,
+    returns: TypeName?,
+    parent: Scope?,
+    body: BlockScope.(List<Expr>) -> Unit,
+): FunSpec {
+    val names = (parent?.names ?: NameScope(null)).child()
+    val id = (parent?.id ?: ScopeId(null, "root")).child("fun($name)")
+    val recorded = mutableListOf<TypeName?>()
+    val scope = BlockScope(
+        builder = CodeBlock.builder(),
+        names = names,
+        id = id,
+        returns = recorded,
+        detachedRoot = parent == null,
+    )
+
+    val declared = params.map { p ->
+        val unique = names.unique(p.name)
+        if (unique == p.name) p else p.toBuilder(name = unique).build()
+    }
+    // `%N` rather than `%L`: KotlinPoet escapes a name that is a Kotlin keyword, so
+    // `param("value", …)` renders as `` `value` `` in both the signature and the body.
+    // A Kotlin function parameter cannot be reassigned, so the handle is a `val`, not
+    // "mutability unknown" (D22) — the same call `catch` parameters make.
+    val handles = declared.map { p ->
+        Expr(CodeBlock.of("%N", p), p.type, Prec.ATOM, p.name, id, mutable = false)
+    }
+    scope.body(handles)
+    scope.flushPending()
+
+    val builder = if (isConstructor) FunSpec.constructorBuilder() else FunSpec.builder(name)
+    return builder
+        .apply {
+            annotations?.list?.forEach { addAnnotation(it) }
+            addModifiers(modifiers.toList())
+            declared.forEach { addParameter(it) }
+            inferReturnType(name, isConstructor, returns, recorded)?.let { returns(it) }
+            addCode(scope.builder.build())
+        }
+        .build()
+}
+
+/**
+ * ADR 0007's rule, in order: an explicit [returns] wins; no recorded return means `Unit` with the
+ * type omitted; all recorded types known and equal means that type; anything else is an error.
+ *
+ * A constructor has no return type at all, so nothing is inferred for one.
+ *
+ * The two failures get different messages because they need different fixes read differently: one
+ * says the DSL could not know a type, the other says the author's own `return`s disagree. Both name
+ * the function and both point at `returns = …`, per the ADR.
+ */
+private fun inferReturnType(
+    name: String,
+    isConstructor: Boolean,
+    returns: TypeName?,
+    recorded: List<TypeName?>,
+): TypeName? = when {
+    isConstructor -> null
+    returns != null -> returns
+    recorded.isEmpty() -> null
+    else -> {
+        val distinct = recorded.distinct()
+        check(distinct.size == 1) {
+            "Cannot infer the return type of '$name': its returns have different types " +
+                "(${distinct.joinToString { it?.toString() ?: "unknown" }}). Pass returns = … explicitly."
+        }
+        checkNotNull(distinct.single()) {
+            "Cannot infer the return type of '$name': the returned expression's type is unknown. " +
+                "Pass returns = … explicitly."
+        }
+    }
+}
+
+/**
+ * Adds a function to whichever scope is innermost: top-level in a file, a member of a type, or —
+ * were it renderable — a local function in a block.
+ *
+ * Unlike a type name, a *function* name is never checked for duplicates: Kotlin permits overloads,
+ * so two `` `fun`("show", …) `` calls in one container are legal and must not go through
+ * [Scope.declaredTypeNames].
+ *
+ * The `when` is exhaustive over the sealed [Scope] hierarchy with no `else`, so a future fourth
+ * scope breaks the build here rather than falling through silently (D17).
+ */
+internal fun Scope.declareFun(spec: FunSpec) {
+    when (this) {
+        is FileScope -> builder.addFunction(spec)
+        is TypeScope -> builder.addFunction(spec)
+        // A local function *is* valid Kotlin, but KotlinPoet 2.3.0 cannot render one, the same
+        // wall Task 10's local classes hit. The guard sits here, at the dispatch, so the reason
+        // stays attached to the branch it disables.
+        is BlockScope -> localFunIsUnrenderable()
+    }
+}
+
+/**
+ * Rejects a local function instead of emitting Kotlin that does not compile (Global Constraint 26).
+ *
+ * `CodeWriter.emitLiteral` splices a `FunSpec` with `implicitModifiers = setOf(KModifier.PUBLIC)`
+ * unless `omitImplicitModifiers` is set (KotlinPoet 2.3.0, `CodeWriter.kt:416-427`), and the only
+ * caller that sets it is `FileSpec`'s script body (`FileSpec.kt:202`) — never a `CodeBlock` nested
+ * in a function body. `CodeWriter.shouldEmitPublicModifier` then emits `public`, and Kotlin rejects
+ * every visibility modifier on a local function. Declaring one explicitly does not help: `private`,
+ * `internal` and `protected` suppress the implicit `public` but are themselves illegal there.
+ * KotlinPoet exposes no way to reach `omitImplicitModifiers` (`FunSpec.emit` is internal), and
+ * stripping the keyword afterwards would be string surgery on rendered output, which the backend
+ * constraint forbids and which would break `%T` import resolution.
+ *
+ * Flip this to `emitCode(CodeBlock.of("%L", spec))` the moment the backend can render a local
+ * function; the `local function rendering is still blocked by KotlinPoet` test in `FunctionsTest`
+ * is the canary that fails when that happens.
+ */
+private fun localFunIsUnrenderable(): Nothing = error(
+    "A local function cannot be rendered: KotlinPoet 2.3.0 emits an implicit `public` on every " +
+        "function spliced into a code block, and Kotlin allows no visibility modifier on a local " +
+        "function. Declare it at file or type level.",
+)
+
+/**
+ * `fun name() { … }` — top-level, member or local, depending on the innermost scope. The
+ * local case is dispatched here too, but cannot be rendered yet — see [declareFun].
+ */
+context(s: Scope)
+public fun `fun`(name: String, returns: TypeName? = null, body: BlockScope.() -> Unit) {
+    s.declareFun(buildFun(name, false, null, null, emptyList(), returns, s) { body() })
+}
+
+/** `fun name(p1: T) { … }`; the body receives the parameter's handle. */
+context(s: Scope)
+public fun `fun`(
+    name: String,
+    p1: ParameterSpec,
+    returns: TypeName? = null,
+    body: BlockScope.(Expr) -> Unit,
+) {
+    s.declareFun(buildFun(name, false, null, null, listOf(p1), returns, s) { (a) -> body(a) })
+}
+
+/** [`fun`] with modifiers, e.g. `` `fun`(PRIVATE.toModifiers(), "greet", param("who", STRING)) ``. */
+context(s: Scope)
+public fun `fun`(
+    modifiers: Modifiers,
+    name: String,
+    p1: ParameterSpec,
+    returns: TypeName? = null,
+    body: BlockScope.(Expr) -> Unit,
+) {
+    s.declareFun(buildFun(name, false, null, modifiers, listOf(p1), returns, s) { (a) -> body(a) })
+}
+
+/** The list form: for more than eight parameters, or a list computed at generation time. */
+context(s: Scope)
+public fun `fun`(
+    name: String,
+    params: List<ParameterSpec>,
+    returns: TypeName? = null,
+    body: BlockScope.(List<Expr>) -> Unit,
+) {
+    s.declareFun(buildFun(name, false, null, null, params, returns, s, body))
+}
+
+/** Alias of [`fun`]. */
+context(s: Scope)
+public fun func(name: String, returns: TypeName? = null, body: BlockScope.() -> Unit) {
+    `fun`(name, returns, body)
+}
+
+/** A constructor written as a member; it has no return type and none is inferred. */
+context(t: TypeScope)
+public fun `constructor`(body: BlockScope.() -> Unit) {
+    t.builder.addFunction(buildFun("<init>", true, null, null, emptyList(), null, t) { body() })
+}
+
+/** [`constructor`] with one parameter; the body receives its handle. */
+context(t: TypeScope)
+public fun `constructor`(p1: ParameterSpec, body: BlockScope.(Expr) -> Unit) {
+    t.builder.addFunction(buildFun("<init>", true, null, null, listOf(p1), null, t) { (a) -> body(a) })
+}
+
+/** Alias of [`constructor`]. */
+context(t: TypeScope)
+public fun ctor(body: BlockScope.() -> Unit) {
+    `constructor`(body)
+}
+
+/** Detached function builder; returns a KotlinPoet spec, so interop is free. */
+public fun funSpec(
+    modifiers: Modifiers? = null,
+    name: String,
+    returns: TypeName? = null,
+    body: BlockScope.() -> Unit,
+): FunSpec = buildFun(name, false, null, modifiers, emptyList(), returns, null) { body() }
+
+/** [funSpec] with one parameter; the body receives its handle. */
+public fun funSpec(
+    modifiers: Modifiers? = null,
+    name: String,
+    p1: ParameterSpec,
+    returns: TypeName? = null,
+    body: BlockScope.(Expr) -> Unit,
+): FunSpec = buildFun(name, false, null, modifiers, listOf(p1), returns, null) { (a) -> body(a) }
+
+/**
+ * Detached property builder. The type is mandatory for the same reason it is on a `` `val` ``
+ * property: KotlinPoet cannot infer one (ADR 0003).
+ */
+public fun propertySpec(
+    modifiers: Modifiers? = null,
+    name: String,
+    type: TypeName,
+    init: Expr? = null,
+    by: Expr? = null,
+): PropertySpec {
+    check(init == null || by == null) {
+        "propertySpec: '$name' cannot have both an initializer and a delegate."
+    }
+    val spec = PropertySpec.builder(name, type, modifiers.toList())
+    init?.let { spec.initializer("%L", it.code) }
+    by?.let { spec.delegate("%L", it.code) }
+    return spec.build()
 }

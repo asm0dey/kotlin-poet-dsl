@@ -114,11 +114,10 @@ public fun throwIt(value: Expr) {
  *
  * Records `value.type` into [BlockScope.returns] (ADR 0007), so a function whose body infers its
  * return type from its `return` statements sees this one. `stmts { }` shares one `returns` list
- * across its whole tree (unless a lambda body isolates it via `child(isolateReturns = true)`), but
- * the pure form itself does not read that list back out anywhere yet — a `return` recorded inside a
- * `stmts { }` fragment does not currently reach the function it is later spliced into. That gap is
- * inherent to `stmts` returning only a `Stmt` (code plus used scopes, no `returns`) and is left for
- * Task 19, which wires `fun` bodies to inferred return types.
+ * across its whole tree (unless a lambda body isolates it via `child(isolateReturns = true)`), and
+ * [Stmt] now carries that list out, so a `return` recorded inside a `stmts { }` fragment reaches
+ * the function the fragment is later spliced into — Task 19 closed that gap when it wired `fun`
+ * bodies to inferred return types.
  */
 context(b: BlockScope)
 public fun `return`(value: Expr) {

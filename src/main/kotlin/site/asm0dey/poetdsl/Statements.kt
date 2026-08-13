@@ -116,10 +116,15 @@ public operator fun Expr.unaryPlus() {
  * Splices a pure [Stmt] into this block, validating the handles it was built from against
  * this scope first (ADR 0008). Added with `add`, not `addStatement`: the fragment already
  * carries its own line breaks.
+ *
+ * The fragment's recorded return types are replayed into this block, so a `return` written inside
+ * a `stmts { }` fragment drives the inferred return type of the function it is spliced into — ADR
+ * 0007 treats it exactly like a `return` in an `if` or a `for`, and only a lambda body is isolated.
  */
 context(b: BlockScope)
 public operator fun Stmt.unaryPlus() {
     b.checkOwned(this)
+    b.returns += returns
     b.flushPending()
     b.builder.add(code)
 }
@@ -161,5 +166,5 @@ public fun stmts(body: BlockScope.() -> Unit): Stmt {
     )
     scope.body()
     scope.flushPending()
-    return Stmt(scope.builder.build(), scope.referenced.toSet())
+    return Stmt(scope.builder.build(), scope.referenced.toSet(), scope.returns.toList())
 }
