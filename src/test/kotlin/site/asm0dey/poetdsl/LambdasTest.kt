@@ -7,11 +7,8 @@ import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.LIST
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import com.squareup.kotlinpoet.PropertySpec
-import com.tschuchort.compiletesting.KotlinCompilation
-import com.tschuchort.compiletesting.SourceFile
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import site.asm0dey.poetdsl.ParamKind.VAL
-import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -443,14 +440,4 @@ class LambdasTest {
         }
         assertCompiles(FileSpec.builder("demo", "Holder").addType(holder).build().toString())
     }
-}
-
-@OptIn(ExperimentalCompilerApi::class)
-private fun assertCompiles(source: String) {
-    val result = KotlinCompilation().apply {
-        sources = listOf(SourceFile.kotlin("Generated.kt", source))
-        inheritClassPath = true
-        messageOutputStream = OutputStream.nullOutputStream()
-    }.compile()
-    assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 }

@@ -5,12 +5,9 @@ import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.PRIVATE
 import com.squareup.kotlinpoet.STRING
-import com.tschuchort.compiletesting.JvmCompilationResult
 import com.tschuchort.compiletesting.KotlinCompilation
-import com.tschuchort.compiletesting.SourceFile
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import site.asm0dey.poetdsl.ParamKind.VAL
-import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -730,16 +727,3 @@ private const val PRIMARY_PLUS_SECONDARY: String =
 
 /** A one-statement lambda value, built outside every scope, for the delegate tests above. */
 private fun oneValueLambda(): Expr = detachedLambda { +1.lit }
-
-@OptIn(ExperimentalCompilerApi::class)
-private fun compile(source: String): JvmCompilationResult = KotlinCompilation().apply {
-    sources = listOf(SourceFile.kotlin("Generated.kt", source))
-    inheritClassPath = true
-    messageOutputStream = OutputStream.nullOutputStream()
-}.compile()
-
-@OptIn(ExperimentalCompilerApi::class)
-private fun assertCompiles(source: String) {
-    val result = compile(source)
-    assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
-}

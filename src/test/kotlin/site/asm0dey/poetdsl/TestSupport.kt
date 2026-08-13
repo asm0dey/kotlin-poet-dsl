@@ -1,6 +1,42 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.CodeBlock
+import com.tschuchort.compiletesting.JvmCompilationResult
+import com.tschuchort.compiletesting.KotlinCompilation
+import com.tschuchort.compiletesting.SourceFile
+import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
+import java.io.OutputStream
+import kotlin.test.assertEquals
+
+/**
+ * Compiles [source] as a standalone Kotlin file, with the DSL itself on the classpath and
+ * compiler chatter discarded. The one kctfork invocation shared by [compile] and [compileDsl] —
+ * they differed only in how the source text was assembled, not in how it was compiled.
+ */
+@OptIn(ExperimentalCompilerApi::class)
+private fun compileKotlin(fileName: String, source: String): JvmCompilationResult = KotlinCompilation().apply {
+    sources = listOf(SourceFile.kotlin(fileName, source))
+    inheritClassPath = true
+    messageOutputStream = OutputStream.nullOutputStream()
+}.compile()
+
+/** Compiles already-rendered Kotlin source (e.g. a KotlinPoet `FileSpec`'s output) as-is. */
+@OptIn(ExperimentalCompilerApi::class)
+internal fun compile(source: String): JvmCompilationResult = compileKotlin("Generated.kt", source)
+
+/** Compiles [source] and asserts it succeeds, printing the compiler's messages if it does not. */
+@OptIn(ExperimentalCompilerApi::class)
+internal fun assertCompiles(source: String) {
+    val result = compile(source)
+    assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+}
+
+/** Compiles a snippet written against the DSL, importing the DSL's package plus [extraImports]. */
+@OptIn(ExperimentalCompilerApi::class)
+internal fun compileDsl(body: String, extraImports: List<String> = emptyList()): JvmCompilationResult {
+    val imports = (listOf("site.asm0dey.poetdsl.*") + extraImports).joinToString("\n") { "import $it" }
+    return compileKotlin("Snippet.kt", "$imports\n\n$body\n")
+}
 
 /** Renders a detached block, for golden assertions on statement output. */
 internal fun renderBlock(body: BlockScope.() -> Unit): String = stmts(body).code.toString()

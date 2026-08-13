@@ -6,12 +6,9 @@ import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.CONST
 import com.squareup.kotlinpoet.KModifier.PRIVATE
 import com.squareup.kotlinpoet.STRING
-import com.tschuchort.compiletesting.KotlinCompilation
-import com.tschuchort.compiletesting.SourceFile
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import site.asm0dey.poetdsl.ParamKind.VAL
 import site.asm0dey.poetdsl.ParamKind.VAR
-import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -517,13 +514,3 @@ private fun renderDelegateFile(): String = file("com.example", "User") {
     }
     +FunSpec.builder("calculate").returns(INT).addStatement("return 1").build()
 }.toString()
-
-@OptIn(ExperimentalCompilerApi::class)
-private fun assertCompiles(source: String) {
-    val result = KotlinCompilation().apply {
-        sources = listOf(SourceFile.kotlin("Generated.kt", source))
-        inheritClassPath = true
-        messageOutputStream = OutputStream.nullOutputStream()
-    }.compile()
-    assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
-}

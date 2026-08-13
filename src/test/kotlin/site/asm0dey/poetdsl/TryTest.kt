@@ -4,10 +4,7 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.TypeName
-import com.tschuchort.compiletesting.KotlinCompilation
-import com.tschuchort.compiletesting.SourceFile
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
-import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -304,14 +301,4 @@ private fun assertCompilesAsFun(name: String, returns: TypeName, body: BlockScop
         )
         .build()
     assertCompiles(file.toString())
-}
-
-@OptIn(ExperimentalCompilerApi::class)
-private fun assertCompiles(source: String) {
-    val result = KotlinCompilation().apply {
-        sources = listOf(SourceFile.kotlin("Generated.kt", source))
-        inheritClassPath = true
-        messageOutputStream = OutputStream.nullOutputStream()
-    }.compile()
-    assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 }

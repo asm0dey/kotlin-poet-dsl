@@ -109,6 +109,60 @@ Two amendments to the table above, both from Task 20's deviations:
   be applicable, and resolution would fall through — the exact silent-fallthrough failure this
   ADR was written about.
 
+### Known limitation: the same leak produces a false positive inside a detached `TypeScope`
+
+The shadows exist because an outer scope's implicit receiver stays visible inside inner lambdas
+(the "only the inward direction leaks" paragraph above). That leak is also what makes them fire
+somewhere they should not: a `typeSpec { }` — the glossary's first-class detached scope, also
+covered by ADR 0008 — keeps `BlockScope` as a visible receiver when it is opened lexically inside
+a `fun` body, even though its own body is a `TypeScope` where `object`/`interface`/
+`constructorParam` are legal. `BlockScope`'s shadow extensions outrank the `TypeScope` context
+function regardless, so the call is rejected at compile time for a reason that does not apply to
+it:
+
+```kotlin
+`fun`("f") {
+    val t = typeSpec(name = "Inner") {
+        `object`("Nested") { }              // error: 'fun BlockScope.object(…)' is deprecated
+        constructorParam(VAL, "x", STRING)  // error: 'fun BlockScope.constructorParam(…)' is deprecated
+    }
+}
+```
+
+Both lines are valid Kotlin inside the `TypeScope` `typeSpec` opens; `TypeScopeTest`'s
+`typeSpec(name = "Local") { constructorParam(VAL, "name", STRING) }` passes today only because
+that particular call is not nested inside a block. `ShadowsTest`'s
+`` `KNOWN LIMITATION - a detached typeSpec nested inside a block still trips the block's shadows` ``
+pins the false positive so it cannot regress into a silent behaviour change.
+
+This is **inherent to shadowing on `BlockScope`**, not a defect in this ADR's chosen mechanism:
+the member-fallback alternative this ADR considered and rejected would have the identical
+receiver visibility, because the leak is about which receivers are in scope at the call site, not
+about whether the guard is declared as a member or an extension. There is therefore no scope-aware
+fix to make here — attempting one would mean resolving the shadow differently depending on what
+the *innermost* receiver's construct validity happens to be, which is exactly the kind of
+context-sensitive dispatch ADR 0001 keeps out of name resolution.
+
+**Workaround:** build the detached spec at a point in the lexical scope with no enclosing
+`BlockScope` — file level, type level, or a top-level helper function — instead of opening
+`typeSpec { }` lexically inside a `fun`/`` `class` ``/etc. body. The failure is in *constructing*
+the spec's content, not in what is later done with the finished value, so hoisting the `typeSpec`
+call out of the block is what avoids it:
+
+```kotlin
+val inner = typeSpec(name = "Inner") {
+    `object`("Nested") { }              // fine: no BlockScope in this lexical chain
+    constructorParam(VAL, "x", STRING)  // fine, same reason
+}
+
+file("com.example", "A") {
+    +inner                 // TypeSpec can be spliced at file or type level …
+    `fun`("f") { }          // … but not inside a block body: `+inner` here would fail with
+                            // "TypeSpec: a type spec cannot be emitted into a block body",
+                            // a separate, pre-existing restriction unrelated to this leak.
+}
+```
+
 ## Consequences
 
 - Whatever is chosen, the invalid set is small and fixed: `object`/`interface` in a block,

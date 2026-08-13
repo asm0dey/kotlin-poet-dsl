@@ -1,10 +1,7 @@
 package site.asm0dey.poetdsl
 
-import com.tschuchort.compiletesting.JvmCompilationResult
 import com.tschuchort.compiletesting.KotlinCompilation
-import com.tschuchort.compiletesting.SourceFile
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
-import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -158,15 +155,45 @@ class ShadowsTest {
         )
         assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
     }
-}
 
-/** Compiles a snippet written against the DSL, with the DSL itself on the classpath. */
-@OptIn(ExperimentalCompilerApi::class)
-private fun compileDsl(body: String, extraImports: List<String> = emptyList()): JvmCompilationResult {
-    val imports = (listOf("site.asm0dey.poetdsl.*") + extraImports).joinToString("\n") { "import $it" }
-    return KotlinCompilation().apply {
-        sources = listOf(SourceFile.kotlin("Snippet.kt", "$imports\n\n$body\n"))
-        inheritClassPath = true
-        messageOutputStream = OutputStream.nullOutputStream()
-    }.compile()
+    /**
+     * KNOWN LIMITATION, not a desired property: a `typeSpec { }` opened lexically inside a `fun`
+     * body still sees the enclosing `BlockScope` as a visible implicit receiver, and its shadow
+     * extensions outrank the context function even though the innermost receiver is the detached
+     * `TypeScope` where `object`/`constructorParam` are legal. `TypeScopeTest`'s
+     * `` `local class rendering is still blocked by KotlinPoet` `` -style detached `typeSpec` use
+     * only passes because it is *not* nested inside a block.
+     *
+     * This is inherent to shadowing extensions on `BlockScope` — ADR 0002's member-fallback
+     * alternative would have the identical receiver behaviour, since the leak is about what
+     * receivers are in scope, not about how the shadow is declared — so the fix is documentation
+     * and this pin, not a redesign. See ADR 0002's Verified section for the workaround: build the
+     * detached spec outside the block and splice it in with `+spec`.
+     */
+    @Test
+    fun `KNOWN LIMITATION - a detached typeSpec nested inside a block still trips the block's shadows`() {
+        val result = compileDsl(
+            """
+            fun build() = file("com.example", "A") {
+                `fun`("f") {
+                    val t = typeSpec(name = "Inner") {
+                        `object`("Nested") { }
+                        constructorParam(VAL, "x", STRING)
+                    }
+                }
+            }
+            """.trimIndent(),
+            extraImports = listOf("com.squareup.kotlinpoet.STRING", "site.asm0dey.poetdsl.ParamKind.VAL"),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+        assertTrue(
+            "'fun BlockScope.object(name: String, body: TypeScope.() -> Unit): Nothing' is deprecated" in
+                result.messages,
+            result.messages,
+        )
+        assertTrue(
+            "constructorParam is only valid inside a class or object body" in result.messages,
+            result.messages,
+        )
+    }
 }

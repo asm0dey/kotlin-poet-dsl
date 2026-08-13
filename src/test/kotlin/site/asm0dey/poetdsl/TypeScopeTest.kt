@@ -7,13 +7,10 @@ import com.squareup.kotlinpoet.KModifier.DATA
 import com.squareup.kotlinpoet.KModifier.INTERNAL
 import com.squareup.kotlinpoet.KModifier.SEALED
 import com.squareup.kotlinpoet.STRING
-import com.tschuchort.compiletesting.JvmCompilationResult
 import com.tschuchort.compiletesting.KotlinCompilation
-import com.tschuchort.compiletesting.SourceFile
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import site.asm0dey.poetdsl.ParamKind.VAL
 import site.asm0dey.poetdsl.ParamKind.VAR
-import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -553,17 +550,4 @@ class TypeScopeTest {
             spec.toString(),
         )
     }
-}
-
-@OptIn(ExperimentalCompilerApi::class)
-private fun compile(source: String): JvmCompilationResult = KotlinCompilation().apply {
-    sources = listOf(SourceFile.kotlin("Generated.kt", source))
-    inheritClassPath = true
-    messageOutputStream = OutputStream.nullOutputStream()
-}.compile()
-
-@OptIn(ExperimentalCompilerApi::class)
-private fun assertCompiles(source: String) {
-    val result = compile(source)
-    assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 }

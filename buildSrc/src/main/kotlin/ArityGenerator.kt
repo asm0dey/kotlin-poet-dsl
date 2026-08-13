@@ -62,6 +62,21 @@ private val VARIANTS: List<Variant> = listOf(
 /** [constructorParam] takes no modifiers, so only the annotated/not axis of the table applies. */
 private val ANNOTATION_VARIANTS: List<Variant> = listOf(Variant(false, null), Variant(true, null))
 
+/**
+ * One name a construct is callable under. The first spelling in a construct's list is canonical
+ * and carries no [aliasNote]; every other spelling is an alias, and its sentence is rendered into
+ * the alias's KDoc — restoring the "Alias of X" documentation the hand-written declarations had,
+ * from the same table that generates the declaration, so it cannot drift from the alias list.
+ */
+private data class Spelling(val value: String, val aliasNote: String? = null)
+
+/** The default alias sentence. Override per [Spelling] when more is needed (e.g. `property`). */
+private fun aliasOf(canonical: String): String = "Alias of [$canonical]."
+
+/** Prefixes [body] with [nm]'s alias sentence, if it has one. */
+private fun docFor(nm: Spelling, body: String): String =
+    if (nm.aliasNote != null) "${nm.aliasNote} $body" else body
+
 // --- one overload, and the two ways it is rendered -----------------------------------------------
 
 /**
@@ -117,7 +132,7 @@ private fun Overload.renderShadow(): String = buildString {
 
 /** A type declaration: `class`, `object`, `interface`, and their aliases. */
 private data class TypeConstruct(
-    val names: List<String>,
+    val names: List<Spelling>,
     val kindName: String,
     val builder: String,
     val localAllowed: Boolean,
@@ -126,7 +141,7 @@ private data class TypeConstruct(
 
 private val TYPES: List<TypeConstruct> = listOf(
     TypeConstruct(
-        names = listOf("`class`", "klass"),
+        names = listOf(Spelling("`class`"), Spelling("klass", aliasOf("`class`"))),
         kindName = "class",
         builder = "TypeSpec.classBuilder(name)",
         localAllowed = true,
@@ -138,7 +153,7 @@ private val TYPES: List<TypeConstruct> = listOf(
         shadow = null,
     ),
     TypeConstruct(
-        names = listOf("`object`"),
+        names = listOf(Spelling("`object`")),
         kindName = "named object",
         builder = "TypeSpec.objectBuilder(name)",
         localAllowed = false,
@@ -146,7 +161,7 @@ private val TYPES: List<TypeConstruct> = listOf(
             "or use an anonymous object.",
     ),
     TypeConstruct(
-        names = listOf("`interface`"),
+        names = listOf(Spelling("`interface`")),
         kindName = "interface",
         builder = "TypeSpec.interfaceBuilder(name)",
         localAllowed = false,
@@ -154,12 +169,12 @@ private val TYPES: List<TypeConstruct> = listOf(
     ),
 )
 
-private fun TypeConstruct.overloads(): List<Overload> = names.flatMap { n ->
+private fun TypeConstruct.overloads(): List<Overload> = names.flatMap { nm ->
     VARIANTS.map { v ->
         Overload(
-            doc = "`$kindName Name { … }`${v.doc}.",
+            doc = docFor(nm, "`$kindName Name { … }`${v.doc}."),
             context = "context(s: Scope)",
-            name = n,
+            name = nm.value,
             params = v.params() + listOf("name: String", "body: TypeScope.() -> Unit"),
             returns = null,
             body = """
@@ -179,19 +194,33 @@ private fun TypeConstruct.overloads(): List<Overload> = names.flatMap { n ->
 }
 
 /** A binding: `val`, `var` and their aliases. Local, member or top-level — [bind] dispatches. */
-private data class BindConstruct(val names: List<String>, val mutable: Boolean, val keyword: String)
+private data class BindConstruct(val names: List<Spelling>, val mutable: Boolean, val keyword: String)
 
 private val BINDINGS: List<BindConstruct> = listOf(
-    BindConstruct(listOf("`val`", "property"), mutable = false, keyword = "val"),
-    BindConstruct(listOf("`var`"), mutable = true, keyword = "var"),
+    BindConstruct(
+        names = listOf(
+            Spelling("`val`"),
+            // Not the default "Alias of [`val`]." sentence: `prop` (property *access*) already
+            // exists in this DSL, and a user reaching for `property` needs the disambiguation,
+            // not just the alias fact. This is the one KDoc the generator must not drop.
+            Spelling(
+                "property",
+                "Alias of the declaration-level [`val`]. `prop` is property *access* — a " +
+                    "different thing.",
+            ),
+        ),
+        mutable = false,
+        keyword = "val",
+    ),
+    BindConstruct(listOf(Spelling("`var`")), mutable = true, keyword = "var"),
 )
 
-private fun BindConstruct.overloads(): List<Overload> = names.flatMap { n ->
+private fun BindConstruct.overloads(): List<Overload> = names.flatMap { nm ->
     VARIANTS.map { v ->
         Overload(
-            doc = "`$keyword name: T = init`${v.doc}: a local in a block, a property otherwise.",
+            doc = docFor(nm, "`$keyword name: T = init`${v.doc}: a local in a block, a property otherwise."),
             context = "context(s: Scope)",
-            name = n,
+            name = nm.value,
             params = v.params() + listOf(
                 "name: String",
                 "type: TypeName? = null",
@@ -232,13 +261,15 @@ private fun arityDoc(arity: Int): String = when (arity) {
     else -> "$arity parameters; the body receives their handles"
 }
 
-private fun funOverloads(): List<Overload> = listOf("`fun`", "func").flatMap { n ->
+private val FUN_NAMES: List<Spelling> = listOf(Spelling("`fun`"), Spelling("func", aliasOf("`fun`")))
+
+private fun funOverloads(): List<Overload> = FUN_NAMES.flatMap { nm ->
     (0..MAX_ARITY).flatMap { arity ->
         VARIANTS.map { v ->
             Overload(
-                doc = "`fun name(…) { … }`${v.doc}, with ${arityDoc(arity)}.",
+                doc = docFor(nm, "`fun name(…) { … }`${v.doc}, with ${arityDoc(arity)}."),
                 context = "context(s: Scope)",
-                name = n,
+                name = nm.value,
                 params = v.params() + listOf("name: String") + arityParams(arity) +
                     listOf("returns: TypeName? = null", "body: ${bodyType(arity)}"),
                 returns = null,
@@ -261,13 +292,19 @@ private fun funOverloads(): List<Overload> = listOf("`fun`", "func").flatMap { n
     }
 }
 
-private fun ctorOverloads(): List<Overload> = listOf("`constructor`", "ctor").flatMap { n ->
+private val CTOR_NAMES: List<Spelling> =
+    listOf(Spelling("`constructor`"), Spelling("ctor", aliasOf("`constructor`")))
+
+private fun ctorOverloads(): List<Overload> = CTOR_NAMES.flatMap { nm ->
     (0..MAX_ARITY).flatMap { arity ->
         VARIANTS.map { v ->
             Overload(
-                doc = "`constructor(…) { … }`${v.doc}, with ${arityDoc(arity)}. No return type is inferred.",
+                doc = docFor(
+                    nm,
+                    "`constructor(…) { … }`${v.doc}, with ${arityDoc(arity)}. No return type is inferred.",
+                ),
                 context = "context(t: TypeScope)",
-                name = n,
+                name = nm.value,
                 params = v.params() + arityParams(arity) + listOf("body: ${bodyType(arity)}"),
                 returns = null,
                 // The primary/secondary guard lives on every overload, not in `buildFun`: it is
@@ -300,18 +337,24 @@ private fun ctorOverloads(): List<Overload> = listOf("`constructor`", "ctor").fl
  * `kind` keeps its default only in the un-annotated variant: with `annotations` following it,
  * a defaulted `kind` could never be skipped positionally anyway.
  */
-private fun ctorParamOverloads(): List<Overload> = listOf("constructorParam", "ctorParam").flatMap { n ->
+private val CTOR_PARAM_NAMES: List<Spelling> =
+    listOf(Spelling("constructorParam"), Spelling("ctorParam", aliasOf("constructorParam")))
+
+private fun ctorParamOverloads(): List<Overload> = CTOR_PARAM_NAMES.flatMap { nm ->
     ANNOTATION_VARIANTS.map { v ->
         Overload(
-            doc = "A primary-constructor parameter${v.doc}; " +
-                "`ParamKind.VAL`/`VAR` also declares the matching property.",
+            doc = docFor(
+                nm,
+                "A primary-constructor parameter${v.doc}; " +
+                    "`ParamKind.VAL`/`VAR` also declares the matching property.",
+            ),
             context = "context(t: TypeScope)",
-            name = n,
+            name = nm.value,
             params = listOf(if (v.annotated) "kind: ParamKind?" else "kind: ParamKind? = null") +
                 v.params() + listOf("name: String", "type: TypeName"),
             returns = "Expr",
             body = "t.addConstructorParam(kind, ${v.annotationsArg}, name, type)",
-            shadow = "$n is only valid inside a class or object body.",
+            shadow = "${nm.value} is only valid inside a class or object body.",
         )
     }
 }
