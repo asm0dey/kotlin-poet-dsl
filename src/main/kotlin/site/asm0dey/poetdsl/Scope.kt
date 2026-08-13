@@ -1,5 +1,6 @@
 package site.asm0dey.poetdsl
 
+import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
@@ -29,7 +30,14 @@ public class FileScope internal constructor(
     internal val builder: FileSpec.Builder,
     names: NameScope,
     id: ScopeId,
-) : Scope(names, id)
+) : Scope(names, id), Annotatable {
+    /** Annotations added at file level default to the `@file:` use-site target. */
+    override fun addAnnotation(spec: AnnotationSpec) {
+        builder.addAnnotation(
+            if (spec.useSiteTarget == null) spec.toBuilder().useSiteTarget(UseSiteTarget.FILE).build() else spec,
+        )
+    }
+}
 
 /** The type-level scope: members are declared here. */
 @TypeDsl
@@ -37,13 +45,17 @@ public class TypeScope internal constructor(
     internal val builder: TypeSpec.Builder,
     names: NameScope,
     id: ScopeId,
-) : Scope(names, id) {
+) : Scope(names, id), Annotatable {
     internal val ctor: FunSpec.Builder by lazy(LazyThreadSafetyMode.NONE) { FunSpec.constructorBuilder() }
     internal var hasCtor: Boolean = false
 
     internal fun finish(): TypeSpec {
         if (hasCtor) builder.primaryConstructor(ctor.build())
         return builder.build()
+    }
+
+    override fun addAnnotation(spec: AnnotationSpec) {
+        builder.addAnnotation(spec)
     }
 }
 
