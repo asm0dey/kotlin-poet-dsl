@@ -48,10 +48,20 @@ internal fun BlockScope.checkOwned(stmt: Stmt) {
     stmt.usedScopes.forEach { checkOwned(it) }
 }
 
-/** Closes any pending control flow, then adds [code] as one statement. */
+/**
+ * Closes any pending control flow, then adds [code] as one line.
+ *
+ * `add`, not `addStatement`: KotlinPoet's statement markers (`«…»`) cannot nest, and a lambda
+ * body is a *value* — it can end up inside another statement, a property initializer or a
+ * property delegate, each of which KotlinPoet emits as a statement of its own. A body built with
+ * `addStatement` throws "Can't open a new statement until the current statement is closed" in all
+ * three positions (measured on KotlinPoet 2.3.0, `CodeWriter.emitCode`), which is why nothing this
+ * DSL emits carries markers. Nothing is lost: every space the DSL emits is KotlinPoet's
+ * non-breaking `·`, so `addStatement`'s line wrapping had no break point to use in the first place.
+ */
 internal fun BlockScope.emitCode(code: CodeBlock) {
     flushPending()
-    builder.addStatement("%L", code)
+    builder.add("%L\n", code)
 }
 
 /**
