@@ -120,8 +120,8 @@ private fun Expr.callLambda(name: String, args: Array<out Expr>, lam: Expr): Exp
     usedScopes = usedScopes + scopesOf(args) + lam.usedScopes,
 )
 
-/** `member(args) { … }`, with `%M` so the import resolves. */
-private fun memberLambda(member: MemberName, args: Array<out Expr>, lam: Expr): Expr = Expr(
+/** `member(args) { … }`, with `%M` so the import resolves. Shared with the reference form (`Refs.kt`). */
+internal fun memberLambda(member: MemberName, args: Array<out Expr>, lam: Expr): Expr = Expr(
     code = if (args.isEmpty()) {
         CodeBlock.of("%M·%L", member, lam.code)
     } else {
