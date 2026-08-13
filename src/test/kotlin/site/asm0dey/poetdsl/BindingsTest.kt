@@ -321,6 +321,40 @@ class BindingsTest {
         assertEquals("y = 1\n", renderBlock { varHandle assign 1.lit })
     }
 
+    /**
+     * Gap 1 (D22 follow-up): `compound` shares `assign`'s `check(mutable != false)`, but only
+     * `assign` had a test pinning that a `null` (unknown) handle is accepted rather than
+     * rejected. Without this, `check(target.mutable != false)` could be weakened to
+     * `check(target.mutable == true)` and all tests would still pass.
+     */
+    @Test
+    fun `compound assignment accepts an unknown (null) handle - a call result and an escape hatch expression`() {
+        assertNull(call("f").mutable)
+        assertNull(expression("t").mutable)
+        assertEquals("f() += 1\n", renderBlock { call("f") += 1.lit })
+        assertEquals("t -= 1\n", renderBlock { expression("t") -= 1.lit })
+    }
+
+    /**
+     * Gap 2 (D22 follow-up): a bare constructor parameter (`kind = null`) has no property, but
+     * Kotlin still forbids reassigning it - it is `mutable = false`, not `null`. Nothing
+     * previously asserted this: `kind?.let { it == ParamKind.VAR }` (`null` for a bare
+     * parameter) also passes every other test.
+     */
+    @Test
+    fun `a bare constructorParam is immutable, and assign rejects it naming the binding`() {
+        lateinit var bare: Expr
+        typeSpec(name = "Widget") {
+            bare = constructorParam(null, "x", INT)
+        }
+        assertEquals(false, bare.mutable)
+
+        val failure = assertFailsWith<IllegalStateException> {
+            renderBlock { bare assign 1.lit }
+        }
+        assertEquals("assign: 'x' is a val and cannot be reassigned.", failure.message)
+    }
+
     // --- ownership (ADR 0008) -----------------------------------------------------------------
 
     @Test
