@@ -75,6 +75,40 @@ with no shadow needed.
 | `TypeScope` | none — every file-level construct is also valid on a type |
 | `FileScope` | none — it is the outermost scope |
 
+## Verified (Task 20)
+
+The shadows are generated as **extensions on `BlockScope`**, not members, and the extension
+does outrank the context function — measured by compiling the test sources with the shadows
+in place, on Kotlin 2.4.10:
+
+```
+e: TypeScopeTest.kt:251:27 'fun BlockScope.object(name: String, body: TypeScope.() -> Unit): Nothing'
+   is deprecated. A named object cannot be local in Kotlin. Declare it at file or type level,
+   or use an anonymous object.
+e: TypeScopeTest.kt:263:27 'fun BlockScope.interface(modifiers: Modifiers, name: String, body: TypeScope.() -> Unit): Nothing'
+   is deprecated. An interface cannot be local in Kotlin. Declare it at file or type level.
+```
+
+`ShadowsTest` pins this with `kctfork`, each negative case paired with a positive control one
+scope out, so the failure is attributable to the shadow rather than to the snippet.
+
+Widening the receiver's static type to `Scope` takes the extension out of the candidate set and
+reaches the `IllegalStateException` branch again — which is why that branch stays, and how the
+two `TypeScopeTest` "rejected, naming the construct" tests still exercise it.
+
+Two amendments to the table above, both from Task 20's deviations:
+
+- **`class` and `klass` get no shadow.** A local class *is* valid Kotlin; only KotlinPoet
+  2.3.0's renderer blocks it, and `fun` is blocked for the identical reason and is not shadowed
+  either. An `@Deprecated(ERROR)` overload would freeze a temporary backend defect into the
+  locked public API and would have to be *removed* — a breaking change — the day the backend is
+  fixed. `declareType`'s runtime `check` and the `local class rendering is still blocked by
+  KotlinPoet` canary stay as the guard and the alarm.
+- **`constructorParam`'s `kind` is `ParamKind?`, not `KModifier?`** (D19). `KModifier` has no
+  `VAL`/`VAR`; a shadow with the plan's signature would not match the real overload, would not
+  be applicable, and resolution would fall through — the exact silent-fallthrough failure this
+  ADR was written about.
+
 ## Consequences
 
 - Whatever is chosen, the invalid set is small and fixed: `object`/`interface` in a block,

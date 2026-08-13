@@ -7,6 +7,13 @@ import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeName
 import com.squareup.kotlinpoet.TypeSpec
 
+// The public entry points of every construct in this file — `class`/`klass`, `object`,
+// `interface`, `constructorParam`/`ctorParam`, `fun`/`func` and `constructor`/`ctor` — are
+// generated into `FunArity.kt`, `CtorArity.kt` and `DeclarationVariants.kt` by
+// `buildSrc/src/main/kotlin/ArityGenerator.kt`, in ADR 0004's six variants and (for the two
+// parameter-taking ones) nine arities. What stays here is the machinery they all call, plus the
+// list form of `fun`, which is the one shape no arity overload can cover.
+
 /**
  * Adds a type declaration to whichever scope is innermost: a top-level type in a file, a
  * nested type in a type. Kotlin allows local classes but not local named objects, interfaces,
@@ -93,73 +100,6 @@ private fun localClassIsUnrenderable(): Nothing = error(
 )
 
 /**
- * `class Name { … }` — top-level in a file, nested in a type, depending on the innermost scope.
- * The local-class case is declared here too, but cannot be rendered yet — see [declareType].
- */
-context(s: Scope)
-public fun `class`(name: String, body: TypeScope.() -> Unit) {
-    s.declareType(TypeSpec.classBuilder(name), "class", name, localAllowed = true, null, null, body)
-}
-
-/** `class Name { … }` with modifiers, e.g. `` `class`(DATA.toModifiers(), "User") { … } ``. */
-context(s: Scope)
-public fun `class`(modifiers: Modifiers, name: String, body: TypeScope.() -> Unit) {
-    s.declareType(TypeSpec.classBuilder(name), "class", name, localAllowed = true, null, modifiers, body)
-}
-
-/** Alias of [`class`]. */
-context(s: Scope)
-public fun klass(name: String, body: TypeScope.() -> Unit) {
-    `class`(name, body)
-}
-
-/** Alias of [`class`]. */
-context(s: Scope)
-public fun klass(modifiers: Modifiers, name: String, body: TypeScope.() -> Unit) {
-    `class`(modifiers, name, body)
-}
-
-/** `object Name { … }`. Not valid inside a function body — Kotlin has no local named objects. */
-context(s: Scope)
-public fun `object`(name: String, body: TypeScope.() -> Unit) {
-    s.declareType(TypeSpec.objectBuilder(name), "named object", name, localAllowed = false, null, null, body)
-}
-
-/** `object Name { … }` with modifiers. Not valid inside a function body. */
-context(s: Scope)
-public fun `object`(modifiers: Modifiers, name: String, body: TypeScope.() -> Unit) {
-    s.declareType(
-        TypeSpec.objectBuilder(name),
-        "named object",
-        name,
-        localAllowed = false,
-        null,
-        modifiers,
-        body,
-    )
-}
-
-/** `interface Name { … }`. Not valid inside a function body. */
-context(s: Scope)
-public fun `interface`(name: String, body: TypeScope.() -> Unit) {
-    s.declareType(TypeSpec.interfaceBuilder(name), "interface", name, localAllowed = false, null, null, body)
-}
-
-/** `interface Name { … }` with modifiers. Not valid inside a function body. */
-context(s: Scope)
-public fun `interface`(modifiers: Modifiers, name: String, body: TypeScope.() -> Unit) {
-    s.declareType(
-        TypeSpec.interfaceBuilder(name),
-        "interface",
-        name,
-        localAllowed = false,
-        null,
-        modifiers,
-        body,
-    )
-}
-
-/**
  * Whether a constructor parameter also declares a property, and if so whether it is mutable.
  * `null` in [constructorParam]'s `kind` slot means a plain parameter with no property.
  *
@@ -178,37 +118,6 @@ public enum class ParamKind {
     /** A mutable property: `var name: T`. */
     VAR,
 }
-
-/**
- * Adds a parameter to the primary constructor. [ParamKind.VAL]/[ParamKind.VAR] also add the
- * matching property; null makes it a plain parameter. Returns a handle visible to every
- * sibling member — no nesting, no arity ceiling.
- *
- * One of the two exceptions to the emission rule (`Unit` returns emit, `Expr` returns do
- * not): this both emits and hands back a handle. `` `val` ``/`` `var` `` is the other.
- */
-context(t: TypeScope)
-public fun constructorParam(kind: ParamKind? = null, name: String, type: TypeName): Expr =
-    t.addConstructorParam(kind, null, name, type)
-
-/** [constructorParam] with annotations on the parameter. */
-context(t: TypeScope)
-public fun constructorParam(
-    kind: ParamKind?,
-    annotations: Annotations,
-    name: String,
-    type: TypeName,
-): Expr = t.addConstructorParam(kind, annotations, name, type)
-
-/** Alias of [constructorParam]. */
-context(t: TypeScope)
-public fun ctorParam(kind: ParamKind? = null, name: String, type: TypeName): Expr =
-    constructorParam(kind, name, type)
-
-/** Alias of [constructorParam]. */
-context(t: TypeScope)
-public fun ctorParam(kind: ParamKind?, annotations: Annotations, name: String, type: TypeName): Expr =
-    constructorParam(kind, annotations, name, type)
 
 internal fun TypeScope.addConstructorParam(
     kind: ParamKind?,
@@ -441,38 +350,6 @@ private fun localFunIsUnrenderable(): Nothing = error(
         "function. Declare it at file or type level.",
 )
 
-/**
- * `fun name() { … }` — top-level, member or local, depending on the innermost scope. The
- * local case is dispatched here too, but cannot be rendered yet — see [declareFun].
- */
-context(s: Scope)
-public fun `fun`(name: String, returns: TypeName? = null, body: BlockScope.() -> Unit) {
-    s.declareFun(buildFun(name, false, null, null, emptyList(), returns, s) { body() })
-}
-
-/** `fun name(p1: T) { … }`; the body receives the parameter's handle. */
-context(s: Scope)
-public fun `fun`(
-    name: String,
-    p1: ParameterSpec,
-    returns: TypeName? = null,
-    body: BlockScope.(Expr) -> Unit,
-) {
-    s.declareFun(buildFun(name, false, null, null, listOf(p1), returns, s) { (a) -> body(a) })
-}
-
-/** [`fun`] with modifiers, e.g. `` `fun`(PRIVATE.toModifiers(), "greet", param("who", STRING)) ``. */
-context(s: Scope)
-public fun `fun`(
-    modifiers: Modifiers,
-    name: String,
-    p1: ParameterSpec,
-    returns: TypeName? = null,
-    body: BlockScope.(Expr) -> Unit,
-) {
-    s.declareFun(buildFun(name, false, null, modifiers, listOf(p1), returns, s) { (a) -> body(a) })
-}
-
 /** The list form: for more than eight parameters, or a list computed at generation time. */
 context(s: Scope)
 public fun `fun`(
@@ -484,12 +361,6 @@ public fun `fun`(
     s.declareFun(buildFun(name, false, null, null, params, returns, s, body))
 }
 
-/** Alias of [`fun`]. */
-context(s: Scope)
-public fun func(name: String, returns: TypeName? = null, body: BlockScope.() -> Unit) {
-    `fun`(name, returns, body)
-}
-
 /**
  * The message both halves of the primary/secondary guard raise.
  *
@@ -499,32 +370,10 @@ public fun func(name: String, returns: TypeName? = null, body: BlockScope.() -> 
  * rejected outright rather than rendered as `public constructor(other: String) { … }` under a
  * primary constructor, which is `e: Primary constructor call expected.` (Global Constraint 26).
  */
-private const val PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE: String =
+internal const val PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE: String =
     "constructor: a class cannot have both a primary constructor (from constructorParam) and a " +
         "secondary `constructor`, because the DSL cannot express the required `: this(…)` " +
         "delegation call. Fold the parameters into one constructor."
-
-/** A constructor written as a member; it has no return type and none is inferred. */
-context(t: TypeScope)
-public fun `constructor`(body: BlockScope.() -> Unit) {
-    check(!t.hasCtor) { PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE }
-    t.hasSecondaryCtor = true
-    t.builder.addFunction(buildFun("<init>", true, null, null, emptyList(), null, t) { body() })
-}
-
-/** [`constructor`] with one parameter; the body receives its handle. */
-context(t: TypeScope)
-public fun `constructor`(p1: ParameterSpec, body: BlockScope.(Expr) -> Unit) {
-    check(!t.hasCtor) { PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE }
-    t.hasSecondaryCtor = true
-    t.builder.addFunction(buildFun("<init>", true, null, null, listOf(p1), null, t) { (a) -> body(a) })
-}
-
-/** Alias of [`constructor`]. */
-context(t: TypeScope)
-public fun ctor(body: BlockScope.() -> Unit) {
-    `constructor`(body)
-}
 
 /** Detached function builder; returns a KotlinPoet spec, so interop is free. */
 public fun funSpec(

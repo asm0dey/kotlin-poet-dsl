@@ -25,3 +25,12 @@ kotlin {
 tasks.test {
     useJUnitPlatform()
 }
+
+// ADR 0004's variant table and ADR 0002's shadow members, generated so they cannot drift apart.
+val generateArities = tasks.register<ArityGeneratorTask>("generateArities") {
+    outputDir.set(layout.buildDirectory.dir("generated/source/dsl"))
+}
+
+kotlin.sourceSets.main {
+    kotlin.srcDir(generateArities)
+}

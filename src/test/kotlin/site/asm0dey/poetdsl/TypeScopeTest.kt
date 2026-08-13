@@ -244,9 +244,19 @@ class TypeScopeTest {
         )
     }
 
+    /**
+     * The *runtime* backstop behind Task 20's shadow member.
+     *
+     * The receiver is deliberately typed `Scope`, not `BlockScope`: written the obvious way this
+     * call no longer compiles, because `Shadows.kt` puts an `@Deprecated(ERROR)` extension on
+     * `BlockScope` in front of it — `ShadowsTest` asserts exactly that. Widening the static type
+     * takes the extension out of the candidate set and reaches the `declareType` branch instead,
+     * which is the path a caller holding a `Scope`-typed value still has, and the reason the
+     * `check` stays even though no direct caller is expected to hit it.
+     */
     @Test
     fun `a local object is rejected, naming the construct`() {
-        val block = BlockScope(CodeBlock.builder(), NameScope(null), ScopeId(null, "fun f"), mutableListOf())
+        val block: Scope = BlockScope(CodeBlock.builder(), NameScope(null), ScopeId(null, "fun f"), mutableListOf())
         val thrown = assertFailsWith<IllegalStateException> {
             with(block) { `object`("Nope") { } }
         }
@@ -256,9 +266,10 @@ class TypeScopeTest {
         )
     }
 
+    /** The runtime backstop for `interface`; see the note on the `object` test above. */
     @Test
     fun `a local interface is rejected, naming the construct`() {
-        val block = BlockScope(CodeBlock.builder(), NameScope(null), ScopeId(null, "fun f"), mutableListOf())
+        val block: Scope = BlockScope(CodeBlock.builder(), NameScope(null), ScopeId(null, "fun f"), mutableListOf())
         val thrown = assertFailsWith<IllegalStateException> {
             with(block) { `interface`(SEALED.toModifiers(), "Nope") { } }
         }

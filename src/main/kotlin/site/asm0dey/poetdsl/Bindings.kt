@@ -4,6 +4,12 @@ import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeName
 
+// `val`, `var` and the `property` alias are generated into `DeclarationVariants.kt` by
+// `buildSrc/src/main/kotlin/ArityGenerator.kt`, in ADR 0004's six variants — which is what makes
+// an annotated property expressible at all: every hand-written entry point passed `null` into
+// [bind]'s `annotations` slot. The compound assignments below are hand-written, because they have
+// no variants: a local carries neither annotations nor modifiers.
+
 /**
  * The handle a binding hands back: the (possibly uniquified) name it was actually declared
  * under, tagged with the scope that declared it so ADR 0008 can judge it at every later use.
@@ -94,7 +100,7 @@ private fun Scope.propertyOf(
  * The `when` is exhaustive over the sealed [Scope] hierarchy with no `else`, so a fourth scope
  * breaks the build here rather than falling through silently (D17).
  */
-private fun Scope.bind(
+internal fun Scope.bind(
     mutable: Boolean,
     annotations: Annotations?,
     modifiers: Modifiers?,
@@ -127,52 +133,6 @@ private fun Scope.bind(
         }
     }
 }
-
-/**
- * A read-only binding: a local `val` in a block, a property at file or type level.
- *
- * Emits **and** returns a handle — one of exactly two exceptions to "Unit emits, `Expr` does
- * not" (the other is [constructorParam]). The handle carries the name the binding was actually
- * declared under, which is not always [name]: a colliding name is uniquified (ADR 0009).
- *
- * @param type mandatory for a property (KotlinPoet cannot infer); optional for a local, which
- *   may instead take its type from [init] or from a delegate.
- * @param init the initializer. Mutually exclusive with [by].
- * @param by the delegate expression, as in `by lazy { … }`.
- */
-context(s: Scope)
-public fun `val`(name: String, type: TypeName? = null, init: Expr? = null, by: Expr? = null): Expr =
-    s.bind(false, null, null, name, type, init, by)
-
-/** [`val`] with modifiers, e.g. `` `val`(PRIVATE.toModifiers(), "limit", INT, 10.lit) ``. */
-context(s: Scope)
-public fun `val`(
-    modifiers: Modifiers,
-    name: String,
-    type: TypeName? = null,
-    init: Expr? = null,
-    by: Expr? = null,
-): Expr = s.bind(false, null, modifiers, name, type, init, by)
-
-/** Alias of the declaration-level [`val`]. `prop` is property *access* — a different thing. */
-context(s: Scope)
-public fun property(name: String, type: TypeName? = null, init: Expr? = null, by: Expr? = null): Expr =
-    `val`(name, type, init, by)
-
-/** A mutable binding: a local `var` in a block, a `var` property at file or type level. */
-context(s: Scope)
-public fun `var`(name: String, type: TypeName? = null, init: Expr? = null, by: Expr? = null): Expr =
-    s.bind(true, null, null, name, type, init, by)
-
-/** [`var`] with modifiers. */
-context(s: Scope)
-public fun `var`(
-    modifiers: Modifiers,
-    name: String,
-    type: TypeName? = null,
-    init: Expr? = null,
-    by: Expr? = null,
-): Expr = s.bind(true, null, modifiers, name, type, init, by)
 
 /** `a = b`. Named because `=` is not overloadable. */
 context(b: BlockScope)
