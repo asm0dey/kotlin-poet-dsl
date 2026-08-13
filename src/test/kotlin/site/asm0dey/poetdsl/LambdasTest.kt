@@ -143,12 +143,12 @@ class LambdasTest {
 
     @Test
     fun `nested lambdas keep distinct handles`() {
-        // Task 15 should restore the `for`(items) { item -> … } spelling of the outer binding;
-        // `forEach` exercises the same hazard — a nested lambda must not re-bind the outer handle.
+        // `for` exercises the same hazard as `forEach` did before Task 15 landed — a nested
+        // lambda must not re-bind the outer handle bound by the enclosing `for`.
         assertEquals(
-            "items.forEach { item ->\n  item.map {\n    it.length\n  }\n}\n",
+            "for (item in items) {\n  item.map {\n    it.length\n  }\n}\n",
             renderBlock {
-                +items.call("forEach", param = "item") { item ->
+                `for`(items) { item ->
                     +item.call("map") { p -> +p.prop("length") }
                 }
             },
