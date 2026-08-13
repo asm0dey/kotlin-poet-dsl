@@ -31,8 +31,12 @@ internal class CountingFlow(private val scope: BlockScope) : PendingFlow {
  * Opens a control-flow block, fills it with [body], and leaves it open — the exact shape
  * Tasks 15-18's `if`/`while`/`for` builders will have, so that a following `else` can attach
  * and anything else forces the flush.
+ *
+ * Flushes any flow already pending *before* opening this one: two of these in a row must
+ * render balanced, not overwrite `pending` and drop the first flow's `close()`.
  */
 internal fun BlockScope.openFlow(control: String, body: BlockScope.() -> Unit): CountingFlow {
+    flushPending()
     builder.beginControlFlow(control)
     runNested(control, body = body)
     return CountingFlow(this).also { pending = it }

@@ -43,6 +43,11 @@ internal fun BlockScope.checkOwned(expr: Expr) {
     expr.usedScopes.forEach { checkOwned(it) }
 }
 
+/** Validates every scope [stmt] was built from, in the block it is about to be spliced into. */
+internal fun BlockScope.checkOwned(stmt: Stmt) {
+    stmt.usedScopes.forEach { checkOwned(it) }
+}
+
 /** Closes any pending control flow, then adds [code] as one statement. */
 internal fun BlockScope.emitCode(code: CodeBlock) {
     flushPending()
@@ -91,7 +96,7 @@ public operator fun Expr.unaryPlus() {
  */
 context(b: BlockScope)
 public operator fun Stmt.unaryPlus() {
-    usedScopes.forEach { b.checkOwned(it) }
+    b.checkOwned(this)
     b.flushPending()
     b.builder.add(code)
 }

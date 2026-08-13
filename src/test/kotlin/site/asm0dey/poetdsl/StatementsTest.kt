@@ -141,6 +141,14 @@ class StatementsTest {
     }
 
     @Test
+    fun `a nested fragment's foreign scopes propagate to the outer fragment`() {
+        val foreign = ScopeId(null, "fun(other)")
+        val inner = stmts { +Expr(CodeBlock.of("leaked"), scope = foreign).call("use") }
+        val outer = stmts { +inner }
+        assertEquals(setOf(foreign), outer.usedScopes, "the outer fragment inherits the inner's foreign scopes")
+    }
+
+    @Test
     fun `placeholders survive emission and splicing, so imports still resolve`() {
         val fragment = stmts { +call(MemberName("com.example", "helper")) }
         val spliced = stmts { +fragment }
@@ -197,6 +205,20 @@ class StatementsTest {
     fun `stmts closes a control flow left pending at the end`() {
         val fragment = stmts { openFlow("if (ready)") { +call("inside") } }
         assertEquals("if (ready) {\n  inside()\n}\n", fragment.code.toString())
+    }
+
+    @Test
+    fun `two flows opened in sequence render balanced output`() {
+        val block = attachedBlock()
+        val first = block.openFlow("if (a)") { +call("firstBody") }
+        val second = block.openFlow("if (b)") { +call("secondBody") }
+        with(block) { +call("after") }
+        assertEquals(1, first.closes, "the first flow must close when the second one opens")
+        assertEquals(1, second.closes, "the second flow must close before the trailing statement")
+        assertEquals(
+            "if (a) {\n  firstBody()\n}\nif (b) {\n  secondBody()\n}\nafter()\n",
+            block.builder.build().toString(),
+        )
     }
 
     @Test
