@@ -44,6 +44,20 @@ class PrecTest {
         )
     }
 
+    /**
+     * The other half of `rightAssoc`: `left.paren(prec + 1)`. Right-chaining (above) exercises the
+     * *right* operand's `paren(prec)`; only a left-chained equal-precedence operand reaches this
+     * branch, and without the parentheses the expression would re-associate into the other tree.
+     */
+    @Test
+    fun `right associative operators parenthesize an equal precedence left operand`() {
+        val inner = binaryExpr(a, "?:", b, Prec.ELVIS, rightAssoc = true)
+        assertEquals(
+            "(a ?: b) ?: c",
+            binaryExpr(inner, "?:", c, Prec.ELVIS, rightAssoc = true).code.toString(),
+        )
+    }
+
     @Test
     fun `elvis binds tighter than comparison`() {
         val elvis = binaryExpr(a, "?:", b, Prec.ELVIS, rightAssoc = true)

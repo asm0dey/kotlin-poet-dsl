@@ -28,7 +28,7 @@ internal fun compile(source: String): JvmCompilationResult = compileKotlin("Gene
 @OptIn(ExperimentalCompilerApi::class)
 internal fun assertCompiles(source: String) {
     val result = compile(source)
-    assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+    assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, "$source\n${result.messages}")
 }
 
 /** Compiles a snippet written against the DSL, importing the DSL's package plus [extraImports]. */

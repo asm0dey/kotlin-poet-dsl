@@ -19,6 +19,8 @@ class OperatorsTest {
         assertEquals("a / b", (a / b).toString())
         assertEquals("a % b", (a % b).toString())
         assertEquals("-a", (-a).toString())
+        // `unaryMinus`'s parenthesizing branch, the twin of `not()`'s `!(a && b)` below.
+        assertEquals("-(a + b)", (-(a + b)).toString())
     }
 
     @Test
@@ -44,6 +46,8 @@ class OperatorsTest {
     fun `elvis is right associative and binds tighter than comparison`() {
         assertEquals("a ?: b", (a elvis b).toString())
         assertEquals("a ?: b ?: c", (a elvis (b elvis c)).toString())
+        // Left-chained: right-associativity means *this* side needs the parentheses.
+        assertEquals("(a ?: b) ?: c", ((a elvis b) elvis c).toString())
         assertEquals("a ?: b < c", ((a elvis b) lt c).toString())
     }
 
