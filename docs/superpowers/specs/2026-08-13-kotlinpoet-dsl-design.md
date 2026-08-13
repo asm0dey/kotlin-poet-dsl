@@ -24,7 +24,13 @@ Target: a publishable general-purpose library, usable from KSP processors, stand
 
 `@DslMarker` and context parameters are used **to the maximum**, not sprinkled where convenient. Concretely:
 
-- **A distinct `@DslMarker` annotation per scope level** — `@FileDsl`, `@TypeDsl`, `@BlockDsl` — rather than one shared marker. Nesting rules stay strict: inside a `BlockScope`, the enclosing `TypeScope` and `FileScope` receivers are unreachable implicitly, so `` `fun` `` inside a function body is a compile error rather than a surprise.
+- **A distinct `@DslMarker` annotation per scope level** — `@FileDsl`, `@TypeDsl`, `@BlockDsl` — rather than one shared marker. They guard the **member**-based APIs (`WhenScope.branch`, `IfChain.elseIf`, `TryChain.catch`), which is where implicit outer receivers actually leak.
+
+  They do **not** guard context-parameter functions: measured on Kotlin 2.4.10, `@DslMarker` has no effect on context-argument resolution at all — a `context(o: Outer)` function called inside a marked inner receiver lambda compiles clean, without even a warning. Since every builder in this DSL takes its scope as a context parameter, cross-level protection comes from elsewhere; see [ADR 0001](../../adr/0001-scope-resolution-with-context-parameters.md).
+
+- **One declaration per construct, on a sealed `Scope` supertype.** Two overloads distinguished only by context-parameter type are an *ambiguity error* wherever both scopes are in scope, so per-scope overloads are impossible. A single declaration parameterized on a common supertype instead resolves to the innermost scope value — which is also the right semantics: `` `fun` `` inside a body is a local function, inside a type a member, at file level a top-level function.
+
+- **Constructs invalid at a level are compile errors via shadow members.** A `@Deprecated(level = ERROR)` member on the scope class outranks the context function. The shadow must mirror the real overload's signature exactly — a `vararg Any?` catch-all silently fails to shadow, which is worse than no guard at all.
 - **Context parameters carry scope; receivers carry the subject.** Any function that needs a scope declares it as `context(b: BlockScope)`, never as a receiver. The receiver slot is reserved for the thing being operated on (`Expr`, `Stmt`, `TypeName`), which is what makes user-written extensions like `context(b: BlockScope) fun Expr.orThrow(…)` possible at all.
 - **Multiple context parameters where a construct genuinely spans scopes** — e.g. `context(f: FileScope, b: BlockScope)` for a helper that emits a statement and registers an import.
 - **Internal plumbing rides in context too.** `NameScope` and the current `ScopeId` are context parameters, not threaded arguments, so internal helpers keep the same shape as public API.
@@ -99,7 +105,7 @@ Four equivalent spellings, all accepted:
 +f  ·  f()  ·  emit(f)  ·  add(f)
 ```
 
-`invoke()` is defined only on `Stmt`, `FunSpec`, `TypeSpec`, and `PropertySpec` — never on `Expr` — so `f()` can only mean "emit this declaration". A generated call is always `x.call("f")` or `call("f")`.
+`invoke()` on `Stmt`, `FunSpec`, `TypeSpec` and `PropertySpec` returns `Unit` and emits. `invoke()` on an `Expr` returns an `Expr` and means **calling that value** — generated `f(1)` where `f` holds a lambda or a function-typed parameter. The two never collide: receiver types are disjoint, and the Unit-emits/Expr-doesn't rule already tells you which is which. A generated *member* call is still `x.call("f")` or `call("f")`, because the member name is unknown when the generator compiles.
 
 ## Why context parameters
 
@@ -137,10 +143,13 @@ Literals and references:
 ```kotlin
 1.literal  ·  "s".literal        // %S, escaping handled — alias: .lit
 true.literal  ·  nullLiteral     // alias: nul
-reference<Collaborator>()        // %T, import resolved — alias: ref
-member("kotlin", "lazy")         // %M, import resolved — alias: mem
+reference<Collaborator>()        // ClassName — %T, import resolved — alias: ref
+member("kotlin", "lazy")         // MemberName — %M, import resolved — alias: mem
 expression("%T.of(%L)", cls, x)  // escape hatch, placeholders intact — alias: expr
+STRING.nullable                  // TypeName sugar for copy(nullable = true)
 ```
+
+`reference` returns a `ClassName` and `member` a `MemberName`, so both drop into type positions and `%T`/`%M` slots unchanged. For expression position — a static call, a companion reference — use `reference<System>().expression()`.
 
 Examples throughout this document use the short aliases for readability; both spellings are permanent public API.
 
@@ -167,13 +176,15 @@ Two documented limitations:
 ### Lambdas
 
 ```kotlin
-items.call("map") { item -> +item.prop("name") }    // items.map { item -> item.name }
-items.call("map") { +it.prop("name") }              // items.map { it.name } — implicit it
-items.call("fold", 0.lit) { acc, x -> +(acc + x) }  // items.fold(0) { acc, x -> acc + x }
-lambda { +call("calculate") }                        // { calculate() } as a standalone value
+items.call("map", param = "item") { item -> +item.prop("name") }   // items.map { item -> item.name }
+items.call("map") { p -> +p.prop("name") }                         // items.map { it.name } — implicit it
+items.call("fold", 0.lit, params = listOf("acc", "x")) { acc, x -> +(acc + x) }
+lambda { +call("calculate") }                                      // { calculate() } as a standalone value
 ```
 
-A lambda body is a detached `BlockScope`; its last emitted statement is the lambda's value, exactly as in Kotlin. A single unnamed parameter emits implicit `it`. Parameter arities 0–8.
+A lambda body is a detached `BlockScope`; its last emitted statement is the lambda's value, exactly as in Kotlin. Parameter arities 0–8.
+
+The **rendered** parameter name comes from `param =`/`params =`, never from the name the caller happens to bind in their own Kotlin lambda. Omitting it renders the handle as `it` and emits no parameter list. This is deliberate: a scope-level `it` property is silently shadowed by Kotlin's own `it` inside nested lambdas, which would emit the wrong handle with no warning. See [ADR 0005](../../adr/0005-lambda-parameter-naming.md).
 
 ### Not modelled
 
@@ -264,11 +275,13 @@ One detached builder per declaration kind (`funSpec`, `typeSpec`, `propertySpec`
 
 ### Function and constructor arities
 
-Parameters are lambda-bound, so they cannot be `vararg` — the lambda's arity must match. `` `fun` `` and `` `constructor` `` are generated for arities **0–26**, in three modifier variants (none, single `KModifier`, `Modifiers`) and two annotation variants: ≈162 overloads per family. Kotlin removed the `Function22` ceiling in 1.3, so arities above 22 use big-arity `FunctionN`; the boxing cost is irrelevant at generation time.
+Parameters are lambda-bound, so they cannot be `vararg` — the lambda's arity must match. `` `fun` `` and `` `constructor` `` are generated for arities **0–8**, in three modifier variants (none, single `KModifier`, `Modifiers`) and two annotation variants: 54 overloads per family. Because each is declared once on `Scope` rather than per scope type, that is the whole set.
 
-A `buildSrc` Gradle task emits `FunArity.kt` and `CtorArity.kt` into `build/generated/source/dsl`, written with plain KotlinPoet — no bootstrap circularity. Roughly 60 lines of generator.
+Variants are distinguished by **presence and type**, never by defaults: `annotations` and `modifiers` are non-null positional parameters ahead of `name`. Defaulted nullable parameters would make `` `fun`(name = "f") `` match all six variants at once.
 
-Above 26 parameters, or for dynamically sized parameter lists:
+A `buildSrc` Gradle task emits `FunArity.kt`, `CtorArity.kt` and the shadow members into `build/generated/source/dsl`, written with plain KotlinPoet — no bootstrap circularity.
+
+Above 8 parameters, or for dynamically sized parameter lists:
 
 ```kotlin
 `fun`("wide", params = listOf(param("a", INT), …)) { ps ->   // ps: List<Expr>
@@ -318,7 +331,7 @@ annotation(cls: ClassName, …)                                     // runtime-k
 
 Arguments are `Expr`, not strings, so `%T`/`%M` survive and imports resolve.
 
-`UseSiteTarget` re-exports KotlinPoet's enum. Kotlin 2.2's `@all:` meta-target is included; if the pinned KotlinPoet version lacks `ALL`, a shim supplies it (KotlinPoet writes `@%L:` from the enum name). **Implementation task: determine which KotlinPoet version has `ALL`.**
+`UseSiteTarget` re-exports KotlinPoet's enum. Kotlin 2.2's `@all:` meta-target is included: **KotlinPoet 2.3.0 ships `UseSiteTarget.ALL`**, verified against the published API, so no shim is needed.
 
 KotlinPoet emits one annotation per line rather than Kotlin's bracketed `@set:[A B]` form. The output is semantically identical; no raw escape is provided.
 
@@ -359,14 +372,15 @@ Every binder registers its name in the enclosing `NameScope`. Collisions get a n
 
 Loop variable defaults come from singularizing the iterable handle's name (`items` → `item`, `users` → `user`); with no name available, `item`. An explicit `name =` always wins.
 
-A property handle referenced from a member body where a local shadows it is automatically qualified as `this.name`.
+`NameScope`s nest with the scopes, so a local that would shadow a property is uniquified at declaration (`username` → `username2`) and shadowing never arises. Nothing is qualified with `this.` — one naming mechanism, not two. See [ADR 0009](../../adr/0009-naming-and-shadowing.md).
 
 ## Safety and errors
 
-Two layers:
+Three layers:
 
-- **`@DslMarker`** — one annotation per scope level (`@FileDsl`, `@TypeDsl`, `@BlockDsl`) catches the common leak at compile time, and makes cross-level mistakes (declaring a function inside a function body) compile errors.
-- **Runtime ownership check.** `Expr` carries its owning `ScopeId`; emission throws if that scope is not an ancestor of the current one. The message names the handle and its declaring construct. This catches handles smuggled out through a Kotlin `var`.
+- **`@DslMarker`** — one annotation per scope level (`@FileDsl`, `@TypeDsl`, `@BlockDsl`), guarding the member-based APIs (`WhenScope.branch`, `IfChain.elseIf`, `TryChain.catch`). It does **not** guard context-parameter functions; see the language-feature stance above.
+- **Shadow members.** A construct invalid at a level is a compile error there, produced by a `@Deprecated(level = ERROR)` member mirroring the real overload. The set is small: `object`, `interface` and `constructorParam` inside a `BlockScope`. The reverse direction needs nothing — no `BlockScope` value exists at file or type level, so `` `if`(…) `` outside a block is already an unresolved reference.
+- **Runtime ownership check, verified at splice time.** `Expr` carries its owning `ScopeId`, and a pure-form `Stmt` carries the set of scopes it referenced. Emission validates them against the target scope, which is the only place ownership can be judged — a detached builder does not yet know where its output will land. The message names the handle and its declaring construct. This catches handles smuggled out through a Kotlin `var`.
 
 All failures are build-time `IllegalStateException`s naming the offending construct: out-of-scope handle, un-inferable return type, unresolvable callable reference. Partial or silently wrong output is never produced.
 
@@ -394,6 +408,12 @@ buildSrc/…/ArityGenerator.kt         — emits FunArity.kt, CtorArity.kt
 
 ## Open implementation tasks
 
-1. Determine which KotlinPoet version exposes `UseSiteTarget.ALL`; shim if the pinned version does not.
+1. ~~Determine which KotlinPoet version exposes `UseSiteTarget.ALL`~~ — resolved: 2.3.0 has it, no shim.
 2. Spike `KFunction`/`KProperty` → `MemberName` resolution across top-level functions, member functions, extension functions, and properties. Document what fails.
-3. Fix the final alias table.
+3. ~~Fix the final alias table~~ — fixed executably: one assertion per row in `AliasTest`.
+
+## Decision record
+
+Eleven ADRs in [`docs/adr/`](../../adr/) carry the decisions that superseded parts of this
+document, each backed by behaviour measured against Kotlin 2.4.10 rather than inferred
+from documentation. [`docs/glossary.md`](../../glossary.md) fixes the vocabulary.
