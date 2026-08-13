@@ -138,8 +138,8 @@ Literals and references:
 1.lit  ·  "s".lit          // %S, escaping handled
 true.lit  ·  nul
 ref<Collaborator>()        // %T, import resolved
-mem("kotlin", "lazy")      // %M, import resolved
-expr("%T.of(%L)", cls, x)  // escape hatch, placeholders intact
+member("kotlin", "lazy")   // %M, import resolved — alias: mem
+expression("%T.of(%L)", cls, x)  // escape hatch, placeholders intact — alias: expr
 ```
 
 Calls, three receiverless forms plus member calls:
@@ -337,8 +337,10 @@ Every backticked keyword has a full-word alias, so bulk codegen need not fight b
 | `` `try` `` | `tryCatch` |
 | `` `throw` `` | `throwIt` |
 | `annotation` | `ann` |
+| `member` | `mem` |
+| `expression` | `expr` |
 
-Full alias table is fixed during implementation; both spellings are supported permanently. Note that `property` (declaration) and `prop` (property *access* on an `Expr`) are deliberately different names — they live in different scopes but would read alike.
+The convention is **full word is canonical, short form is the alias** — `annotation`/`ann`, `member`/`mem`, `expression`/`expr` — with backticked keywords canonical where a Kotlin keyword is the natural name. Full alias table is fixed during implementation; both spellings are supported permanently. Note that `property` (declaration) and `prop` (property *access* on an `Expr`) are deliberately different names — they live in different scopes but would read alike.
 
 ## Naming and scope
 
