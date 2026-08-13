@@ -82,6 +82,13 @@ public class BlockScope internal constructor(
     id: ScopeId,
     internal val returns: MutableList<TypeName?>,
     internal val detachedRoot: Boolean = false,
+    /**
+     * Foreign scopes whose handles were used somewhere in this block tree. Only a detached root
+     * records — an attached one rejects instead — and the set is *shared* with every child, so a
+     * handle used inside a nested block still reaches the `stmts` root that reports it for the
+     * splice (ADR 0008).
+     */
+    internal val referenced: MutableSet<ScopeId> = mutableSetOf(),
 ) : Scope(names, id) {
     internal var pending: PendingFlow? = null
 }
@@ -100,6 +107,9 @@ internal fun BlockScope.child(label: String, isolateReturns: Boolean = false): B
         id = id.child(label),
         returns = if (isolateReturns) mutableListOf() else returns,
         detachedRoot = detachedRoot,
+        // Never isolated, unlike `returns`: a lambda body inside a pure form still has to report
+        // the outer handles it captured, or the splice would validate an incomplete set.
+        referenced = referenced,
     )
 
 /** Builds a `.kt` file. */

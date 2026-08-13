@@ -24,6 +24,20 @@ public value class Annotations @PublishedApi internal constructor(
 
 public operator fun Annotations.plus(other: Annotations): Annotations = Annotations(list + other.list)
 
+/**
+ * The one place an [Expr] is consumed without threading its `usedScopes` forward, and
+ * deliberately so: [Annotations] is a terminal artifact — a bag of KotlinPoet [AnnotationSpec]s
+ * — not a composable value like [Expr] or [Stmt], and ADR 0008's ownership check is defined only
+ * between [BlockScope]s. An annotation never splices into a block, so there is no site at which
+ * a recorded scope could be judged.
+ *
+ * That is safe because a Kotlin annotation argument must be a compile-time constant, so a
+ * handle — which names a runtime binding — can never legitimately appear here; the invalid case
+ * is invalid whatever scope the handle came from, which is a *stricter* condition than ownership
+ * and therefore not something the ownership checker would be the right guard for. Making
+ * [Annotations] carry scopes would also cost it its `@JvmInline` single-field representation.
+ * See the Task 11 report.
+ */
 @PublishedApi
 internal fun buildAnnotation(
     className: ClassName,
