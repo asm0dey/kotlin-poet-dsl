@@ -19,15 +19,24 @@ public val Int.lit: Expr get() = literal
 public val Long.literal: Expr get() = Expr(CodeBlock.of("%LL", this), LONG)
 public val Long.lit: Expr get() = literal
 
-public val Double.literal: Expr get() = Expr(CodeBlock.of("%L", this), DOUBLE)
+public val Double.literal: Expr
+    get() {
+        check(isFinite()) { "Double.literal: NaN and Infinity have no Kotlin literal form." }
+        return Expr(CodeBlock.of("%L", this), DOUBLE)
+    }
 public val Double.lit: Expr get() = literal
 
-public val Float.literal: Expr get() = Expr(CodeBlock.of("%LF", this), FLOAT)
+public val Float.literal: Expr
+    get() {
+        check(isFinite()) { "Float.literal: NaN and Infinity have no Kotlin literal form." }
+        return Expr(CodeBlock.of("%LF", this), FLOAT)
+    }
 public val Float.lit: Expr get() = literal
 
 public val Boolean.literal: Expr get() = Expr(CodeBlock.of("%L", this), BOOLEAN)
 public val Boolean.lit: Expr get() = literal
 
+/** A char literal. Escaping is done here, not by KotlinPoet. */
 public val Char.literal: Expr get() = Expr(CodeBlock.of("%L", "'${escapeCharLiteral(this)}'"), CHAR)
 public val Char.lit: Expr get() = literal
 
@@ -44,7 +53,7 @@ private fun escapeCharLiteral(c: Char): String = when (c) {
     '\r' -> "\\r"
     '\t' -> "\\t"
     '\b' -> "\\b"
-    else -> if (c.isISOControl()) "\\u%04x".format(c.code) else c.toString()
+    else -> if (c.isISOControl() || c.isSurrogate()) "\\u%04x".format(c.code) else c.toString()
 }
 
 /** A string literal. Escaping is KotlinPoet's `%S`. */

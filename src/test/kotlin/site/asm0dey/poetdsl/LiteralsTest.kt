@@ -10,6 +10,8 @@ import com.tschuchort.compiletesting.KotlinCompilation
 import com.tschuchort.compiletesting.SourceFile
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class LiteralsTest {
     @Test
@@ -18,6 +20,30 @@ class LiteralsTest {
         assertEquals("1", 1.lit.toString())
         assertEquals("true", true.literal.toString())
         assertEquals("2.5", 2.5.literal.toString())
+    }
+
+    @Test
+    fun `finite double and float values still render as before`() {
+        assertEquals("2.5", 2.5.literal.toString())
+        assertEquals("-1.0", (-1.0).literal.toString())
+        assertEquals("2.5F", 2.5f.literal.toString())
+        assertEquals("-1.0F", (-1.0f).literal.toString())
+    }
+
+    @Test
+    fun `Double literal rejects NaN and Infinity naming the construct`() {
+        for (value in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
+            val ex = assertFailsWith<IllegalStateException> { value.literal }
+            assertTrue(ex.message!!.contains("Double.literal"), ex.message)
+        }
+    }
+
+    @Test
+    fun `Float literal rejects NaN and Infinity naming the construct`() {
+        for (value in listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY)) {
+            val ex = assertFailsWith<IllegalStateException> { value.literal }
+            assertTrue(ex.message!!.contains("Float.literal"), ex.message)
+        }
     }
 
     @Test
@@ -60,8 +86,14 @@ class LiteralsTest {
     }
 
     @Test
+    fun `char literal - lone surrogate uses unicode escape`() {
+        assertEquals("'\\ud800'", '\uD800'.literal.toString())
+        assertEquals("'\\udfff'", '\uDFFF'.literal.toString())
+    }
+
+    @Test
     fun `char literal - escaped output actually compiles`() {
-        val chars = listOf('a', '\\', '\'', '\n', '\r', '\t', '\b', '\u0000', '"', '$')
+        val chars = listOf('a', '\\', '\'', '\n', '\r', '\t', '\b', '\u0000', '"', '$', '\uD800')
         val fileSpec = FileSpec.builder("com.example", "CharLiterals")
             .addProperties(
                 chars.mapIndexed { index, c ->
