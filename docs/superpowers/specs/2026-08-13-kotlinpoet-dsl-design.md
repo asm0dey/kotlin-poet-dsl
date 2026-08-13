@@ -20,9 +20,21 @@ Target: a publishable general-purpose library, usable from KSP processors, stand
 - **Expression coverage is core-level.** Arithmetic, comparison, logical, elvis, calls, property access, literals, type references, lambdas. Everything else goes through the `expr("…")` escape hatch.
 - **No compile-time type checking of generated code.** Handles carry a `TypeName` at runtime for inference and diagnostics, not for generator-time type safety. Phantom types (`Expr<Int>`) were rejected: generated code routinely references types that do not exist when the generator compiles.
 
+## Language-feature stance
+
+`@DslMarker` and context parameters are used **to the maximum**, not sprinkled where convenient. Concretely:
+
+- **A distinct `@DslMarker` annotation per scope level** — `@FileDsl`, `@TypeDsl`, `@BlockDsl` — rather than one shared marker. Nesting rules stay strict: inside a `BlockScope`, the enclosing `TypeScope` and `FileScope` receivers are unreachable implicitly, so `` `fun` `` inside a function body is a compile error rather than a surprise.
+- **Context parameters carry scope; receivers carry the subject.** Any function that needs a scope declares it as `context(b: BlockScope)`, never as a receiver. The receiver slot is reserved for the thing being operated on (`Expr`, `Stmt`, `TypeName`), which is what makes user-written extensions like `context(b: BlockScope) fun Expr.orThrow(…)` possible at all.
+- **Multiple context parameters where a construct genuinely spans scopes** — e.g. `context(f: FileScope, b: BlockScope)` for a helper that emits a statement and registers an import.
+- **Internal plumbing rides in context too.** `NameScope` and the current `ScopeId` are context parameters, not threaded arguments, so internal helpers keep the same shape as public API.
+- **Public API is designed to be extended this way.** Anything the library declares with a context parameter is a pattern a user can copy verbatim in their own codegen helpers; a helper someone writes should be indistinguishable from a built-in.
+
+This is the reason for the Kotlin 2.4 baseline, and the trade is deliberate: consumers below 2.4 cannot use the library at all.
+
 ## Architecture
 
-Three scope types, each `@DslMarker`-annotated so implicit outer receivers are blocked:
+Three scope types, each with its own `@DslMarker` annotation so implicit outer receivers are blocked:
 
 ```
 FileScope → TypeScope → BlockScope
@@ -340,7 +352,7 @@ A property handle referenced from a member body where a local shadows it is auto
 
 Two layers:
 
-- **`@DslMarker`** on all three scope annotations catches the common leak at compile time.
+- **`@DslMarker`** — one annotation per scope level (`@FileDsl`, `@TypeDsl`, `@BlockDsl`) catches the common leak at compile time, and makes cross-level mistakes (declaring a function inside a function body) compile errors.
 - **Runtime ownership check.** `Expr` carries its owning `ScopeId`; emission throws if that scope is not an ancestor of the current one. The message names the handle and its declaring construct. This catches handles smuggled out through a Kotlin `var`.
 
 All failures are build-time `IllegalStateException`s naming the offending construct: out-of-scope handle, un-inferable return type, unresolvable callable reference. Partial or silently wrong output is never produced.
