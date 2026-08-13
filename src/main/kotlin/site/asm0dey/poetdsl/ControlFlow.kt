@@ -204,3 +204,82 @@ public fun `if`(condition: Expr, body: BlockScope.() -> Unit): IfChain {
 /** Alias of [`if`]. */
 context(b: BlockScope)
 public fun ifThen(condition: Expr, body: BlockScope.() -> Unit): IfChain = `if`(condition, body)
+
+// --- when ------------------------------------------------------------------------------------
+
+/**
+ * The inside of a `when`. Only branches may be declared here.
+ *
+ * Unlike [IfChain], a `when`'s flow opens and closes entirely inside the single [`when`]/
+ * [whenTrue] call that creates this scope: [branch] and [`else`] each call
+ * `beginControlFlow`/`endControlFlow` on [owner]'s builder as a matched pair before returning,
+ * and nothing outside a `branch`/`else` call can run in between — the body lambda's receiver is
+ * `WhenScope`, not [BlockScope], so it cannot reach any of [owner]'s own statement builders.
+ * That means this scope is never assigned to [BlockScope.pending] and no flush ever closes it
+ * early; the *only* way to reach a stale instance is to capture `this` out of the body lambda
+ * into an outer variable and call [branch] or [`else`] on it after the owning [`when`]/[whenTrue]
+ * call has already returned — the same handle escape [IfChain] guards against. [closed] catches
+ * exactly that: it flips once the owning call's body has run, and both branch-continuation
+ * methods check it first, naming this construct, before touching [owner]'s builder. Because this
+ * scope is never [BlockScope.pending], the identity check `owner.pending === this` that closes
+ * [IfChain] would be a no-op here — there is nothing to desynchronize from — so the per-instance
+ * flag alone is both necessary and sufficient.
+ */
+@BlockDsl
+public class WhenScope internal constructor(internal val owner: BlockScope) {
+    /**
+     * True once the [`when`]/[whenTrue] call that created this scope has run its body to
+     * completion. See the class doc for why a flag suffices without an `owner.pending` check.
+     */
+    internal var closed: Boolean = false
+
+    /** One branch. Several conditions are comma-joined, as in Kotlin. */
+    public fun branch(vararg conditions: Expr, body: BlockScope.() -> Unit) {
+        check(!closed) { "branch: this when has already closed and cannot take another branch." }
+        check(conditions.isNotEmpty()) {
+            "A when branch needs at least one condition; use `else` for the fallback."
+        }
+        conditions.forEach(owner::checkOwned)
+        val heads = conditions.map { it.code }.reduce { acc, code -> CodeBlock.of("%L,·%L", acc, code) }
+        owner.builder.beginControlFlow("%L·->", heads)
+        owner.runNested("branch", body = body)
+        owner.builder.endControlFlow()
+    }
+
+    /** The `else ->` branch. */
+    public fun `else`(body: BlockScope.() -> Unit) {
+        check(!closed) { "else: this when has already closed and cannot take another branch." }
+        owner.builder.beginControlFlow("else·->")
+        owner.runNested("else", body = body)
+        owner.builder.endControlFlow()
+    }
+}
+
+/** `when (subject) { … }`. */
+context(b: BlockScope)
+public fun `when`(subject: Expr, body: WhenScope.() -> Unit) {
+    b.checkOwned(subject)
+    b.flushPending()
+    b.builder.beginControlFlow("when·(%L)", subject.code)
+    val scope = WhenScope(b)
+    scope.body()
+    scope.closed = true
+    b.builder.endControlFlow()
+}
+
+/** Alias of [`when`]. */
+context(b: BlockScope)
+public fun whenOn(subject: Expr, body: WhenScope.() -> Unit) {
+    `when`(subject, body)
+}
+
+/** Subjectless `when { … }`, where each branch condition is a boolean expression. */
+context(b: BlockScope)
+public fun whenTrue(body: WhenScope.() -> Unit) {
+    b.flushPending()
+    b.builder.beginControlFlow("when")
+    val scope = WhenScope(b)
+    scope.body()
+    scope.closed = true
+    b.builder.endControlFlow()
+}
