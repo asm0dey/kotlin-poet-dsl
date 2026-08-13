@@ -3,11 +3,14 @@ package site.asm0dey.poetdsl
 import com.squareup.kotlinpoet.BOOLEAN
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.INT
+import com.squareup.kotlinpoet.KModifier.DATA
+import com.squareup.kotlinpoet.KModifier.PRIVATE
 import com.squareup.kotlinpoet.LIST
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import com.squareup.kotlinpoet.STRING
 import kotlin.test.Test
 import site.asm0dey.poetdsl.ParamKind.VAL
+import site.asm0dey.poetdsl.ParamKind.VAR
 
 /**
  * The cases where "the golden string looks right" is not proof: `kotlinc` gets the last word.
@@ -81,6 +84,28 @@ class CompileTest {
             file("com.example", "Delegates") {
                 `class`("Holder") {
                     `val`("x", INT, by = call(member("kotlin", "lazy")) { +1.lit })
+                }
+            },
+        )
+    }
+
+    /**
+     * D23 and D24 together: a `data class` whose primary constructor is written in the declaration,
+     * and a secondary constructor past the arity cap. Both render a *signature*, where a dropped
+     * `val`, a mis-ordered handle or a lost modifier is what `kotlinc` catches and a golden string
+     * does not.
+     */
+    @Test
+    fun `a data class from the signature form and a wide secondary constructor compile`() {
+        assertCompiles(
+            file("com.example", "Wide") {
+                `class`(DATA, "User", param(VAL, "id", INT), param(VAR, "name", STRING)) { _, name ->
+                    `fun`("greet") { +call("println", name) }
+                }
+                `class`("Wide") {
+                    `constructor`(PRIVATE, (1..12).map { param("p$it", INT) }) { ps ->
+                        +call("println", ps[11])
+                    }
                 }
             },
         )

@@ -10,9 +10,9 @@ import com.squareup.kotlinpoet.TypeSpec
 // The public entry points of every construct in this file — `class`/`klass`, `object`,
 // `interface`, `constructorParam`/`ctorParam`, `fun`/`func` and `constructor`/`ctor` — are
 // generated into `FunArity.kt`, `CtorArity.kt` and `DeclarationVariants.kt` by
-// `buildSrc/src/main/kotlin/ArityGenerator.kt`, in ADR 0004's six variants and (for the two
-// parameter-taking ones) nine arities. What stays here is the machinery they all call, plus the
-// list form of `fun`, which is the one shape no arity overload can cover.
+// `buildSrc/src/main/kotlin/ArityGenerator.kt`, in ADR 0004's six variants and (for the three
+// parameter-taking ones — `class` since D23) nine arities plus D24's list form. What stays here is
+// the machinery they all call, and the parameter descriptors they are handed.
 
 /**
  * Adds a type declaration to whichever scope is innermost: a top-level type in a file, a
@@ -44,7 +44,8 @@ internal fun Scope.declareType(
     localAllowed: Boolean,
     annotations: Annotations?,
     modifiers: Modifiers?,
-    body: TypeScope.() -> Unit,
+    params: List<ParameterSpec>,
+    body: TypeScope.(List<Expr>) -> Unit,
 ) {
     if (this is BlockScope) {
         check(localAllowed) {
@@ -60,7 +61,12 @@ internal fun Scope.declareType(
 
     val scope = TypeScope(builder.addModifiers(modifiers.toList()), NameScope(null), id.child("type"))
     scope.addAll(annotations)
-    scope.body()
+    // The primary-constructor parameters of D23's signature form go in before the body runs, so the
+    // body sees their handles — and so a `superclass(…, x)` written in the body can pass one. They
+    // take the same path a hand-written `constructorParam` does, duplicate names and all: the two
+    // forms are the same construct, only spelled at different places.
+    val handles = params.map { scope.addConstructorParam(it.tag(ParamKind::class), it) }
+    scope.body(handles)
     val spec = scope.finish()
     when (this) {
         is FileScope -> this.builder.addType(spec)
@@ -124,7 +130,20 @@ internal fun TypeScope.addConstructorParam(
     annotations: Annotations?,
     name: String,
     type: TypeName,
-): Expr {
+): Expr = addConstructorParam(
+    kind,
+    ParameterSpec.builder(name, type).apply { annotations?.list?.forEach { addAnnotation(it) } }.build(),
+)
+
+/**
+ * The [ParameterSpec] form: what D23's `` `class`(…, param(VAL, "id", LONG)) `` signature hands over,
+ * and what the name-and-type form above builds for the in-body `constructorParam`. One path, so a
+ * parameter declared either way gets the same duplicate check, the same uniquifying and the same
+ * handle.
+ */
+internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec): Expr {
+    val name = spec.name
+    val type = spec.type
     // A second constructor parameter named `name` is a compile error in Kotlin with no valid
     // output to preserve, so it is rejected outright rather than renamed to `name2` (ADR 0009,
     // amended by D21) — the same treatment `propertyOf` gives a duplicate property, and for the
@@ -139,9 +158,9 @@ internal fun TypeScope.addConstructorParam(
     check(!hasSecondaryCtor) { PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE }
     declaredConstructorParamNames += name
     val unique = names.unique(name)
-    val param = ParameterSpec.builder(unique, type)
-        .apply { annotations?.list?.forEach { addAnnotation(it) } }
-        .build()
+    // Rebuilt only when the name actually moved: `toBuilder` carries the annotations — and the
+    // `ParamKind` tag — across, but an untouched spec is the one the caller passed.
+    val param = if (unique == name) spec else spec.toBuilder(name = unique).build()
     ctor.addParameter(param)
     hasCtor = true
     if (kind != null) {
@@ -204,6 +223,24 @@ public fun typeSpec(modifiers: Modifiers? = null, name: String, body: TypeScope.
 public fun param(name: String, type: TypeName): ParameterSpec = ParameterSpec.builder(name, type).build()
 
 /**
+ * A primary-constructor parameter for D23's signature form: `` `class`("User", param(VAL, "id", LONG)) ``.
+ * [kind] `VAL`/`VAR` also declares the matching property, exactly as [constructorParam] does; `null`
+ * makes it a plain parameter, the same thing [param]`(name, type)` produces.
+ *
+ * This is a **descriptor**, not an emitter: it is evaluated at the call site, where the type being
+ * declared does not exist yet, so it cannot be the `context(t: TypeScope)` [constructorParam] — and
+ * must not be a same-signature sibling of it either, since two declarations differing only by
+ * context parameter are an ambiguity error rather than innermost-wins (ADR 0001). It is an overload
+ * of [param] distinguished by presence and type (Global Constraint 21), and it returns the same
+ * [ParameterSpec] every other parameter slot in this DSL takes, so one computed `List<ParameterSpec>`
+ * can feed the list forms of `` `class` ``, `` `fun` `` and `` `constructor` `` alike. The `val`/`var`
+ * choice rides along as a KotlinPoet tag, which is what tags are for; nothing else reads it, and
+ * [buildFun] rejects a tagged parameter wherever `val`/`var` would not be valid Kotlin.
+ */
+public fun param(kind: ParamKind?, name: String, type: TypeName): ParameterSpec =
+    ParameterSpec.builder(name, type).apply { if (kind != null) tag(ParamKind::class, kind) }.build()
+
+/**
  * The single implementation behind every function overload, including the detached builders.
  *
  * Names live in a *child* [NameScope] of the parent's, so a parameter that would shadow an
@@ -253,6 +290,18 @@ internal fun buildFun(
     params.map { it.name }.groupingBy { it }.eachCount().forEach { (paramName, count) ->
         check(count == 1) {
             "param: a parameter named \"$paramName\" is already declared in this function."
+        }
+    }
+
+    // `val`/`var` is legal on a *primary* constructor's parameters and nowhere else, so a
+    // descriptor built by `param(VAL, …)` cannot be used here — not for a function, and not for a
+    // secondary constructor either. Dropping the tag silently would render a parameter the caller
+    // asked to be a property as a plain one; this says so instead.
+    params.forEach { p ->
+        check(p.tag(ParamKind::class) == null) {
+            "param: \"${p.name}\" is a `val`/`var` parameter, which is only valid in a class's " +
+                "primary constructor. Declare it with `class`(…, param(${p.tag(ParamKind::class)}, " +
+                "\"${p.name}\", …)) or constructorParam, or drop the kind here."
         }
     }
 
@@ -370,17 +419,6 @@ private fun localFunIsUnrenderable(): Nothing = error(
         "function. Declare it at file or type level.",
 )
 
-/** The list form: for more than eight parameters, or a list computed at generation time. */
-context(s: Scope)
-public fun `fun`(
-    name: String,
-    params: List<ParameterSpec>,
-    returns: TypeName? = null,
-    body: BlockScope.(List<Expr>) -> Unit,
-) {
-    s.declareFun(buildFun(name, false, null, null, params, returns, s, body))
-}
-
 /**
  * The message both halves of the primary/secondary guard raise.
  *
@@ -394,6 +432,17 @@ internal const val PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE: String =
     "constructor: a class cannot have both a primary constructor (from constructorParam) and a " +
         "secondary `constructor`, because the DSL cannot express the required `: this(…)` " +
         "delegation call. Fold the parameters into one constructor."
+
+/**
+ * What every generated `` `constructor` ``/`ctor` overload runs before it builds the secondary
+ * constructor: what the *type* has to be asked about, stated once instead of inlined into ~120
+ * generated bodies — and the one place D25 has to touch to relax the primary/secondary rule once
+ * `: this(…)` is expressible.
+ */
+internal fun TypeScope.beginSecondaryConstructor() {
+    check(!hasCtor) { PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE }
+    hasSecondaryCtor = true
+}
 
 /**
  * Detached function builder; returns a KotlinPoet spec, so interop is free — and, for the same

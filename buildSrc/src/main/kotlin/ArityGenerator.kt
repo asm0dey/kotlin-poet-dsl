@@ -137,6 +137,12 @@ private data class TypeConstruct(
     val builder: String,
     val localAllowed: Boolean,
     val shadow: String?,
+    /**
+     * Whether the declaration takes primary-constructor parameters in its signature (D23). Only a
+     * class has a primary constructor: an object and an interface have none, so they stay at the
+     * single no-parameter shape they have always had.
+     */
+    val primaryParams: Boolean,
 )
 
 private val TYPES: List<TypeConstruct> = listOf(
@@ -151,6 +157,7 @@ private val TYPES: List<TypeConstruct> = listOf(
         // backend is fixed; an ERROR-deprecated overload would freeze a temporary backend defect
         // into the locked public API, and `fun` has the identical defect and no shadow either.
         shadow = null,
+        primaryParams = true,
     ),
     TypeConstruct(
         names = listOf(Spelling("`object`")),
@@ -159,6 +166,7 @@ private val TYPES: List<TypeConstruct> = listOf(
         localAllowed = false,
         shadow = "A named object cannot be local in Kotlin. Declare it at file or type level, " +
             "or use an anonymous object.",
+        primaryParams = false,
     ),
     TypeConstruct(
         names = listOf(Spelling("`interface`")),
@@ -166,30 +174,43 @@ private val TYPES: List<TypeConstruct> = listOf(
         builder = "TypeSpec.interfaceBuilder(name)",
         localAllowed = false,
         shadow = "An interface cannot be local in Kotlin. Declare it at file or type level.",
+        primaryParams = false,
     ),
 )
 
 private fun TypeConstruct.overloads(): List<Overload> = names.flatMap { nm ->
-    VARIANTS.map { v ->
-        Overload(
-            doc = docFor(nm, "`$kindName Name { … }`${v.doc}."),
-            context = "context(s: Scope)",
-            name = nm.value,
-            params = v.params() + listOf("name: String", "body: TypeScope.() -> Unit"),
-            returns = null,
-            body = """
-                |s.declareType(
-                |    $builder,
-                |    "$kindName",
-                |    name,
-                |    localAllowed = $localAllowed,
-                |    ${v.annotationsArg},
-                |    ${v.modifiersArg},
-                |    body,
-                |)
-            """.trimMargin(),
-            shadow = shadow,
-        )
+    (if (primaryParams) ARITIES else listOf<Int?>(0)).flatMap { arity ->
+        VARIANTS.map { v ->
+            Overload(
+                doc = docFor(
+                    nm,
+                    if (arity == 0) {
+                        "`$kindName Name { … }`${v.doc}."
+                    } else {
+                        "`$kindName Name(…) { … }`${v.doc}, with " +
+                            "${arityDoc(arity, "primary-constructor parameter")}."
+                    },
+                ),
+                context = "context(s: Scope)",
+                name = nm.value,
+                params = v.params() + listOf("name: String") + arityParams(arity) +
+                    listOf("body: ${bodyType(arity, "TypeScope")}"),
+                returns = null,
+                body = """
+                    |s.declareType(
+                    |    $builder,
+                    |    "$kindName",
+                    |    name,
+                    |    localAllowed = $localAllowed,
+                    |    ${v.annotationsArg},
+                    |    ${v.modifiersArg},
+                    |    ${paramList(arity)},
+                    |    ${forwarder(arity)},
+                    |)
+                """.trimMargin(),
+                shadow = shadow,
+            )
+        }
     }
 }
 
@@ -233,38 +254,58 @@ private fun BindConstruct.overloads(): List<Overload> = names.flatMap { nm ->
     }
 }
 
-// The pieces `fun` and `constructor` share: both take 0-MAX_ARITY `ParameterSpec`s and hand the
-// body one `Expr` handle per parameter.
-
-private fun arityParams(arity: Int): List<String> = (1..arity).map { "p$it: ParameterSpec" }
-
-private fun bodyType(arity: Int): String =
-    if (arity == 0) "BlockScope.() -> Unit" else "BlockScope.(${List(arity) { "Expr" }.joinToString(", ")}) -> Unit"
+// The pieces `class`, `fun` and `constructor` share: each takes 0-MAX_ARITY `ParameterSpec`s — or,
+// past the cap, one `List<ParameterSpec>` — and hands the body one `Expr` handle per parameter.
 
 /**
- * Adapts `buildFun`'s `BlockScope.(List<Expr>) -> Unit` to the fixed-arity body.
+ * The shapes every parameter-taking construct is generated in: arities 0-[MAX_ARITY], then `null`
+ * for the list form, whose body takes the handles as a `List<Expr>` (D24). The list form is in this
+ * table rather than hand-written so that it gets ADR 0004's six variants like every other shape —
+ * without them a `data class` or a `private constructor` with more than eight parameters would be
+ * inexpressible, which is the very gap D24 exists to close.
+ */
+private val ARITIES: List<Int?> = (0..MAX_ARITY).toList() + null
+
+private fun arityParams(arity: Int?): List<String> =
+    if (arity == null) listOf("params: List<ParameterSpec>") else (1..arity).map { "p$it: ParameterSpec" }
+
+private fun bodyType(arity: Int?, receiver: String = "BlockScope"): String = when {
+    arity == null -> "$receiver.(List<Expr>) -> Unit"
+    arity == 0 -> "$receiver.() -> Unit"
+    else -> "$receiver.(${List(arity) { "Expr" }.joinToString(", ")}) -> Unit"
+}
+
+/**
+ * Adapts the `(List<Expr>) -> Unit` body the machinery calls to the fixed-arity body.
  *
  * Deviation D1: it reads the list **by index**. Destructuring it — `{ (a1, a2, …) -> … }`, which
  * is what the plan drafted — does not compile past arity 5, because the stdlib gives `List` only
- * `component1()`-`component5()`.
+ * `component1()`-`component5()`. The list form needs no adapter at all: it already has that shape.
  */
-private fun forwarder(arity: Int): String =
-    if (arity == 0) "{ body() }" else "{ args -> body(${(0 until arity).joinToString(", ") { "args[$it]" }}) }"
+private fun forwarder(arity: Int?): String = when {
+    arity == null -> "body"
+    arity == 0 -> "{ body() }"
+    else -> "{ args -> body(${(0 until arity).joinToString(", ") { "args[$it]" }}) }"
+}
 
-private fun paramList(arity: Int): String =
-    if (arity == 0) "emptyList()" else "listOf(${(1..arity).joinToString(", ") { "p$it" }})"
+private fun paramList(arity: Int?): String = when {
+    arity == null -> "params"
+    arity == 0 -> "emptyList()"
+    else -> "listOf(${(1..arity).joinToString(", ") { "p$it" }})"
+}
 
 /** Reads as a KDoc clause: "no parameters" / "one parameter" / "3 parameters". */
-private fun arityDoc(arity: Int): String = when (arity) {
-    0 -> "no parameters"
-    1 -> "one parameter; the body receives its handle"
-    else -> "$arity parameters; the body receives their handles"
+private fun arityDoc(arity: Int?, noun: String = "parameter"): String = when (arity) {
+    null -> "a list of ${noun}s; the body receives their handles"
+    0 -> "no ${noun}s"
+    1 -> "one $noun; the body receives its handle"
+    else -> "$arity ${noun}s; the body receives their handles"
 }
 
 private val FUN_NAMES: List<Spelling> = listOf(Spelling("`fun`"), Spelling("func", aliasOf("`fun`")))
 
 private fun funOverloads(): List<Overload> = FUN_NAMES.flatMap { nm ->
-    (0..MAX_ARITY).flatMap { arity ->
+    ARITIES.flatMap { arity ->
         VARIANTS.map { v ->
             Overload(
                 doc = docFor(nm, "`fun name(…) { … }`${v.doc}, with ${arityDoc(arity)}."),
@@ -296,7 +337,7 @@ private val CTOR_NAMES: List<Spelling> =
     listOf(Spelling("`constructor`"), Spelling("ctor", aliasOf("`constructor`")))
 
 private fun ctorOverloads(): List<Overload> = CTOR_NAMES.flatMap { nm ->
-    (0..MAX_ARITY).flatMap { arity ->
+    ARITIES.flatMap { arity ->
         VARIANTS.map { v ->
             Overload(
                 doc = docFor(
@@ -307,11 +348,12 @@ private fun ctorOverloads(): List<Overload> = CTOR_NAMES.flatMap { nm ->
                 name = nm.value,
                 params = v.params() + arityParams(arity) + listOf("body: ${bodyType(arity)}"),
                 returns = null,
-                // The primary/secondary guard lives on every overload, not in `buildFun`: it is
-                // about what the *type* already has, and `buildFun` never sees the TypeScope.
+                // The guards live on every overload rather than in `buildFun`: they are about what
+                // the *type* already has, and `buildFun` never sees the TypeScope. They are one
+                // call rather than inline `check`s so that the rules — and D25's coming relaxation
+                // of the primary/secondary one — are stated once, in `Declarations.kt`.
                 body = """
-                    |check(!t.hasCtor) { PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE }
-                    |t.hasSecondaryCtor = true
+                    |t.beginSecondaryConstructor()
                     |t.builder.addFunction(
                     |    buildFun(
                     |        "<init>",

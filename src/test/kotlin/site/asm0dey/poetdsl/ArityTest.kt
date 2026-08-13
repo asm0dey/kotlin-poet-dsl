@@ -6,8 +6,10 @@ import com.squareup.kotlinpoet.KModifier.INTERNAL
 import com.squareup.kotlinpoet.KModifier.PRIVATE
 import com.squareup.kotlinpoet.KModifier.SEALED
 import com.squareup.kotlinpoet.KModifier.SUSPEND
+import com.squareup.kotlinpoet.LONG
 import com.squareup.kotlinpoet.STRING
 import site.asm0dey.poetdsl.ParamKind.VAL
+import site.asm0dey.poetdsl.ParamKind.VAR
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -93,13 +95,214 @@ class ArityTest {
         assertTrue("use(p5, p4, p3, p2, p1)" in out, out)
     }
 
-    /** ADR 0004's cap: past eight, the hand-written list form takes over. */
+    /** ADR 0004's cap: past eight, the list form takes over. */
     @Test
     fun `beyond eight uses the list form`() {
         val out = file("com.example", "Api") {
             `fun`("wide12", params = params(12)) { ps -> +ps[11] }
         }.toString()
         assertTrue("p12: Int" in out, out)
+    }
+
+    // --- D24: the list form, on every construct that takes parameters -----------------------
+
+    /**
+     * Deviation D24. Before it, `` `constructor` `` capped at arity 8 with no way past, so a
+     * secondary constructor with more than eight parameters was inexpressible.
+     */
+    @Test
+    fun `a secondary constructor beyond eight uses the list form`() {
+        val out = file("com.example", "Wide") {
+            `class`("Wide") {
+                `constructor`(params(12)) { ps -> +call("use", ps[0], ps[11]) }
+            }
+        }.toString()
+        assertTrue("p12: Int," in out, out)
+        assertTrue("use(p1, p12)" in out, out)
+    }
+
+    /** D24's list forms carry ADR 0004's six variants, or a wide `private` constructor would be lost. */
+    @Test
+    fun `the list forms take annotations and modifiers`() {
+        val out = file("com.example", "Wide") {
+            `class`(DATA, "Wide", params(9).map { param(VAL, it.name, INT) }) { _ -> }
+            `class`("Holder") {
+                ctor(annotation<Serializable>(), PRIVATE, params(9)) { _ -> }
+                func(INTERNAL, "wide", params(9)) { _ -> }
+            }
+        }.toString()
+        assertTrue("data class Wide(" in out, out)
+        assertTrue("public val p9: Int," in out, out)
+        assertTrue("  @Serializable\n  private constructor(" in out, out)
+        assertTrue("internal fun wide(" in out, out)
+    }
+
+    /** `klass`, `func` and `ctor` reach the list form too — the aliases come off the same table. */
+    @Test
+    fun `aliases carry the list form`() {
+        assertEquals(
+            file("com.example", "A") {
+                `class`("C", params(9)) { ps -> `fun`("f") { +ps[8] } }
+                `class`("D") { `constructor`(params(9)) { ps -> +ps[8] } }
+                `fun`("g", params(9)) { ps -> +ps[8] }
+            }.toString(),
+            file("com.example", "A") {
+                klass("C", params(9)) { ps -> `fun`("f") { +ps[8] } }
+                klass("D") { ctor(params(9)) { ps -> +ps[8] } }
+                func("g", params(9)) { ps -> +ps[8] }
+            }.toString(),
+        )
+    }
+
+    // --- D23: primary-constructor parameters in the `class` signature ------------------------
+
+    /**
+     * Deviation D23's headline shape: the parameters in the declaration, their handles named in
+     * the body.
+     */
+    @Test
+    fun `a class declares its primary constructor in its signature`() {
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Long
+            import kotlin.String
+
+            public data class User(
+              public val id: Long,
+              public var name: String,
+            ) {
+              public fun greet() {
+                println(name)
+              }
+            }
+
+            """.trimIndent(),
+            file("com.example", "User") {
+                `class`(DATA, "User", param(VAL, "id", LONG), param(VAR, "name", STRING)) { _, name ->
+                    `fun`("greet") { +call("println", name) }
+                }
+            }.toString(),
+        )
+    }
+
+    /**
+     * The same index-based binding D1 forced on `` `fun` ``, on the construct that got it last:
+     * the last handle is used first, so an `args[0]`-everywhere generator fails here.
+     */
+    @Test
+    fun `class arities 1 through 8 bind every handle in order`() {
+        val p = params(8)
+        val out = file("com.example", "Api") {
+            `class`("C0") { }
+            `class`("C1", p[0]) { a1 -> `fun`("f") { +call("use", a1) } }
+            `class`("C2", p[0], p[1]) { a1, a2 -> `fun`("f") { +call("use", a2, a1) } }
+            `class`("C3", p[0], p[1], p[2]) { a1, a2, a3 -> `fun`("f") { +call("use", a3, a2, a1) } }
+            `class`("C4", p[0], p[1], p[2], p[3]) { a1, a2, a3, a4 ->
+                `fun`("f") { +call("use", a4, a3, a2, a1) }
+            }
+            `class`("C5", p[0], p[1], p[2], p[3], p[4]) { a1, a2, a3, a4, a5 ->
+                `fun`("f") { +call("use", a5, a4, a3, a2, a1) }
+            }
+            `class`("C6", p[0], p[1], p[2], p[3], p[4], p[5]) { a1, a2, a3, a4, a5, a6 ->
+                `fun`("f") { +call("use", a6, a5, a4, a3, a2, a1) }
+            }
+            `class`("C7", p[0], p[1], p[2], p[3], p[4], p[5], p[6]) { a1, a2, a3, a4, a5, a6, a7 ->
+                `fun`("f") { +call("use", a7, a6, a5, a4, a3, a2, a1) }
+            }
+            `class`("C8", p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]) { a1, a2, a3, a4, a5, a6, a7, a8 ->
+                `fun`("f") { +call("use", a8, a7, a6, a5, a4, a3, a2, a1) }
+            }
+        }.toString()
+        assertTrue("public class C0\n" in out, out)
+        assertTrue("use(p1)" in out, out)
+        assertTrue("use(p2, p1)" in out, out)
+        assertTrue("use(p8, p7, p6, p5, p4, p3, p2, p1)" in out, out)
+        // The signature form declares real primary-constructor parameters, not properties on the side.
+        assertTrue("public class C8(\n  p1: Int,\n" in out, out)
+    }
+
+    @Test
+    fun `all six class variants take primary-constructor parameters`() {
+        val out = file("com.example", "Api") {
+            `class`("C1", param(VAL, "x", INT)) { _ -> }
+            `class`(SEALED, "C2", param(VAL, "x", INT)) { _ -> }
+            `class`(DATA + INTERNAL, "C3", param(VAL, "x", INT)) { _ -> }
+            `class`(annotation<Serializable>(), "C4", param(VAL, "x", INT)) { _ -> }
+            `class`(annotation<Serializable>(), SEALED, "C5", param(VAL, "x", INT)) { _ -> }
+            `class`(annotation<Serializable>(), DATA + INTERNAL, "C6", param(VAL, "x", INT)) { _ -> }
+        }.toString()
+        assertTrue("public class C1(\n" in out, out)
+        assertTrue("public sealed class C2(\n" in out, out)
+        assertTrue("internal data class C3(\n" in out, out)
+        assertTrue("@Serializable\npublic class C4(\n" in out, out)
+        assertTrue("@Serializable\npublic sealed class C5(\n" in out, out)
+        assertTrue("@Serializable\ninternal data class C6(\n" in out, out)
+    }
+
+    /**
+     * The signature form and the in-body form are one construct: same duplicate check, same
+     * uniquifying, same handle. A parameter written both ways is the collision that proves it.
+     */
+    @Test
+    fun `a signature parameter and a body parameter are the same construct`() {
+        assertEquals(
+            file("com.example", "A") { `class`("C", param(VAL, "id", INT)) { _ -> } }.toString(),
+            file("com.example", "A") { `class`("C") { constructorParam(VAL, "id", INT) } }.toString(),
+        )
+        val thrown = kotlin.runCatching {
+            file("com.example", "A") {
+                `class`("C", param(VAL, "id", INT)) { _ -> constructorParam(VAL, "id", INT) }
+            }
+        }.exceptionOrNull()
+        assertEquals(
+            "A constructor parameter named \"id\" is already declared in this scope.",
+            (thrown as IllegalStateException).message,
+        )
+    }
+
+    /** No kind means a plain parameter with no property — the same thing `param(name, type)` builds. */
+    @Test
+    fun `a null kind is a plain parameter`() {
+        assertEquals(
+            file("com.example", "A") { `class`("C", param("x", INT)) { _ -> } }.toString(),
+            file("com.example", "A") { `class`("C", param(null, "x", INT)) { _ -> } }.toString(),
+        )
+        assertTrue(
+            "public class C(\n  x: Int,\n)" in
+                file("com.example", "A") { `class`("C", param("x", INT)) { _ -> } }.toString(),
+        )
+    }
+
+    /**
+     * `val`/`var` is legal only on a primary constructor's parameters. Passing such a descriptor to
+     * a function — or to a *secondary* constructor — would otherwise render a plain parameter and
+     * silently lose the property the caller asked for.
+     */
+    @Test
+    fun `a val parameter is rejected outside a primary constructor`() {
+        val onFun = kotlin.runCatching {
+            file("com.example", "A") { `fun`("f", param(VAL, "x", INT)) { _ -> } }
+        }.exceptionOrNull()
+        assertTrue(
+            onFun is IllegalStateException && onFun.message.orEmpty().startsWith("param: \"x\" is a `val`/`var`"),
+            "$onFun",
+        )
+        val onCtor = kotlin.runCatching {
+            file("com.example", "A") { `class`("C") { `constructor`(param(VAL, "x", INT)) { _ -> } } }
+        }.exceptionOrNull()
+        assertTrue(onCtor is IllegalStateException, "$onCtor")
+    }
+
+    /** The descriptor is a `ParameterSpec`, so a hand-built annotated one goes straight through. */
+    @Test
+    fun `a hand built parameter spec keeps its annotations in the signature form`() {
+        val annotated = param(VAL, "id", INT).toBuilder()
+            .addAnnotation(annotation<Serializable>().list.single())
+            .build()
+        val out = file("com.example", "A") { `class`("C", annotated) { _ -> } }.toString()
+        assertTrue("@Serializable\n  public val id: Int," in out, out)
     }
 
     // --- the six variants, on `fun` ---------------------------------------------------------
