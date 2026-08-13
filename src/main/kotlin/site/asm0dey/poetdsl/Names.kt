@@ -53,7 +53,24 @@ internal class NameScope(private val parent: NameScope?) {
     fun child(): NameScope = NameScope(this)
 }
 
-/** Best-effort English singular, for loop-variable defaults. Falls back to `item`. */
+/**
+ * Best-effort English singular, for loop-variable defaults. Falls back to `item`.
+ *
+ * Suffix rules only — there is no irregular-plural table and no dictionary, so `series` becomes
+ * `sery` and `children` is left alone. That is a deliberate limit, not an oversight: any table
+ * would be an arbitrary subset of English (why `children` and not `phenomena`, `analyses`,
+ * `indices`?) and would read as complete when it is not. The rules that *are* here are the ones
+ * that hold for the overwhelming majority of collection names a generator produces.
+ *
+ * Nothing about a generated declaration depends on the result: this only picks the *default*
+ * rendered name of a `` `for` `` loop variable, and ADR 0005 gives every construct an explicit
+ * `name =` / `param =` argument that overrides it. Uniquification then guarantees the fallback
+ * compiles even when it reads badly — `for (children2 in children)`.
+ *
+ * `internal`, so unlike the rest of this task's surface it is *not* frozen by the API lock and can
+ * gain a table later without a binary-compatibility break. `NamesTest` pins the current answers,
+ * including the wrong-looking ones, so any such change has to be deliberate.
+ */
 internal fun singularize(name: String): String = when {
     name.isEmpty() -> "item"
     name.endsWith("ies") && name.length > 3 -> name.dropLast(3) + "y"

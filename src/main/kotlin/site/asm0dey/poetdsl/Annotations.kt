@@ -5,7 +5,14 @@ import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.asClassName
 
-/** KotlinPoet's use-site target enum, re-exported. Includes Kotlin 2.2's `@all:` meta-target. */
+/**
+ * KotlinPoet's use-site target enum, re-exported. Includes Kotlin 2.2's `@all:` meta-target.
+ *
+ * This is a plain typealias, not a wrapper, so KotlinPoet's own opt-in requirements travel with it:
+ * [UseSiteTarget.ALL] is `@ExperimentalKotlinPoetApi`, and a caller writing `@all:` must therefore
+ * add `@OptIn(com.squareup.kotlinpoet.ExperimentalKotlinPoetApi::class)` themselves. No other entry
+ * needs one.
+ */
 public typealias UseSiteTarget = AnnotationSpec.UseSiteTarget
 
 /**
@@ -25,18 +32,52 @@ public value class Annotations @PublishedApi internal constructor(
 public operator fun Annotations.plus(other: Annotations): Annotations = Annotations(list + other.list)
 
 /**
+ * Rejects an annotation argument that names a runtime binding.
+ *
+ * A Kotlin annotation argument must be a compile-time constant. A handle — or anything derived
+ * from one — names a local, a parameter or a property, so `@Ann(x)` is `e: An annotation argument
+ * must be a compile-time constant` however it is written, whatever scope `x` came from. That makes
+ * this a *stricter* condition than ADR 0008's ownership relation and not something the ownership
+ * checker would be the right guard for: ownership is a [BlockScope]-to-[BlockScope] question, and
+ * [Annotatable] is implemented only by [FileScope] and [TypeScope] (see the Task 11 report).
+ *
+ * [Expr.usedScopes] is the signal available here, and it is *neither* exactly necessary nor exactly
+ * sufficient, because the [annotation] builders take no scope at all — by design, since an
+ * annotation is written wherever it is needed and belongs to no block:
+ *
+ * - Not necessary: `call("compute")` is equally non-constant and carries no scope, so it still
+ *   reaches `kotlinc` unchallenged. The check closes what the DSL can see and no more.
+ * - Not quite sufficient either: a `` const `val` `` declared *through this DSL* also hands back a
+ *   handle, and `@Ann(MAX)` referring to it is legal Kotlin — yet it is rejected here, because
+ *   nothing in an [Expr] distinguishes a file-level `const` from a local. That is the one false
+ *   rejection, it has a one-line answer, and the message names it: reference the constant by
+ *   name instead, with `member("pkg", "MAX").expression()` (which also resolves the import) or the
+ *   `expression("MAX")` escape hatch.
+ *
+ * The alternative was to keep rendering `@Ann(x)` for a local and let the caller discover it
+ * whenever they next compiled the output. A loud false rejection with a documented workaround beats
+ * silently wrong generated code.
+ */
+private fun checkAnnotationArgument(arg: Expr) {
+    check(arg.usedScopes.isEmpty()) {
+        "annotation: '${arg.name ?: arg}' is a handle, but a Kotlin annotation argument must be a " +
+            "compile-time constant. Use a literal, or name the constant with " +
+            "member(\"pkg\", \"NAME\").expression() — a handle is rejected even for a `const val`, " +
+            "because an Expr cannot tell one from a local."
+    }
+}
+
+/**
  * The one place an [Expr] is consumed without threading its `usedScopes` forward, and
  * deliberately so: [Annotations] is a terminal artifact — a bag of KotlinPoet [AnnotationSpec]s
  * — not a composable value like [Expr] or [Stmt], and ADR 0008's ownership check is defined only
  * between [BlockScope]s. An annotation never splices into a block, so there is no site at which
- * a recorded scope could be judged.
+ * a recorded scope could be judged. Making [Annotations] carry scopes would also cost it its
+ * `@JvmInline` single-field representation.
  *
- * That is safe because a Kotlin annotation argument must be a compile-time constant, so a
- * handle — which names a runtime binding — can never legitimately appear here; the invalid case
- * is invalid whatever scope the handle came from, which is a *stricter* condition than ownership
- * and therefore not something the ownership checker would be the right guard for. Making
- * [Annotations] carry scopes would also cost it its `@JvmInline` single-field representation.
- * See the Task 11 report.
+ * Dropping the scopes is safe *because* [checkAnnotationArgument] runs first: an argument carrying
+ * any scope at all is rejected outright, so no scope that could have needed judging survives to be
+ * discarded.
  */
 @PublishedApi
 internal fun buildAnnotation(
@@ -44,13 +85,17 @@ internal fun buildAnnotation(
     target: UseSiteTarget?,
     positional: List<Expr>,
     named: List<Pair<String, Expr>>,
-): AnnotationSpec = AnnotationSpec.builder(className)
-    .apply {
-        target?.let { useSiteTarget(it) }
-        positional.forEach { addMember("%L", it.code) }
-        named.forEach { (name, value) -> addMember(CodeBlock.of("%L·=·%L", name, value.code)) }
-    }
-    .build()
+): AnnotationSpec {
+    positional.forEach(::checkAnnotationArgument)
+    named.forEach { (_, value) -> checkAnnotationArgument(value) }
+    return AnnotationSpec.builder(className)
+        .apply {
+            target?.let { useSiteTarget(it) }
+            positional.forEach { addMember("%L", it.code) }
+            named.forEach { (name, value) -> addMember(CodeBlock.of("%L·=·%L", name, value.code)) }
+        }
+        .build()
+}
 
 /** An annotation with positional arguments; `%T`/`%M` in them survive and imports resolve. */
 public inline fun <reified T : Annotation> annotation(

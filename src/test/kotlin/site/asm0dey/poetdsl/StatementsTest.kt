@@ -245,4 +245,27 @@ class StatementsTest {
             block.builder.build().toString(),
         )
     }
+
+    /**
+     * The unchecked boundary ADR 0008's Task 21 amendment documents: the detached *declaration*
+     * builders return KotlinPoet specs, which have nowhere to carry a `Set<ScopeId>`, so a handle
+     * from an unrelated scope used in one of their bodies is accepted and never re-judged when the
+     * spec is added. `stmts` is the contrast in the same test — it is the DSL's own type, so it
+     * records and the splice rejects.
+     *
+     * This pins a documented non-goal. Fail it by adding the check, and update the ADR in the same
+     * breath.
+     */
+    @Test
+    fun `a detached declaration builder does not carry the scopes its body used`() {
+        val foreign = Expr(CodeBlock.of("leaked"), scope = ScopeId(null, "fun(other)"))
+
+        val fragment = stmts { +foreign.call("use") }
+        assertFailsWith<IllegalStateException> { with(attachedBlock()) { +fragment } }
+
+        val spec = funSpec(name = "f") { +foreign.call("use") }
+        // No wrapper, no recorded scopes, and therefore nothing for `+spec` to reject.
+        file("com.example", "Api") { +spec }
+        assertEquals("public fun f() {\n  leaked.use()\n}\n", spec.toString())
+    }
 }

@@ -3,6 +3,40 @@ package site.asm0dey.poetdsl
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.TypeName
 
+/**
+ * Runs [body] between a `beginControlFlow` that has already happened and the close that has not,
+ * running [close] if [body] throws.
+ *
+ * Every builder here opens its block, runs a caller-supplied lambda, then closes — either straight
+ * away ([`for`], [`while`], [`when`]) or later, through [BlockScope.pending] ([`if`], [`try`]).
+ * A body that throws skips the close, leaving `beginControlFlow`'s brace and indent unmatched. That
+ * is invisible while an exception aborts the whole build, but a caller that *catches* the
+ * [IllegalStateException] a DSL check raised and carries on gets a builder whose every later
+ * statement renders inside a block that never closes. Closing on the way out costs an empty block
+ * instead — wrong, but brace-balanced and syntactically recoverable.
+ *
+ * The success path is untouched: [close] runs only on the exceptional one, so the constructs that
+ * deliberately leave their flow open for an `else` or a `catch` still do.
+ *
+ * The exception is rethrown, never swallowed, and [close] is a plain builder call that cannot throw
+ * on a flow this function knows is open — so the original failure is what the caller sees.
+ *
+ * The chain continuations — [IfChain.elseIf], [IfChain.else], [TryChain.catch], [TryChain.finally]
+ * — need no guard: each extends a flow that is still [BlockScope.pending], so the enclosing block's
+ * own [flushPending] closes it whether their body threw or not.
+ */
+internal inline fun BlockScope.closeOnFailure(
+    close: () -> Unit = { builder.endControlFlow() },
+    body: () -> Unit,
+) {
+    try {
+        body()
+    } catch (e: Throwable) {
+        close()
+        throw e
+    }
+}
+
 // --- for ---------------------------------------------------------------------------------------
 
 /**
@@ -24,9 +58,11 @@ public fun `for`(items: Expr, name: String? = null, body: BlockScope.(Expr) -> U
     val inner = b.child("for")
     val chosen = inner.names.unique(name ?: items.name?.let(::singularize) ?: "item")
     b.builder.beginControlFlow("for·(%L·in·%L)", chosen, items.code)
-    inner.body(Expr(CodeBlock.of("%L", chosen), name = chosen, scope = inner.id))
-    inner.flushPending()
-    b.builder.add(inner.builder.build())
+    b.closeOnFailure {
+        inner.body(Expr(CodeBlock.of("%L", chosen), name = chosen, scope = inner.id))
+        inner.flushPending()
+        b.builder.add(inner.builder.build())
+    }
     b.builder.endControlFlow()
 }
 
@@ -44,7 +80,7 @@ public fun `while`(condition: Expr, body: BlockScope.() -> Unit) {
     b.checkOwned(condition)
     b.flushPending()
     b.builder.beginControlFlow("while·(%L)", condition.code)
-    b.runNested("while", body = body)
+    b.closeOnFailure { b.runNested("while", body = body) }
     b.builder.endControlFlow()
 }
 
@@ -54,16 +90,22 @@ public fun `while`(condition: Expr, body: BlockScope.() -> Unit) {
  * KotlinPoet 2.3.0's [CodeBlock.Builder.endControlFlow] takes no format arguments, so the
  * trailing `while (condition)` cannot be attached through it. `unindent()` plus a literal
  * `}·while·(…)` line produces the identical brace and indentation as [CodeBlock.Builder.endControlFlow]
- * would, without that missing overload.
+ * would, without that missing overload. That is also why this is the one construct whose
+ * [closeOnFailure] needs an explicit closer: `endControlFlow()` alone would leave a `do { }` with
+ * no `while`.
  */
 context(b: BlockScope)
 public fun doWhile(condition: Expr, body: BlockScope.() -> Unit) {
     b.checkOwned(condition)
     b.flushPending()
     b.builder.beginControlFlow("do")
-    b.runNested("doWhile", body = body)
-    b.builder.unindent()
-    b.builder.add("}·while·(%L)\n", condition.code)
+    b.closeOnFailure({ b.closeDoWhile(condition) }) { b.runNested("doWhile", body = body) }
+    b.closeDoWhile(condition)
+}
+
+private fun BlockScope.closeDoWhile(condition: Expr) {
+    builder.unindent()
+    builder.add("}·while·(%L)\n", condition.code)
 }
 
 // --- break / continue ------------------------------------------------------------------------
@@ -197,7 +239,7 @@ public fun `if`(condition: Expr, body: BlockScope.() -> Unit): IfChain {
     b.checkOwned(condition)
     b.flushPending()
     b.builder.beginControlFlow("if·(%L)", condition.code)
-    b.runNested("if", body = body)
+    b.closeOnFailure { b.runNested("if", body = body) }
     return IfChain(b).also { b.pending = it }
 }
 
@@ -242,7 +284,7 @@ public class WhenScope internal constructor(internal val owner: BlockScope) {
         conditions.forEach(owner::checkOwned)
         val heads = conditions.map { it.code }.reduce { acc, code -> CodeBlock.of("%L,·%L", acc, code) }
         owner.builder.beginControlFlow("%L·->", heads)
-        owner.runNested("branch", body = body)
+        owner.closeOnFailure { owner.runNested("branch", body = body) }
         owner.builder.endControlFlow()
     }
 
@@ -250,7 +292,7 @@ public class WhenScope internal constructor(internal val owner: BlockScope) {
     public fun `else`(body: BlockScope.() -> Unit) {
         check(!closed) { "else: this when has already closed and cannot take another branch." }
         owner.builder.beginControlFlow("else·->")
-        owner.runNested("else", body = body)
+        owner.closeOnFailure { owner.runNested("else", body = body) }
         owner.builder.endControlFlow()
     }
 }
@@ -262,8 +304,10 @@ public fun `when`(subject: Expr, body: WhenScope.() -> Unit) {
     b.flushPending()
     b.builder.beginControlFlow("when·(%L)", subject.code)
     val scope = WhenScope(b)
-    scope.body()
-    scope.closed = true
+    b.closeOnFailure {
+        scope.body()
+        scope.closed = true
+    }
     b.builder.endControlFlow()
 }
 
@@ -279,8 +323,10 @@ public fun whenTrue(body: WhenScope.() -> Unit) {
     b.flushPending()
     b.builder.beginControlFlow("when")
     val scope = WhenScope(b)
-    scope.body()
-    scope.closed = true
+    b.closeOnFailure {
+        scope.body()
+        scope.closed = true
+    }
     b.builder.endControlFlow()
 }
 
@@ -379,7 +425,7 @@ context(b: BlockScope)
 public fun `try`(body: BlockScope.() -> Unit): TryChain {
     b.flushPending()
     b.builder.beginControlFlow("try")
-    b.runNested("try", body = body)
+    b.closeOnFailure { b.runNested("try", body = body) }
     return TryChain(b).also { b.pending = it }
 }
 

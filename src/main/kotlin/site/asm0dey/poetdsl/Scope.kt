@@ -114,9 +114,10 @@ public class BlockScope internal constructor(
     internal val detachedRoot: Boolean = false,
     /**
      * Foreign scopes whose handles were used somewhere in this block tree. Only a detached root
-     * records — an attached one rejects instead — and the set is *shared* with every child, so a
-     * handle used inside a nested block still reaches the `stmts` root that reports it for the
-     * splice (ADR 0008).
+     * records — an attached one rejects instead — and the set is shared with every control-flow
+     * child, so a handle used inside a nested `if` or `for` still reaches the `stmts` root that
+     * reports it for the splice (ADR 0008). A *lambda* body starts a fresh set, for the same reason
+     * [captured] does and with nothing lost by it — see [child].
      */
     internal val referenced: MutableSet<ScopeId> = mutableSetOf(),
     /**
@@ -138,7 +139,7 @@ public class BlockScope internal constructor(
  *   must not drive the enclosing function's inferred return type (ADR 0007). Control-flow
  *   bodies pass false and share the list.
  * @param isolateCaptures true for lambda bodies, whose captures belong to the value they
- *   produce rather than to the enclosing block. Control-flow bodies pass false and share the set.
+ *   produce rather than to the enclosing block. Control-flow bodies pass false and share both sets.
  */
 internal fun BlockScope.child(
     label: String,
@@ -151,9 +152,16 @@ internal fun BlockScope.child(
         id = id.child(label),
         returns = if (isolateReturns) mutableListOf() else returns,
         detachedRoot = detachedRoot,
-        // Never isolated, unlike `returns`: a lambda body inside a pure form still has to report
-        // the outer handles it captured, or the splice would validate an incomplete set.
-        referenced = referenced,
+        // Isolated for a lambda body on exactly the same grounds as `captured`, and nothing is lost
+        // by it: a lambda is a value, so what its body touched has to be attributable to that body
+        // alone. The `stmts` root still learns about a capture made inside a lambda, but through
+        // the lambda *value* — `lambdaOf` puts it in the returned handle's `usedScopes`, and the
+        // enclosing block runs `checkOwned` on that handle wherever it is used, which records it
+        // there. Sharing the set instead made the record flow the other way as well: every lambda
+        // built in a `stmts { }` fragment inherited whatever its *earlier siblings* had touched,
+        // so a lambda capturing nothing foreign was rejected at splice because of a statement
+        // written above it, and reordering the two changed the answer (Task 21, B3).
+        referenced = if (isolateCaptures) mutableSetOf() else referenced,
         captured = if (isolateCaptures) mutableSetOf() else captured,
     )
 

@@ -261,6 +261,66 @@ class LambdasTest {
         assertFailsWith<IllegalStateException> { with(attachedBlock()) { +fragment } }
     }
 
+    /**
+     * A lambda reports what *its own* body captured, not what the fragment around it happens to
+     * have touched. `referenced` is shared down the block tree so a nested use still reaches the
+     * `stmts` root — but a lambda body starts a fresh set, exactly as `captured` does, because the
+     * lambda is a value that can leave the fragment and be judged somewhere else entirely.
+     *
+     * Without that isolation the set was order-dependent: the lambda below captures nothing
+     * foreign, yet inherited `fun(other)` from the statement written *before* it, and every splice
+     * of it anywhere rejected. Moving the two statements past each other changed the answer.
+     */
+    @Test
+    fun `a lambda in a fragment does not inherit a sibling statement's captures`() {
+        val foreign = ScopeId(null, "fun(other)")
+        lateinit var lam: Expr
+        val fragment = stmts {
+            +Expr(CodeBlock.of("leaked"), scope = foreign).call("use")
+            lam = lambda("p") { p -> +p.call("inc") }
+        }
+        assertTrue(lam.usedScopes.isEmpty(), "the lambda captured nothing of its own")
+        assertEquals(setOf(foreign), fragment.usedScopes, "the fragment still reports its own use")
+        // And so the lambda splices anywhere, while the fragment still does not.
+        with(attachedBlock("fun b")) { +lam }
+        assertFailsWith<IllegalStateException> { with(attachedBlock("fun b")) { +fragment } }
+    }
+
+    /**
+     * The other direction, which the isolation must not break: a handle the lambda *did* capture
+     * still reaches the fragment, because the lambda value carries it and the fragment checks the
+     * value where it is used. The two tests are the same scenario with the capture moved inside
+     * and outside the lambda.
+     */
+    @Test
+    fun `a capture made only inside a lambda still reaches the fragment that emits it`() {
+        val foreign = ScopeId(null, "fun(other)")
+        lateinit var lam: Expr
+        val fragment = stmts {
+            lam = lambda { +Expr(CodeBlock.of("leaked"), scope = foreign).call("use") }
+            +lam
+        }
+        assertEquals(setOf(foreign), lam.usedScopes)
+        assertEquals(setOf(foreign), fragment.usedScopes)
+    }
+
+    /**
+     * A lambda built in a fragment and never emitted into it reports its capture on its own, and
+     * leaves the fragment spliceable — nothing was generated into the fragment, so there is nothing
+     * for the fragment to answer for (ADR 0008).
+     */
+    @Test
+    fun `a lambda that escapes a fragment carries its capture alone`() {
+        val foreign = ScopeId(null, "fun(other)")
+        lateinit var lam: Expr
+        val fragment = stmts {
+            lam = lambda { +Expr(CodeBlock.of("leaked"), scope = foreign).call("use") }
+        }
+        assertEquals(setOf(foreign), lam.usedScopes)
+        assertTrue(fragment.usedScopes.isEmpty())
+        assertFailsWith<IllegalStateException> { with(attachedBlock("fun b")) { +lam } }
+    }
+
     @Test
     fun `a foreign handle inside a lambda body is rejected in an attached block`() {
         val foreign = ScopeId(null, "fun(other)")

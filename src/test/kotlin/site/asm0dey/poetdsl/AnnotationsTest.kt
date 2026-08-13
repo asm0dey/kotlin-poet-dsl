@@ -2,6 +2,8 @@ package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.ExperimentalKotlinPoetApi
+import com.squareup.kotlinpoet.INT
+import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.TypeSpec
 import com.tschuchort.compiletesting.KotlinCompilation
 import com.tschuchort.compiletesting.SourceFile
@@ -9,6 +11,7 @@ import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 annotation class Email
@@ -132,5 +135,82 @@ class AnnotationsTest {
         }.compile()
 
         assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+    }
+
+    /**
+     * A Kotlin annotation argument must be a compile-time constant, so a handle — which names a
+     * runtime binding — can never legitimately appear in one. Before this guard, `@Ann(x)` rendered
+     * happily and only `kotlinc` complained, at whatever point the caller got round to compiling
+     * the output.
+     */
+    @Test
+    fun `a handle is rejected as an annotation argument`() {
+        lateinit var handle: Expr
+        stmts { handle = `val`("userName", init = "u".lit) }
+
+        val failure = assertFailsWith<IllegalStateException> {
+            annotation<SerialName>(null, handle)
+        }
+        assertEquals(
+            "annotation: 'userName' is a handle, but a Kotlin annotation argument must be a " +
+                "compile-time constant. Use a literal, or name the constant with " +
+                "member(\"pkg\", \"NAME\").expression() — a handle is rejected even for a " +
+                "`const val`, because an Expr cannot tell one from a local.",
+            failure.message,
+        )
+    }
+
+    /** The same guard on the named-argument overload, the trailing-lambda form and the alias. */
+    @Test
+    fun `every annotation entry point rejects a handle`() {
+        lateinit var handle: Expr
+        stmts { handle = `val`("x", init = 1.lit) }
+        val type = TypeScope(TypeSpec.classBuilder("Holder"), NameScope(null), ScopeId(null, "type"))
+
+        assertFailsWith<IllegalStateException> { annotation<SerialName>("value" to handle) }
+        assertFailsWith<IllegalStateException> { ann<SerialName>(null, handle) }
+        assertFailsWith<IllegalStateException> { ann<SerialName>("value" to handle) }
+        assertFailsWith<IllegalStateException> { annotation(ClassName("p", "A"), null, handle) }
+        assertFailsWith<IllegalStateException> { with(type) { annotate<SerialName>(null, handle) } }
+        assertFailsWith<IllegalStateException> { with(type) { annotate<SerialName>("value" to handle) } }
+    }
+
+    /**
+     * The guard is [Expr.usedScopes], so it also catches an argument merely *derived* from a
+     * handle — and leaves the escape hatch alone, since a raw string carries no scope. That
+     * asymmetry is the documented trade-off, not an accident: the check is sound (it never rejects
+     * a constant), not complete.
+     */
+    @Test
+    fun `the guard follows derived expressions but not raw strings`() {
+        lateinit var handle: Expr
+        stmts { handle = `val`("x", init = 1.lit) }
+
+        assertFailsWith<IllegalStateException> { annotation<SerialName>(null, handle.prop("name")) }
+        assertFailsWith<IllegalStateException> { annotation<SerialName>(null, expression("%L", handle)) }
+        assertEquals(
+            "@site.asm0dey.poetdsl.SerialName(NAME)",
+            annotation<SerialName>(null, expression("NAME")).list.single().toString(),
+        )
+    }
+
+    /**
+     * The one false rejection the guard buys, pinned so it is a known cost rather than a surprise:
+     * a `` const `val` `` declared through the DSL hands back a handle like any other binding, and
+     * `@Ann(MAX)` referring to it would be perfectly legal Kotlin. Nothing in an [Expr] separates a
+     * file-level `const` from a local, and [annotation] takes no scope in which to ask, so it is
+     * rejected too. The workaround is one line and the message names it.
+     */
+    @Test
+    fun `a const val handle is rejected too and member is the way round it`() {
+        lateinit var max: Expr
+        file("com.example", "Api") { max = `val`(KModifier.CONST, "MAX", INT, init = 5.lit) }
+
+        assertFailsWith<IllegalStateException> { annotation<SerialName>(null, max) }
+        assertEquals(
+            "@site.asm0dey.poetdsl.SerialName(com.example.MAX)",
+            annotation<SerialName>(null, member("com.example", "MAX").expression())
+                .list.single().toString(),
+        )
     }
 }

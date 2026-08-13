@@ -27,9 +27,11 @@ internal fun lambdaCode(params: List<String>, body: CodeBlock): CodeBlock =
  * exhaustive over the sealed hierarchy with no `else`, so a fourth scope breaks the build here
  * instead of silently falling through.
  *
- * Inside a block the body is an ordinary child: it shares the enclosing [BlockScope.referenced]
- * set, so a foreign handle used inside the lambda still reaches the `stmts` root that reports it
- * for the splice (ADR 0008). Its [BlockScope.captured] set is fresh, though — see [lambdaOf].
+ * Inside a block the body is a child with both of its ownership records fresh — [BlockScope.captured]
+ * and [BlockScope.referenced] alike (see [BlockScope.child]). A foreign handle used inside the
+ * lambda still reaches the `stmts` root that reports it for the splice (ADR 0008), but through the
+ * lambda *value*: [lambdaOf] puts it in the returned handle's `usedScopes`, and the enclosing block
+ * validates that handle wherever it is used.
  * Outside a block — a lambda at property-initializer or property-delegate position, where only a
  * [FileScope] or [TypeScope] is in scope — there is no enclosing block to inherit from, so the body
  * is its own detached root, recording foreign scopes instead of rejecting them. [lambdaOf] then
@@ -70,7 +72,9 @@ private fun Scope.lambdaBlock(): BlockScope = when (this) {
  *   lambda yet does not enclose that use site, so it stays and the splice re-judges it.
  * - [BlockScope.referenced], the foreign scopes a detached body recorded rather than rejected.
  *   A body built at property position has no enclosing block, so this is where its foreign
- *   handles live; it also carries the record out of a body nested in a [stmts] fragment.
+ *   handles live. It is also the only term that keeps a *nested* lambda's own scope: a handle
+ *   declared inside a nested lambda and used in this body is recorded here, while the filter above
+ *   drops it because this lambda's id does enclose it.
  *
  * The two overlap but neither contains the other, so both branches of [lambdaBlock] report the
  * union.

@@ -164,7 +164,17 @@ internal fun TypeScope.addConstructorParam(
     )
 }
 
-/** Detached type builder; returns a KotlinPoet spec, so interop with hand-written KotlinPoet is free. */
+/**
+ * Detached type builder; returns a KotlinPoet spec, so interop with hand-written KotlinPoet is free.
+ *
+ * That return type is also the reason this is an **unchecked boundary** for ADR 0008. `stmts { }`
+ * can hand its recorded scopes to the splice because [Stmt] is this DSL's own type, introduced for
+ * that purpose; a [TypeSpec] has nowhere to carry a `Set<ScopeId>`, so a handle from an unrelated
+ * scope used inside this body is accepted here and never re-judged when the spec is added. Wrapping
+ * the spec to fix that would take the KotlinPoet type out of the return position, which is the
+ * whole feature. Statements and expressions *inside* the body are still checked against it as
+ * usual; only the final `+spec` is not. See ADR 0008's Task 21 amendment.
+ */
 public fun typeSpec(modifiers: Modifiers? = null, name: String, body: TypeScope.() -> Unit): TypeSpec {
     val scope = TypeScope(
         TypeSpec.classBuilder(name).addModifiers(modifiers.toList()),
@@ -375,7 +385,11 @@ internal const val PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE: String =
         "secondary `constructor`, because the DSL cannot express the required `: this(…)` " +
         "delegation call. Fold the parameters into one constructor."
 
-/** Detached function builder; returns a KotlinPoet spec, so interop is free. */
+/**
+ * Detached function builder; returns a KotlinPoet spec, so interop is free — and, for the same
+ * reason as [typeSpec], is an unchecked boundary for ADR 0008: a [FunSpec] cannot carry the scopes
+ * its body referenced, so adding it validates nothing. See ADR 0008's Task 21 amendment.
+ */
 public fun funSpec(
     modifiers: Modifiers? = null,
     name: String,
@@ -395,6 +409,10 @@ public fun funSpec(
 /**
  * Detached property builder. The type is mandatory for the same reason it is on a `` `val` ``
  * property: KotlinPoet cannot infer one (ADR 0003).
+ *
+ * Like [funSpec] and [typeSpec], an unchecked boundary for ADR 0008: a [PropertySpec] cannot carry
+ * the scopes [init] or [by] were built from, so adding it validates nothing. See ADR 0008's Task 21
+ * amendment.
  */
 public fun propertySpec(
     modifiers: Modifiers? = null,
