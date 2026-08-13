@@ -143,3 +143,43 @@ context(b: BlockScope)
 public fun ret() {
     `return`()
 }
+
+// --- if / elseIf / else ---------------------------------------------------------------------
+
+/**
+ * An `if` whose block is still open. Emitting anything else in the enclosing scope, or
+ * closing that scope, flushes the chain. An unbalanced chain cannot be expressed.
+ */
+public class IfChain internal constructor(private val owner: BlockScope) : PendingFlow {
+    /** `else if (condition) { … }`. */
+    public fun elseIf(condition: Expr, body: BlockScope.() -> Unit): IfChain {
+        owner.checkOwned(condition)
+        owner.builder.nextControlFlow("else·if·(%L)", condition.code)
+        owner.runNested("elseIf", body = body)
+        return this
+    }
+
+    /** `else { … }`. */
+    public fun `else`(body: BlockScope.() -> Unit) {
+        owner.builder.nextControlFlow("else")
+        owner.runNested("else", body = body)
+    }
+
+    override fun close() {
+        owner.builder.endControlFlow()
+    }
+}
+
+/** `if (condition) { … }`, chainable with [IfChain.elseIf] and [IfChain.`else`]. */
+context(b: BlockScope)
+public fun `if`(condition: Expr, body: BlockScope.() -> Unit): IfChain {
+    b.checkOwned(condition)
+    b.flushPending()
+    b.builder.beginControlFlow("if·(%L)", condition.code)
+    b.runNested("if", body = body)
+    return IfChain(b).also { b.pending = it }
+}
+
+/** Alias of [`if`]. */
+context(b: BlockScope)
+public fun ifThen(condition: Expr, body: BlockScope.() -> Unit): IfChain = `if`(condition, body)
