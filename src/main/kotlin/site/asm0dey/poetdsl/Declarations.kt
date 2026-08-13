@@ -167,13 +167,20 @@ internal fun TypeScope.addConstructorParam(
 /**
  * Detached type builder; returns a KotlinPoet spec, so interop with hand-written KotlinPoet is free.
  *
- * That return type is also the reason this is an **unchecked boundary** for ADR 0008. `stmts { }`
- * can hand its recorded scopes to the splice because [Stmt] is this DSL's own type, introduced for
- * that purpose; a [TypeSpec] has nowhere to carry a `Set<ScopeId>`, so a handle from an unrelated
- * scope used inside this body is accepted here and never re-judged when the spec is added. Wrapping
- * the spec to fix that would take the KotlinPoet type out of the return position, which is the
- * whole feature. Statements and expressions *inside* the body are still checked against it as
- * usual; only the final `+spec` is not. See ADR 0008's Task 21 amendment.
+ * That return type makes the type's own *non-block* positions an **unchecked boundary** for ADR
+ * 0008: a property initializer or delegate declared directly on this type
+ * (`` `val`("p", INT, init = leaked()) ``) is built by the same property path `FileScope` and
+ * `TypeScope` share, which never runs `checkOwned` on a binding, so a handle from an unrelated scope
+ * is accepted there and never re-judged. `stmts { }` can hand its recorded scopes to the splice
+ * because [Stmt] is this DSL's own type, introduced for that purpose; a [TypeSpec] has nowhere to
+ * carry one, so the outermost `+spec` has nothing to validate either.
+ *
+ * Member *bodies* are a different story: every `` `fun` `` declared inside this type is built with a
+ * non-null parent scope, so its body is *not* a detached root — a handle from an unrelated scope
+ * used inside `` `fun`("f") { … } `` still throws, exactly as it would nested in an attached type.
+ * Only the type's own non-block positions and the final `+spec` go unchecked; wrapping the spec to
+ * fix that would take the KotlinPoet type out of the return position, which is the whole feature.
+ * See ADR 0008's Task 21 amendment.
  */
 public fun typeSpec(modifiers: Modifiers? = null, name: String, body: TypeScope.() -> Unit): TypeSpec {
     val scope = TypeScope(
@@ -207,8 +214,11 @@ public fun param(name: String, type: TypeName): ParameterSpec = ParameterSpec.bu
  *
  * The body block's [ScopeId] is a child of the parent's, so [checkOwned] accepts a handle declared
  * by any enclosing scope — a constructor parameter or property of the surrounding type, for
- * instance — and rejects one smuggled out of a sibling body (ADR 0008). With no parent, the body is
- * a detached root and records foreign scopes instead of rejecting them, exactly like [typeSpec].
+ * instance — and rejects one smuggled out of a sibling body (ADR 0008). With no parent — [funSpec]
+ * and [propertySpec]'s case — the body is a detached root and records foreign scopes instead of
+ * rejecting them. [typeSpec] always passes a non-null parent into a member `` `fun` ``'s call here,
+ * so a member body is checked like any attached one; only [typeSpec]'s own non-block positions share
+ * this unchecked shape, and by a different mechanism — see [typeSpec]'s KDoc.
  *
  * Return-type inference follows ADR 0007 and is done here because this is the only place that sees
  * both the explicit [returns] and the types the body recorded.

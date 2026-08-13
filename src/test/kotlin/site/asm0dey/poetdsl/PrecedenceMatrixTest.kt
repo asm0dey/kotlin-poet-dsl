@@ -40,6 +40,12 @@ class PrecedenceMatrixTest {
         assertEquals("-a.f()", (-a.call("f")).toString())
         assertEquals("!a", a.not().toString())
         assertEquals("!(a && b)", (a and b).not().toString())
+        // PREFIX ↔ MULTIPLICATIVE: the immediate neighbour below prefix, not previously sampled —
+        // the earlier cases jump straight from prefix to additive and to postfix.
+        assertEquals("-(a * b)", (-(a * b)).toString())
+        // DISJUNCTION under PREFIX: `not()`'s parenthesizing branch was only pinned over
+        // conjunction (`!(a && b)` above); disjunction is a separate, looser neighbour.
+        assertEquals("!(a || b)", (a or b).not().toString())
     }
 
     @Test
@@ -47,6 +53,10 @@ class PrecedenceMatrixTest {
         assertEquals("a + b < c", (a + b lt c).toString())
         assertEquals("a < b == c", ((a lt b) eq c).toString())
         assertEquals("a == (b == c)", (a eq (b eq c)).toString())
+        // EQUALITY as the *left* operand of COMPARISON — the reverse of the case above. EQUALITY
+        // binds looser than COMPARISON, so nesting it on the left needs parentheses it does not
+        // need on the right.
+        assertEquals("(a == b) < c", ((a eq b) lt c).toString())
     }
 
     @Test
@@ -83,9 +93,14 @@ class PrecedenceMatrixTest {
      * one does. The right-chained half was pinned from Task 4 on; the left-chained half — the
      * `left.paren(prec + 1)` branch of [binaryExpr] — is the case that was only ever hand-verified.
      *
-     * `(a ?: b) ?: c` and `a ?: (b ?: c)` mean the same thing, but the parentheses are not
-     * decoration: dropping them from the left-chained form would re-associate it into the *other*
-     * tree, which is exactly the bug this pins.
+     * `(a ?: b) ?: c` and `a ?: (b ?: c)` mean the same thing — elvis is semantically associative,
+     * so dropping the parentheses here would not actually change what either chain evaluates to.
+     * They are still the correct parenthesization, and worth pinning on their own terms: this is the
+     * `left.paren(prec + 1)` branch of the *generic* [binaryExpr], reachable only from a
+     * right-associative operator chained on the left, and the assertion is about that mechanism
+     * (and about [binaryExpr] rendering the minimum parentheses Kotlin's grammar requires) rather
+     * than about `?:` specifically — a future right-associative operator with a non-associative
+     * meaning would have no other test covering this shape.
      */
     @Test
     fun `elvis associativity in both directions`() {

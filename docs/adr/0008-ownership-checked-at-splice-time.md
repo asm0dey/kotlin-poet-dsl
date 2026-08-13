@@ -62,23 +62,48 @@ for exactly that purpose. The detached declaration builders return `FunSpec`, `T
 KotlinPoet is free (it is the entire reason those builders exist). A KotlinPoet spec has
 nowhere to put a `Set<ScopeId>`, and `+spec` therefore has nothing to validate.
 
-Making it work would mean a public wrapper type per builder, plus wrapping overloads of every
-`+`/`emit`/`add`, and it would take the KotlinPoet spec *out* of the return position — which
-is the feature. Three new permanent public types, added the day before the API is locked, to
-close a gap that has a narrower shape than it first looks:
+A public wrapper type per builder, plus wrapping overloads of every `+`/`emit`/`add`, would
+take the KotlinPoet spec *out* of the return position — which is the feature. Three new
+permanent public types, added the day before the API is locked, to close a gap that has a
+narrower shape than it first looks:
 
 - A handle can only reach a detached builder's body if the caller already holds one from
   another scope — the same "smuggled through a Kotlin `var`" move safety layer 2 exists for.
-  The body is a detached root, so it accepts the handle and records it in `referenced`, and
-  nothing later reads that record.
-- Everything the builders *emit into* is still checked. A `Stmt` spliced into a detached
-  `funSpec` body, or an `Expr` used inside it, goes through `checkOwned` against that body.
-  What is unchecked is only the outermost step: adding the finished spec to a file or type.
+  `funSpec` and `propertySpec` have no parent scope at all, so their whole body is a detached
+  root: it accepts the handle and records it in `referenced`, and nothing later reads that
+  record. `typeSpec` is narrower still — every member `` `fun` `` declared inside it is built
+  with a non-null parent, so its body is *not* a detached root and a foreign handle used inside
+  one is rejected exactly as it would be in an attached type. Only `typeSpec`'s own non-block
+  positions — a property initializer or delegate declared directly on the type — go unchecked,
+  and by a different route: the property-building path shared by `FileScope` and `TypeScope`
+  never calls `checkOwned` at all, attached or detached.
+- Everything the builders *emit into* is still checked where it is checked. A `Stmt` spliced
+  into a detached `funSpec` body, or an `Expr` used inside it, goes through `checkOwned` against
+  that body. What is unchecked is the outermost step (adding the finished spec to a file or
+  type) plus, for `typeSpec` only, its own non-block positions.
 
-**Decision:** amend the consequence rather than build the wrappers. The detached declaration
-builders are documented as an unchecked boundary, alongside `expression("…")` — both are
-places where the DSL hands the caller something raw and stops judging it. `Stmt` and `Expr`
-keep the check, because they are the DSL's own types and can afford to carry it.
+**A cheaper third option exists, and was not taken.** Wrapper types are not the only way to
+close the gap: `buildFun`'s `detachedRoot = parent == null` could instead be hardcoded to
+`false`, making a detached body **reject** a foreign handle instead of recording it — the same
+treatment an attached body already gets, with no new public type. Measured against the Task 21
+suite, that one-line change fails exactly two tests, and both exist to pin the non-goal this
+amendment describes: `FunctionsTest.a detached funSpec accepts a foreign handle instead of
+rejecting it` and `StatementsTest.a detached declaration builder does not carry the scopes its
+body used`. Nothing legitimate breaks, because nothing legitimate can reach a detached body from
+outside it: `funSpec`/`propertySpec` take no scope parameter, so a handle from "outside" can only
+name a binding declared in some *other*, unrelated function or property — never one the caller
+was entitled to bring in. (An earlier KDoc defended the current behaviour as protecting "every
+handle the caller legitimately brought in from outside," which does not hold for a detached
+builder: there is no legitimate outside handle for one to protect.) This option was not taken
+here because it is a **behaviour change**, and this task is documentation-only; it is also not a
+binary-compatibility question — nothing about the public signature moves — so it is not locked in
+by Task 22 and remains open to revisit on its own merits later.
+
+**Decision:** amend the consequence rather than build the wrappers, and leave the reject-instead
+option unexercised for now. The detached declaration builders are documented as an unchecked
+boundary, alongside `expression("…")` — both are places where the DSL hands the caller something
+raw and stops judging it. `Stmt` and `Expr` keep the check, because they are the DSL's own types
+and can afford to carry it.
 
 The KDoc on `funSpec`, `typeSpec` and `propertySpec` states this, and the README carries it in
 the limitations section.

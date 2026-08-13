@@ -57,6 +57,14 @@ public operator fun Annotations.plus(other: Annotations): Annotations = Annotati
  * The alternative was to keep rendering `@Ann(x)` for a local and let the caller discover it
  * whenever they next compiled the output. A loud false rejection with a documented workaround beats
  * silently wrong generated code.
+ *
+ * A narrower alternative was weighed for the false-rejection case specifically: an internal
+ * `isConst` flag on [Expr], set only by the binding that declares a `` const `val` ``, would have
+ * let this check tell that one case apart and stop rejecting it, at the cost of one internal field
+ * threaded through every [Expr]-producing call site. Not taken, because `member(…)` is genuinely the
+ * more correct spelling regardless: it resolves the import and is right at every destination a
+ * constant reference is written to, not just this one, so the flag would only have removed a
+ * workaround that is itself an improvement.
  */
 private fun checkAnnotationArgument(arg: Expr) {
     check(arg.usedScopes.isEmpty()) {

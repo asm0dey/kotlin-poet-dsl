@@ -603,10 +603,10 @@ class FunctionsTest {
     /**
      * A detached [funSpec] has no parent scope, so `buildFun` builds its body with
      * `detachedRoot = true` and an outer handle is *recorded* rather than rejected — the same call
-     * `stmts { }` and `typeSpec { }` make. Building it with `detachedRoot = false` instead would
-     * reject every handle the caller legitimately brought in from outside, which is the whole point
-     * of a detached builder. Nothing re-judges the record afterwards, because a `FunSpec` has no
-     * channel to carry it to a splice; that is inherent to returning a KotlinPoet spec.
+     * `stmts { }` makes, and the same shape `typeSpec { }` has at its own non-block positions
+     * (`typeSpec`'s member `` `fun` ``s, unlike `funSpec`'s body, get a non-null parent and are
+     * checked normally). Nothing re-judges the record afterwards, because a `FunSpec` has no channel
+     * to carry it to a splice; that is inherent to returning a KotlinPoet spec.
      */
     @Test
     fun `a detached funSpec accepts a foreign handle instead of rejecting it`() {
