@@ -24,6 +24,7 @@ import site.asm0dey.poetdsl.ParamKind.VAR
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -338,6 +339,28 @@ class KindBodyTest {
         assertTrue("public fun f(): Int\n" in external, external)
         assertTrue("public fun g(): Int\n" in external, external)
         assertTrue("public fun h(): Int\n" in external, external)
+    }
+
+    /**
+     * **The detached boundary.** `funSpec` passes `parent = null`, so the two container-dependent
+     * halves of this rule's exemption set — the container's `expect`-ness and its `external`-ness —
+     * have no answer here, and the same spec is a valid signature the moment it is spliced into an
+     * `expect` or `external` type. [PropertyContainer.UNKNOWN] is this project's settled answer for
+     * exactly that shape, so a null parent takes the permissive branch.
+     */
+    @Test
+    @OptIn(org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi::class)
+    fun `a detached funSpec with a return type and no body renders a signature`() {
+        val spec = funSpec(name = "f", returns = INT) { }
+        // Detached, the empty body is still there; it is the *splice* that decides whether
+        // KotlinPoet omits it, which is exactly what this builder cannot know.
+        assertEquals("public fun f(): kotlin.Int {\n}\n", spec.toString())
+        // …and both destinations that make it valid, at the top level and one level down.
+        val expect = render { `class`(EXPECT, "E") { +spec; `class`("N") { +spec } } }
+        assertTrue("public fun f(): Int\n" in expect, expect)
+        assertFalse("missing return statement" in compileMultiplatform(expect).messages, expect)
+        val external = render { `class`(EXTERNAL, "X") { +spec; `class`("N") { +spec } } }
+        assertCompilesEverywhereButJvm(external)
     }
 
     // --- a `data class` and its primary constructor --------------------------------------------

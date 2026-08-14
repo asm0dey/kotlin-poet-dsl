@@ -246,6 +246,12 @@ internal val Scope.isExternalContainer: Boolean
  * | `EXTERNAL` in its own modifiers, or in the container's at any depth | `canBodyBeOmitted` |
  * | a constructor | `canBodyBeOmitted` |
  * | no return type, or `Unit` | there is nothing to return |
+ * | [funSpec]'s detached builder | it has no container, and two of the rows above are the container's |
+ *
+ * The last row is [PropertyContainer.UNKNOWN]'s rule on the function side: a detached spec cannot be
+ * given a container, an `expect`/`external` body is a legitimate destination for it, and
+ * `funSpec(name = "f", returns = INT) { }` spliced into one renders `public fun f(): Int` — a
+ * signature, and valid. Refusing it here is a refusal of output a target accepts.
  *
  * Measured, one file per row, all three frontends (the `external` rows on Kotlin/JS and
  * Kotlin/Wasm, which is where `external` compiles at all — D37's platform rule):

@@ -964,11 +964,20 @@ internal fun buildFun(
                 // `inferReturnType` answers null for one. See [missingReturnStatement].
                 if (inferred != null && inferred != UNIT && scope.builder.build().isEmpty()) {
                     val declaredModifiers = modifiers.toList()
-                    val bodyOmitted = KModifier.ABSTRACT in declaredModifiers ||
+                    // `parent == null` is [funSpec]'s detached builder, and it takes the permissive
+                    // branch for the reason [PropertyContainer.UNKNOWN] gives: a detached spec has
+                    // no container and cannot be given one, two of the five terms below are the
+                    // container's, and an `expect`/`external` type's body is a legitimate
+                    // destination — `funSpec(name = "f", returns = INT) { }` spliced into one
+                    // renders `public fun f(): Int`, which is a signature and is valid. Refusing it
+                    // here would be a refusal of output some target accepts, which is the direction
+                    // Global Constraint 26's second half forbids.
+                    val bodyOmitted = parent == null ||
+                        KModifier.ABSTRACT in declaredModifiers ||
                         KModifier.EXPECT in declaredModifiers ||
                         KModifier.EXTERNAL in declaredModifiers ||
-                        parent?.isExpectContainer == true ||
-                        parent?.isExternalContainer == true
+                        parent.isExpectContainer ||
+                        parent.isExternalContainer
                     if (!bodyOmitted) missingReturnStatement(name, inferred)
                 }
                 // The `@return` half of the receiverKdoc check above. `inferred == null` is the
