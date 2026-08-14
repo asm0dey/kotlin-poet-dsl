@@ -52,3 +52,19 @@ iterable handle's name (`items` → `item`, `users` → `user`), else `item`.
   name nobody asked for. `propertyOf` and `addConstructorParam` reject that case outright
   with a named `check`, the same way a duplicate type name is already rejected — cross-construct
   collisions are unaffected and still uniquify as above.
+- **Amendment (E2a): an extension property is exempt from the uniquifier, and its duplicate key
+  is the receiver plus the name.** An extension property's name is only ever reached through a
+  receiver, so it shadows nothing and nothing shadows it. Running it through the uniquifier was
+  measured renaming `val Int.size` to `size2` merely because `val String.size` had been declared
+  above it — a public API name invented for a collision Kotlin does not have. `propertyOf`
+  therefore declares an extension property under the name it was given, unchanged.
+
+  The D21 rejection above moves with it: two properties collide when they share a name **and a
+  receiver**, so the registered key is `"$receiver.$name"` for an extension property and the bare
+  name for a plain one. `val String.size` and `val Int.size` are two legal declarations and both
+  are accepted; a second `val String.size` in the same container is still rejected, with
+  `A property named "kotlin.String.size" is already declared in this scope.`
+
+  Nothing else changes: a plain property still steps over the names a member body can see (and,
+  in a type, over D30's plain constructor parameters), and cross-construct collisions still
+  uniquify.
