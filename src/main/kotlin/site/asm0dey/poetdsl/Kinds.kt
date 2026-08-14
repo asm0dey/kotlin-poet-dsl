@@ -218,6 +218,55 @@ internal fun annotationHasNoSupertypes(construct: String): Nothing = kindRefusal
 )
 
 /**
+ * Whether an **abstract member** may be declared in this scope — a function here, and a property
+ * through [PropertyContainer.abstractAllowed], which reads this.
+ *
+ * Exactly Kotlin's list, which is narrower than KotlinPoet's on one row: KotlinPoet's `build()`
+ * accepts an abstract member in an `abstract object` (`isAbstract = ABSTRACT in modifiers || SEALED
+ * in modifiers || kind == INTERFACE || isEnum`, `TypeSpec.kt:861`), and Kotlin has no such thing.
+ * Measured, one file per row, all three frontends identical:
+ *
+ *     interface I       { abstract fun f(): Int }   clean      enum class E { ; abstract fun f(): Int }
+ *     abstract class A  { abstract fun f(): Int }   clean      sealed class S { abstract fun f(): Int }
+ *     expect abstract class X { abstract fun f(): Int }        clean
+ *
+ *     class C           { abstract fun f(): Int }   abstract function 'f' in non-abstract class 'C'.
+ *     data class D(val a: Int) { abstract fun f(): Int }
+ *     open class O      { abstract fun f(): Int }
+ *     object O          { abstract fun f(): Int }
+ *     class C { companion object { abstract fun f(): Int } }
+ *     expect class E    { abstract fun f(): Int }   — `expect` is not a licence for an abstract
+ *                                                     member; `expect abstract class` is
+ *     abstract fun f(): Int                         — at file level, *modifier 'abstract' is not
+ *                                                     applicable to 'top level function'*
+ *
+ * Every refused row raised **KotlinPoet's own `IllegalArgumentException`** — *non-abstract type C
+ * cannot declare abstract function f*, Global Constraint 26's forbidden type, naming neither this
+ * DSL's construct nor the modifier the caller passed. 30 cells of the matrix.
+ *
+ * One fact, one reader: [PropertyContainer] used to spell this list out privately, which is how the
+ * property side came to have it and the function side came to have nothing at all.
+ */
+internal val Scope.abstractMemberAllowed: Boolean
+    get() = this is TypeScope && (
+        kindName == "interface" || (
+            kindName == "class" && builder.modifiers.any {
+                it == KModifier.ABSTRACT || it == KModifier.SEALED || it == KModifier.ENUM
+            }
+            )
+        )
+
+/** See [abstractMemberAllowed]. */
+internal fun Scope.abstractNeedsAnAbstractContainer(construct: String, name: String): Nothing =
+    kindRefusal(
+        construct,
+        "'$name' is ABSTRACT and is declared in ${containerLabel()}, which is not abstract, so " +
+            "nothing can ever override it",
+        "abstract function '$name' in non-abstract class",
+        "Declare the container ABSTRACT or SEALED, make it an interface, or give '$name' a body.",
+    )
+
+/**
  * Whether a classifier may be declared *inside* this one.
  *
  * An `inner class` is the one container that holds no nested classifier at all, and the exception is

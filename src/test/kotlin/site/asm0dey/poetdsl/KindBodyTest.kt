@@ -2,10 +2,13 @@ package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.INT
+import com.squareup.kotlinpoet.KModifier.ABSTRACT
 import com.squareup.kotlinpoet.KModifier.ANNOTATION
 import com.squareup.kotlinpoet.KModifier.DATA
 import com.squareup.kotlinpoet.KModifier.ENUM
+import com.squareup.kotlinpoet.KModifier.EXPECT
 import com.squareup.kotlinpoet.KModifier.INNER
+import com.squareup.kotlinpoet.KModifier.OPEN
 import com.squareup.kotlinpoet.KModifier.SEALED
 import com.squareup.kotlinpoet.KModifier.VALUE
 import site.asm0dey.poetdsl.ParamKind.VAL
@@ -215,6 +218,53 @@ class KindBodyTest {
                 }
             },
         )
+    }
+
+    // --- an abstract function needs a container that can hold one -----------------------------
+
+    @Test
+    fun `an abstract function is refused where Kotlin has nothing to override it`() {
+        val containers: List<Pair<String, FileScope.() -> Unit>> = listOf(
+            "class" to { `class`("C") { `fun`(ABSTRACT, "f", returns = INT) { } } },
+            "data class" to {
+                `class`(DATA, "C", param(VAL, "a", INT)) { `fun`(ABSTRACT, "f", returns = INT) { } }
+            },
+            "open class" to { `class`(OPEN, "C") { `fun`(ABSTRACT, "f", returns = INT) { } } },
+            "object" to { `object`("O") { `fun`(ABSTRACT, "f", returns = INT) { } } },
+            "companion object" to {
+                `class`("C") { companionObject { `fun`(ABSTRACT, "f", returns = INT) { } } }
+            },
+            "file" to { `fun`(ABSTRACT, "f", returns = INT) { } },
+            "expect class" to {
+                `class`(EXPECT, "E") { `fun`(ABSTRACT, "f", returns = INT) { } }
+            },
+        )
+        containers.forEach { (label, body) ->
+            val m = message(body)
+            assertTrue("abstract function 'f' in non-abstract class" in m, "$label: $m")
+        }
+    }
+
+    /** The control rows: the four containers that do hold an abstract member. */
+    @Test
+    fun `an abstract function still renders in an interface, an abstract, a sealed and an enum class`() {
+        assertCompiles(
+            render {
+                `interface`("I") { `fun`(ABSTRACT, "f", returns = INT) { } }
+                `class`(ABSTRACT, "A") { `fun`(ABSTRACT, "f", returns = INT) { } }
+                `class`(SEALED, "S") { `fun`(ABSTRACT, "f", returns = INT) { } }
+                `class`(ENUM, "E") { `fun`(ABSTRACT, "f", returns = INT) { } }
+                // Depth: the immediate container decides, so an abstract class nested in an
+                // object still holds one.
+                `object`("O") { `class`(ABSTRACT, "N") { `fun`(ABSTRACT, "f", returns = INT) { } } }
+            },
+        )
+        // `expect abstract class X { abstract fun f(): Int }` is clean on all three frontends and
+        // is the control for the `expect class` row above — asserted on the render rather than
+        // compiled here, since a single-file `expect` has no `actual` to pair with.
+        val expected = render { `class`(EXPECT + ABSTRACT, "X") { `fun`(ABSTRACT, "f", returns = INT) { } } }
+        assertTrue("public expect abstract class X" in expected, expected)
+        assertTrue("public abstract fun f(): Int" in expected, expected)
     }
 
     private companion object {

@@ -351,15 +351,11 @@ private fun Scope.propertyContainer(): PropertyContainer {
         // and read through [Scope.isExpectContainer], the one predicate every member of the `expect`
         // family asks (see [Expect]), so that a property is not answering it privately.
         isExpectContext = isExpectContainer,
-        // Exactly Kotlin's list, which is narrower than KotlinPoet's on one row: KotlinPoet accepts
-        // an abstract property in an `abstract object`, and Kotlin has no such thing. `kindName`
-        // separates the three builders this DSL uses — `classBuilder`, `objectBuilder`,
-        // `interfaceBuilder` — plus the companion object's, which is `"companion object"`.
-        abstractAllowed = kindName == "interface" || (
-            kindName == "class" && typeModifiers.any {
-                it == KModifier.ABSTRACT || it == KModifier.SEALED || it == KModifier.ENUM
-            }
-            ),
+        // [Scope.abstractMemberAllowed], not this list written out again: the same question is
+        // asked of a *function* in `declareFun`, and the two had drifted to the point where the
+        // property side refused what the function side handed to KotlinPoet's own
+        // `IllegalArgumentException`. See [Kinds] for the measured rows.
+        abstractAllowed = abstractMemberAllowed,
         // Both of these read the **immediate** builder's own modifiers, and not [TypeScope.isExpect]
         // or anything else inherited, because that is exactly what decides whether the keyword
         // reaches the output: KotlinPoet hands a `TypeSpec`'s own `EXPECT`/`EXTERNAL` down to its

@@ -1015,6 +1015,9 @@ internal fun Scope.declareFun(spec: FunSpec) {
     // (Global Constraint 26's forbidden type, naming neither construct), and the abstract row with
     // `IllegalArgumentException: non-abstract type N cannot declare abstract function f`. See [Kinds].
     if (!membersAllowed) annotationHoldsNoMembers("`fun`", "'${spec.name}'")
+    if (KModifier.ABSTRACT in spec.modifiers && !abstractMemberAllowed) {
+        abstractNeedsAnAbstractContainer("`fun`", spec.name)
+    }
     when (this) {
         is FileScope -> builder.addFunction(spec)
         is TypeScope -> builder.addFunction(spec)
