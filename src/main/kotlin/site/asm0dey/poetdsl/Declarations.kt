@@ -103,6 +103,13 @@ internal fun Scope.declareType(
     // applicable to 'interface'* in every container, including a file, where the container rule
     // below would have said "not applicable inside 'file'". See [Applicability] and D42.
     checkModifiers("`$kindName`", declarationForm(kindName), "'$name'", modifiers.toList())
+    // …and the container half of the same axis. A classifier's only container-keyed modifier is
+    // PROTECTED: `final class M` and `open class M` are ordinary top-level Kotlin, so
+    // [MEMBER_INHERITANCE_MODIFIERS] is a member's question and is asked in [buildFun] and
+    // [checkProperty], not here.
+    if (KModifier.PROTECTED in modifiers.toList() && !protectedAllowed) {
+        protectedNeedsAClass("`$kindName`", "'$name'", noun = null)
+    }
     // The two rules of the classifier-kind family that are about *this* declaration's placement
     // rather than about its body, asked before the name is registered so that a refused declaration
     // does not burn a name — the same ordering Task 12 gave a rejected binding. See [Kinds] for the
@@ -803,6 +810,29 @@ internal fun buildFun(
                 "top level function"
             },
         )
+    }
+    // …and the container half, for a function only: a **secondary constructor** is inside a class by
+    // construction, and its own modifier set is already down to a visibility and `actual`. `parent
+    // == null` is the detached [funSpec], where every container-keyed rule is off for
+    // [PropertyContainer.UNKNOWN]'s reason.
+    if (kind == FunKind.FUNCTION && parent != null) {
+        val declaredModifiers = modifiers.toList()
+        if (KModifier.PROTECTED in declaredModifiers && !parent.protectedAllowed) {
+            parent.protectedNeedsAClass(
+                "`fun`",
+                "'$name'",
+                noun = when (parent) {
+                    is TypeScope -> null
+                    is BlockScope -> "local function"
+                    is FileScope -> "top level function"
+                },
+            )
+        }
+        if (parent !is TypeScope) {
+            declaredModifiers.firstOrNull { it in MEMBER_INHERITANCE_MODIFIERS }?.let {
+                memberModifierNeedsAType("`fun`", "'$name'", it, "top level function")
+            }
+        }
     }
     // Before anything is built: a function's type parameters take no declaration-site variance, and
     // take `reified` only when the function is `inline`. Both render happily in KotlinPoet and

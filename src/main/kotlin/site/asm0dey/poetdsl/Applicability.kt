@@ -287,11 +287,127 @@ internal fun checkModifiers(
 /**
  * `const` is a `val`'s modifier: *modifier 'const' is not applicable to 'vars'* on all three
  * frontends, in every container. Its *container* rule — top level, a named object or a companion
- * object — is a separate question and is asked separately.
+ * object — is a separate question and is asked separately, through
+ * [PropertyContainer.constAllowed].
  */
 internal fun constNeedsAVal(construct: String, name: String): Nothing = kindRefusal(
     construct,
     "'$name' is CONST and is declared with `var`, and a compile-time constant cannot be reassigned",
     "modifier 'const' is not applicable to 'vars'",
     "Declare '$name' with `val`, or drop CONST.",
+)
+
+/** See [PropertyContainer.constAllowed]. */
+internal fun constNeedsATopLevelOrObjectContainer(construct: String, name: String): Nothing = kindRefusal(
+    construct,
+    "'$name' is CONST and is declared in a class body, where a compile-time constant has no place " +
+        "to live — a `const val` belongs to the file or to the object, never to an instance",
+    "const 'val' is only allowed on top level, in named objects, in companion objects or " +
+        "companion blocks",
+    "Declare '$name' at file level, in a named object or in the class's companionObject — or drop " +
+        "CONST, which leaves an ordinary `val`.",
+)
+
+// --------------------------------------------------------------------------------------------
+// The container half of the modifier axis: which modifiers this *place* accepts, as opposed to
+// which the declaration form accepts. Both halves are needed and they are separate questions —
+// `protected` is applicable to a class, an interface and an object alike as a *form*, and is legal
+// only inside a class as a *place*.
+
+/**
+ * Whether a declaration written in this scope may be `protected`.
+ *
+ * `protected` names a visibility to subclasses, so it needs a container that can have one. Measured,
+ * one file per row, `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10, all three identical:
+ *
+ *     protected class M                        modifier 'protected' is not applicable inside 'file'.
+ *     protected fun f() { }                    …to 'top level function'.
+ *     protected val p: Int = 1                 …to 'top level property with backing field'.
+ *     object O    { protected val x: Int = 1 } …inside 'standalone object'.
+ *     object O    { protected class M }        …inside 'standalone object'.
+ *     interface I { protected val x: Int }     …inside 'interface'.
+ *     interface I { protected class M }        …inside 'interface'.
+ *
+ * and the controls, clean on all three:
+ *
+ *     class Holder { protected class O ; protected object P ; protected interface Q }
+ *     open class C { protected val g: Int = 1 ; protected fun j() { } }
+ *
+ * So the answer is "the container is a class", which is [TypeScope.kindName] and nothing else — an
+ * `enum`, a `sealed`, an `abstract`, a `data` and a `value class` all answer `"class"` and all take
+ * a `protected` member. A **companion object** does not, and neither does a plain object: both are
+ * `"named object"`/`"companion object"` here.
+ */
+internal val Scope.protectedAllowed: Boolean
+    get() = this is TypeScope && kindName == "class"
+
+/**
+ * The property side of [protectedNeedsAClass], which reads a [PropertyContainer] rather than a
+ * [Scope] — the property family's own boundary, so that the detached `propertySpec` answers
+ * [PropertyContainer.UNKNOWN] here as it does everywhere else. The noun the frontends print for a
+ * property depends on whether it has a backing field, so this one is deliberately quoted short.
+ */
+internal fun protectedNotAllowedHere(construct: String, name: String): Nothing =
+    kindRefusal(
+        construct,
+        "'$name' is PROTECTED and its container — a file, an interface, an object or a companion " +
+            "object — has no subclass for the visibility to mean anything to",
+        "modifier 'protected' is not applicable",
+        "Use PRIVATE, INTERNAL or PUBLIC, or move the property into a class.",
+    )
+
+/** See [protectedAllowed]. [noun] is the frontends' own, which differs per form. */
+internal fun Scope.protectedNeedsAClass(construct: String, subject: String, noun: String?): Nothing =
+    kindRefusal(
+        construct,
+        "$subject is PROTECTED and is declared in ${containerLabel()}, which has no subclass for " +
+            "the visibility to mean anything to",
+        if (noun == null) {
+            "modifier 'protected' is not applicable inside '${protectedContainerNoun()}'"
+        } else {
+            "modifier 'protected' is not applicable to '$noun'"
+        },
+        "Use PRIVATE, INTERNAL or PUBLIC, or move the declaration into a class.",
+    )
+
+/** The bare noun *modifier 'protected' is not applicable inside 'x'* names. */
+private fun Scope.protectedContainerNoun(): String = when (this) {
+    is FileScope -> "file"
+    is BlockScope -> "block"
+    is TypeScope -> if (kindName == "named object") "standalone object" else kindName
+}
+
+/**
+ * `final`, `open` and `override` are a **member's** modifiers: each of them is about overriding, and
+ * a top-level declaration is not in a hierarchy. Measured, all three frontends identical:
+ *
+ *     final fun f() { }      modifier 'final' is not applicable to 'top level function'.
+ *     open fun f() { }       modifier 'open' …
+ *     override fun f() { }   modifier 'override' …
+ *     final val p: Int = 1   modifier 'final' is not applicable to 'top level property with
+ *     open val p: Int = 1    backing field'.
+ *     override val p: Int = 1
+ *
+ * and the controls, clean on all three: the same six inside `open class C { … }`, plus
+ * `object O { final val x: Int = 1 }` — which is why this is keyed on the *file* and not on
+ * "a class", the reading [protectedAllowed] takes and this one deliberately does not.
+ *
+ * A **classifier** is untouched: `final class M` and `open class M` are ordinary top-level Kotlin.
+ */
+internal val MEMBER_INHERITANCE_MODIFIERS: List<KModifier> =
+    listOf(KModifier.FINAL, KModifier.OPEN, KModifier.OVERRIDE)
+
+/** See [MEMBER_INHERITANCE_MODIFIERS]. */
+internal fun memberModifierNeedsAType(
+    construct: String,
+    subject: String,
+    modifier: KModifier,
+    noun: String,
+): Nothing = kindRefusal(
+    construct,
+    "$subject is $modifier and is declared at file level, where there is no hierarchy for it to " +
+        "be part of",
+    "modifier '${modifier.name.lowercase()}' is not applicable to '$noun'",
+    "Drop $modifier — a top-level declaration is final and overrides nothing — or move the " +
+        "declaration into a class.",
 )

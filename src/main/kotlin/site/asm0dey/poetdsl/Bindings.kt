@@ -298,6 +298,9 @@ internal class PropertyContainer(
     val externalAllowed: Boolean,
     val membersAllowed: Boolean,
     val funInterface: Boolean,
+    val protectedAllowed: Boolean,
+    val memberInheritanceAllowed: Boolean,
+    val constAllowed: Boolean,
 ) {
     /** See [backingFieldDenial]. */
     val backingFieldAllowed: Boolean get() = backingFieldDenial == null
@@ -325,6 +328,9 @@ internal class PropertyContainer(
             membersAllowed = true,
             backingFieldDenial = null,
             funInterface = false,
+            protectedAllowed = true,
+            memberInheritanceAllowed = true,
+            constAllowed = true,
         )
     }
 }
@@ -348,6 +354,17 @@ private fun Scope.propertyContainer(): PropertyContainer {
             // [Scope.membersAllowed], which is true here: a *file* is not an annotation class. Read
             // through the shared predicate for the same reason `isExpectContext` is.
             membersAllowed = membersAllowed,
+            // [Scope.protectedAllowed], false here — a file has no subclass for the visibility to
+            // mean anything to. Read through the shared predicate, which `declareFun` and
+            // `declareType` also read, so the modifier axis has one reader as the `expect` family
+            // has one in `isExpectContainer`.
+            protectedAllowed = protectedAllowed,
+            // `final`, `open` and `override` are a member's modifiers, and this branch is not a
+            // member's container. See [MEMBER_INHERITANCE_MODIFIERS].
+            memberInheritanceAllowed = false,
+            // …and the one modifier whose container rule points the other way: a `const val` belongs
+            // to the file or to an object, and the file is where it is most at home.
+            constAllowed = true,
         )
     }
     val typeModifiers = builder.modifiers
@@ -402,6 +419,16 @@ private fun Scope.propertyContainer(): PropertyContainer {
         // `addInitializerBlock` and the two supertype constructs read, so the kind family has one
         // reader here as the `expect` family has one in `isExpectContainer`.
         membersAllowed = membersAllowed,
+        // [Scope.protectedAllowed] — a class body and nothing else. An interface and an object both
+        // answer false here and both refuse a `protected` member on all three frontends.
+        protectedAllowed = protectedAllowed,
+        // Any type body will do for `final`/`open`/`override`: `object O { final val x: Int = 1 }`
+        // is clean, so this is keyed on the *file* and not on "a class", which is the reading
+        // [protectedAllowed] takes and this one deliberately does not. Two questions, two fields.
+        memberInheritanceAllowed = true,
+        // A `const val` lives at file level, in a named object or in a companion object — never on
+        // an instance. `kindName` separates all three of this DSL's type builders.
+        constAllowed = kindName == "named object" || kindName == "companion object",
     )
 }
 
@@ -451,10 +478,41 @@ internal fun checkProperty(
     // PROPERTY* — which Global Constraint 26 forbids and which names neither the construct nor the
     // property. 152 cells of D42's matrix, all from this one row. See [Applicability].
     checkModifiers(construct, DeclarationForm.PROPERTY, "'$name'", declared)
-    // `const` is a `val`'s modifier and this is the only place that knows which one this is. Its
-    // *container* rule — top level, a named object or a companion object — is a different question
-    // and is asked separately.
-    if (KModifier.CONST in declared && mutable) constNeedsAVal(construct, name)
+    // `const` is a `val`'s modifier and this is the only place that knows which one this is; its
+    // *container* rule is the next question down, and they are separate because a `const var` is
+    // wrong in every container and a `const val` is wrong in only some.
+    if (KModifier.CONST in declared) {
+        if (mutable) constNeedsAVal(construct, name)
+        if (!container.constAllowed) constNeedsATopLevelOrObjectContainer(construct, name)
+    }
+    // The container half of the modifier axis on the property side, reading the same two predicates
+    // `declareType` and `buildFun` read. The noun is the frontends' own and depends on the
+    // container, which is why it is built here rather than inside the refusal.
+    if (KModifier.PROTECTED in declared && !container.protectedAllowed) {
+        protectedNotAllowedHere(construct, name)
+    }
+    if (!container.memberInheritanceAllowed) {
+        declared.firstOrNull { it in MEMBER_INHERITANCE_MODIFIERS }?.let {
+            memberModifierNeedsAType(
+                construct, "'$name'", it,
+                if (init != null || by != null) {
+                    "top level property with backing field"
+                } else {
+                    "top level property without backing field or delegate"
+                },
+            )
+        }
+    }
+    // `lateinit` promises the value arrives later, so a property that already has one is a
+    // contradiction — decidable from the two things this function is handed, in every container.
+    check(KModifier.LATEINIT !in declared || (init == null && by == null)) {
+        "$construct: '$name' is LATEINIT and is given " +
+            (if (init != null) "an initializer" else "a delegate") +
+            ", so this is \"'lateinit' modifier is not allowed on properties with " +
+            (if (init != null) "initializer" else "delegate") +
+            "\" on the JVM, on Kotlin/JS and on Kotlin/Wasm alike. Drop LATEINIT, or drop the " +
+            (if (init != null) "initializer" else "delegate") + "."
+    }
     // Before every other question, because there is no property here to ask them about: an
     // `annotation class` holds no member of any kind, so its `val`, its `var` and its `val … get()`
     // are one refusal and not three. All three **rendered** — *members are prohibited in annotation

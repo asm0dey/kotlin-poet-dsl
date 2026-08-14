@@ -185,7 +185,12 @@ class ParametersTest {
     @Test
     fun `a default value on an overriding function's parameter is rejected`() {
         val e = assertFailsWith<IllegalStateException> {
-            file("com.example", "A") { `fun`(OVERRIDE, "f", param("x", INT, default = 1.lit)) { } }
+            // Inside a class: `override` at file level is *modifier 'override' is not applicable
+            // to 'top level function'* and is refused one rule earlier (D42's container half), so
+            // the shape this test is about has to be written where `override` is legal at all.
+            file("com.example", "A") {
+                `class`("C") { `fun`(OVERRIDE, "f", param("x", INT, default = 1.lit)) { } }
+            }
         }
         assertEquals(
             "param: \"x\" carries a default value and 'f' is `override`, which Kotlin does not " +

@@ -444,4 +444,117 @@ class ModifierApplicabilityTest {
         val none = message { `class`(VARARG, "M") { } }
         assertTrue("Drop VARARG." in none, none)
     }
+
+    // --- the container half ---------------------------------------------------------------------
+
+    /**
+     * `protected` names a visibility to subclasses, so it needs a container that can have one.
+     * Measured, all three frontends identical: a file, a standalone object, a companion object and
+     * an interface all refuse it, and a class body — including `enum`, `sealed`, `abstract`, `data`
+     * and `value` — takes it.
+     */
+    @Test
+    fun `protected needs a class around it`() {
+        listOf<Pair<String, FileScope.() -> Unit>>(
+            "a class at file level" to { `class`(PROTECTED, "M") { } },
+            "an interface at file level" to { `interface`(PROTECTED, "I") { } },
+            "an object at file level" to { `object`(PROTECTED, "O") { } },
+            "a class in an object" to { `object`("O") { `class`(PROTECTED, "M") { } } },
+            "a class in an interface" to { `interface`("I") { `class`(PROTECTED, "M") { } } },
+            "a class in a companion object" to {
+                `class`("C") { companionObject { `class`(PROTECTED, "M") { } } }
+            },
+            "a function at file level" to { `fun`(PROTECTED, "f") { } },
+            "a function in an object" to { `object`("O") { `fun`(PROTECTED, "f") { } } },
+            "a property at file level" to { `val`(PROTECTED, "p", INT, 1.lit) },
+            "a property in an interface" to { `interface`("I") { `val`(PROTECTED, "p", INT) } },
+            "a property in an object" to { `object`("O") { `val`(PROTECTED, "p", INT, 1.lit) } },
+        ).forEach { (label, body) ->
+            val m = message(body)
+            assertTrue("modifier 'protected' is not applicable" in m, "$label: $m")
+        }
+    }
+
+    /** The control rows: every container that does take a `protected` member, and both depths. */
+    @Test
+    fun `protected still renders in a class body`() {
+        assertCompiles(
+            render {
+                `class`(OPEN, "C") {
+                    `class`(PROTECTED, "M") { }
+                    `interface`(PROTECTED, "I") { }
+                    `object`(PROTECTED, "O") { }
+                    `val`(PROTECTED, "p", INT, 1.lit)
+                    `fun`(PROTECTED, "f") { }
+                    `constructor`(PROTECTED, param("q", INT)) { }
+                }
+                `class`(ABSTRACT, "A") { `val`(PROTECTED, "p", INT, 1.lit) }
+                `class`(SEALED, "S") { `fun`(PROTECTED, "f") { } }
+                `class`(ENUM, "E") { `fun`(PROTECTED, "f") { } }
+                `class`("Outer") { `class`(OPEN, "Inner") { `val`(PROTECTED, "p", INT, 1.lit) } }
+            },
+        )
+        // …and the detached builders, which have no container and must not answer for one.
+        assertTrue("protected" in typeSpec(PROTECTED.toModifiers(), name = "M") { }.toString())
+        assertTrue("protected" in funSpec(PROTECTED.toModifiers(), name = "f") { }.toString())
+        assertTrue(
+            "protected" in propertySpec(PROTECTED.toModifiers(), name = "p", type = INT, init = 1.lit)
+                .toString(),
+        )
+    }
+
+    /**
+     * `final`, `open` and `override` are a **member's** modifiers and a top-level declaration is in
+     * no hierarchy. Keyed on the file rather than on "a class", because `object O { final val x = 1 }`
+     * is clean — the reading `protected` deliberately does not take.
+     */
+    @Test
+    fun `final, open and override need a type around them`() {
+        listOf(FINAL, OPEN, OVERRIDE).forEach { modifier ->
+            val word = modifier.name.lowercase()
+            val fn = message { `fun`(modifier, "f") { } }
+            assertTrue("modifier '$word' is not applicable to 'top level function'" in fn, fn)
+            val prop = message { `val`(modifier, "p", INT, 1.lit) }
+            assertTrue(
+                "modifier '$word' is not applicable to 'top level property with backing field'" in prop,
+                prop,
+            )
+        }
+        // …and a classifier is untouched: `final class M` and `open class M` are ordinary Kotlin.
+        assertCompiles(render { `class`(FINAL, "M") { }; `class`(OPEN, "N") { } })
+        // …as is any type body, including an object's.
+        assertCompiles(
+            render {
+                `object`("O") { `val`(FINAL, "x", INT, 1.lit) }
+                `class`(OPEN, "C") { `fun`(OPEN, "f") { }; `val`(FINAL, "y", INT, 1.lit) }
+            },
+        )
+        // …and the detached builders answer for no container.
+        assertTrue("final" in funSpec(FINAL.toModifiers(), name = "f") { }.toString())
+    }
+
+    /** A `const val` belongs to the file or to an object, never to an instance. */
+    @Test
+    fun `const needs a file or an object around it`() {
+        val m = message { `class`("C") { `val`(CONST, "x", INT, 1.lit) } }
+        assertTrue("const 'val' is only allowed on top level, in named objects" in m, m)
+        assertCompiles(
+            render {
+                `val`(CONST, "a", INT, 1.lit)
+                `object`("O") { `val`(CONST, "b", INT, 1.lit) }
+                `class`("C") { companionObject { `val`(CONST, "c", INT, 1.lit) } }
+            },
+        )
+        assertTrue(
+            "const" in propertySpec(CONST.toModifiers(), name = "d", type = INT, init = 1.lit).toString(),
+        )
+    }
+
+    /** `lateinit` promises the value arrives later, so a property that has one already is a contradiction. */
+    @Test
+    fun `lateinit with a value is refused`() {
+        val m = message { `class`("C") { `var`(LATEINIT, "p", STRING, "x".lit) } }
+        assertTrue("'lateinit' modifier is not allowed on properties with initializer" in m, m)
+        assertCompiles(render { `class`("C") { `var`(LATEINIT, "p", STRING) } })
+    }
 }
