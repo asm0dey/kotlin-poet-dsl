@@ -354,7 +354,15 @@ private fun Scope.propertyContainer(): PropertyContainer {
     return PropertyContainer(
         // [Scope.isExpectContainer] — [TypeScope.isExpect], not `EXPECT in typeModifiers`: the modifier sits on the *outermost*
         // `expect class` only, and every classifier nested inside one inherits the rule.
-        needsValue = !(kindName == "interface" || isExpectContainer),
+        // …and [Scope.isExternalContainer], the third term, added by E2c's Part 3 harness the first
+        // time a test could ask Kotlin/JS anything. `external class C { val a: Int }` is clean on
+        // Kotlin/JS and Kotlin/Wasm — at every depth, and in a nested class, an object, a companion
+        // object, an `external object` and an `external interface` alike (measured, one file per
+        // row) — and this DSL refused every one of them. That false rejection is D36's
+        // container-inheritance shape, which the ledger has carried as "unsolved for `external`"
+        // since the E2b fix round; what solves it is [TypeScope.isExternal], which this round added
+        // for the empty-body rule.
+        needsValue = !(kindName == "interface" || isExpectContainer || isExternalContainer),
         // The same `kindName == "interface"` the line above reads, asked the other way round — and
         // the third container fact in this class that used to be consulted at one site only. An
         // interface holds no state, so a property there both *may* have no value and *may not* have

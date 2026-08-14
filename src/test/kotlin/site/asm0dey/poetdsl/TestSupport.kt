@@ -1,10 +1,13 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.CodeBlock
+import com.tschuchort.compiletesting.JsCompilationResult
 import com.tschuchort.compiletesting.JvmCompilationResult
+import com.tschuchort.compiletesting.KotlinJsCompilation
 import com.tschuchort.compiletesting.KotlinCompilation
 import com.tschuchort.compiletesting.SourceFile
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
+import java.io.File
 import java.io.OutputStream
 import kotlin.test.assertEquals
 
@@ -78,6 +81,62 @@ internal fun assertCompiles(source: String) {
 internal fun compileDsl(body: String, extraImports: List<String> = emptyList()): JvmCompilationResult {
     val imports = (listOf("site.asm0dey.poetdsl.*") + extraImports).joinToString("\n") { "import $it" }
     return compileKotlin("Snippet.kt", "$imports\n\n$body\n")
+}
+
+/**
+ * Compiles [source] with the **Kotlin/JS** frontend, and [compileWasm] with **Kotlin/Wasm**.
+ *
+ * The reason these exist: *"not valid Kotlin" must mean "on the target platform", not "on the JVM"*
+ * is a settled decision of this project, and until this round nothing but a human at a command line
+ * had ever checked a non-JVM row. D36, D37, D40 and D41 all rest on measurements no test re-derived,
+ * and D37's own history is the argument — a brief once ordered a guard on `external` properties off a
+ * JVM-only measurement, which would have made Kotlin/JS external declarations ungenerable.
+ *
+ * kctfork's `KotlinJsCompilation` cannot find a stdlib for itself here (see the build script), so the
+ * klib arrives as a system property; a missing one **fails** rather than skipping, because a
+ * cross-platform test that quietly stops running is worse than none. `irProduceKlibFile` with
+ * `irProduceJs = false` stops at the frontend, which is all any of these assertions is about, and a
+ * module name is mandatory (*Specify the module name via -Xir-module-name*).
+ *
+ * Kotlin/Wasm has no kctfork compilation of its own and is reached through `-Xwasm` on the same
+ * class — accepted today, and announced as a future error. If that day comes, this function is where
+ * it lands.
+ */
+@OptIn(ExperimentalCompilerApi::class)
+private fun compileNonJvm(source: String, property: String, extraArgs: List<String>): JsCompilationResult {
+    val klib = requireNotNull(System.getProperty(property)?.takeIf { it.isNotBlank() }) {
+        "$property is not set: the test JVM was started without the frontend's stdlib klib. See the " +
+            "`jsStdlib`/`wasmStdlib` configurations in build.gradle.kts."
+    }.split(File.pathSeparator).first()
+    return KotlinJsCompilation().apply {
+        sources = listOf(SourceFile.kotlin("Generated.kt", source))
+        kotlinStdLibJsJar = File(klib)
+        irProduceKlibFile = true
+        irProduceJs = false
+        moduleName = "probe"
+        irModuleName = "probe"
+        kotlincArguments = extraArgs
+        messageOutputStream = OutputStream.nullOutputStream()
+    }.compile()
+}
+
+/** See [compileNonJvm]. */
+@OptIn(ExperimentalCompilerApi::class)
+internal fun compileJs(source: String): JsCompilationResult =
+    compileNonJvm(source, "kotlin.stdlib.js", emptyList())
+
+/** See [compileNonJvm]. */
+@OptIn(ExperimentalCompilerApi::class)
+internal fun compileWasm(source: String): JsCompilationResult =
+    compileNonJvm(source, "kotlin.stdlib.wasm", listOf("-Xwasm"))
+
+/** Asserts [source] compiles on Kotlin/JS and on Kotlin/Wasm, printing the diagnostics if not. */
+@OptIn(ExperimentalCompilerApi::class)
+internal fun assertCompilesEverywhereButJvm(source: String) {
+    val js = compileJs(source)
+    assertEquals(KotlinCompilation.ExitCode.OK, js.exitCode, "Kotlin/JS:\n$source\n${js.messages}")
+    val wasm = compileWasm(source)
+    assertEquals(KotlinCompilation.ExitCode.OK, wasm.exitCode, "Kotlin/Wasm:\n$source\n${wasm.messages}")
 }
 
 /** Renders a detached block, for golden assertions on statement output. */
