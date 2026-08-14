@@ -80,6 +80,23 @@ class TypesTest {
         assertEquals("kotlin.String", reference<String>().toString())
     }
 
+    /**
+     * The same silent drop by a different route, found by the fix round's review: nullability is
+     * `isMarkedNullable`, not an argument, so `reference<String?>()` sailed past the argument guard
+     * and returned non-null `kotlin.String`. A `ClassName` cannot carry a `?` at all, so there is no
+     * honest answer to give — only a refusal.
+     */
+    @Test
+    fun `reference refuses a nullable type`() {
+        val e = assertFailsWith<IllegalStateException> { reference<String?>() }
+        assertTrue("reference:" in e.message!!, e.message!!)
+        assertTrue("nullable" in e.message!!, e.message!!)
+        assertTrue("typeReference<T>()" in e.message!!, e.message!!)
+        // The non-null spelling is what `reference` is for, and typeReference keeps the `?`.
+        assertEquals("kotlin.String", reference<String>().toString())
+        assertEquals("kotlin.String?", typeReference<String?>().toString())
+    }
+
     /** The escape hatch the message offers instead: the raw class, named out loud. */
     @Test
     fun `className still names a raw generic class explicitly`() {

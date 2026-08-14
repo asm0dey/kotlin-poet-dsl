@@ -123,10 +123,16 @@ public val TypeName.nullable: TypeName get() = copy(nullable = true)
  * can see the difference, so this says so instead of guessing.
  *
  * A **star** projection is rejected on exactly the same grounds, and this used to claim otherwise.
- * Bare `List` is not a Kotlin type: `fun f(xs: List)` and `class C : List` are both
- * `COMPILATION_ERROR` (measured), so the raw name this would have produced from `reference<List<*>>()`
- * does not compile in either of the positions a [ClassName] is used in. The DSL will not produce it
- * from a generic reference. Any type arguments at all — concrete or star — make this throw.
+ * Bare `List` is not a Kotlin type in a *type* position: `fun f(xs: List)` and `class C : List` are
+ * both `COMPILATION_ERROR` (measured). It is still legal in the [ClassName] slots that are not type
+ * positions — a [parameterizedBy] receiver, `member(enclosing, …)`, `annotation(cls, …)` — which is
+ * what [className] is for. What this refuses to do is *derive* the raw name from a generic reference
+ * and leave the caller to discover which of those two worlds they landed in. Any type arguments at
+ * all — concrete or star — make this throw.
+ *
+ * **Nullability is rejected too**, for the third time on the same grounds: [ClassName] cannot carry
+ * it, so `reference<String?>()` would return non-null `kotlin.String` and drop the `?` the caller
+ * wrote. [typeReference] keeps it.
  *
  * Use [typeReference] for the whole type, or [className] when the raw class really is what is wanted:
  * `className("kotlin.collections", "List")` names it explicitly, which puts the erasure in the source
@@ -137,7 +143,13 @@ public inline fun <reified T> reference(): ClassName {
         "reference: ${typeOf<T>()} has type arguments, and reference<T>() names the erased class " +
             "only — it would silently drop them, and a raw `${T::class.simpleName}` is not a Kotlin " +
             "type. Use typeReference<T>() for the whole type, or className(packageName, simpleName) " +
-            "if the raw class is genuinely what you meant."
+            "if the raw class is genuinely what you meant — as a parameterizedBy receiver, or in a " +
+            "member(…)/annotation(…) slot, where a raw name is legal."
+    }
+    check(!typeOf<T>().isMarkedNullable) {
+        "reference: ${typeOf<T>()} is nullable, and reference<T>() returns a ClassName, which cannot " +
+            "carry nullability — it would silently drop the `?`. Use typeReference<T>() for the " +
+            "nullable type, or reference<${T::class.simpleName}>() if a ClassName is what you meant."
     }
     return T::class.asClassName()
 }
