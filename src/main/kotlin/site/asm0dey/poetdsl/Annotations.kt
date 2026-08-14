@@ -3,6 +3,8 @@ package site.asm0dey.poetdsl
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
+import com.squareup.kotlinpoet.TypeName
+import com.squareup.kotlinpoet.annotated
 import com.squareup.kotlinpoet.asClassName
 
 /**
@@ -186,6 +188,24 @@ public fun ann(
     vararg rest: Pair<String, Expr>,
     target: UseSiteTarget? = null,
 ): Annotations = annotation(cls, first, *rest, target = target)
+
+/**
+ * `@Positive Int` — a **type-position** annotation, from this DSL's own [annotation]/[ann].
+ *
+ *     param("x", INT.annotated(ann<Positive>("min" to 0.lit)))   // x: @Positive(min = 0) Int
+ *
+ * The bridge between the two halves, and the only public one: [Annotations.list] is
+ * `@PublishedApi internal`, so a consumer of the published artifact cannot spread it into
+ * KotlinPoet's own `TypeName.annotated`, and of KotlinPoet's four overloads only the
+ * `KClass` one is usable without an [com.squareup.kotlinpoet.AnnotationSpec] in hand — which
+ * covers a marker annotation and nothing else. An annotation *with arguments* in type position
+ * had no route through the DSL at all before this.
+ *
+ * A pure descriptor, like everything in `Types.kt`: no context parameter, nothing emitted, no
+ * [BlockScope] shadow needed, so it composes anywhere a [TypeName] is written — a parameter, a
+ * return type, a type argument.
+ */
+public fun TypeName.annotated(annotations: Annotations): TypeName = annotated(annotations.list)
 
 /** Implemented by the scopes, so annotations can also be added from a trailing lambda. */
 public interface Annotatable {

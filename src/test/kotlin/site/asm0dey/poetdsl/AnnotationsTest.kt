@@ -315,4 +315,57 @@ class AnnotationsTest {
                 .list.single().toString(),
         )
     }
+
+    /**
+     * A type-position annotation *with arguments* had no public route: [Annotations.list] is
+     * `@PublishedApi internal`, so the spread the `param` KDoc showed
+     * (`INT.annotated(*ann<SerialName>(…).list.toTypedArray())`) is unreachable from outside the
+     * module, and KotlinPoet's own `TypeName.annotated` overloads take `AnnotationSpec`s or bare
+     * `KClass`es — the latter covering the zero-argument case only. This extension is that route.
+     */
+    @Test
+    fun `annotated takes an Annotations with arguments`() {
+        val rendered = file("com.example", "Api") {
+            `fun`("f", param("x", INT.annotated(ann<SerialName>("value" to "user_name".lit)))) { }
+        }.toString()
+        assertTrue("""x: @SerialName(value = "user_name") Int""" in rendered, rendered)
+        // Several annotations at once, and the marker case the KClass overload already covered.
+        assertEquals(
+            "@site.asm0dey.poetdsl.Email @site.asm0dey.poetdsl.SerialName(value = \"n\") kotlin.Int",
+            INT.annotated(annotation<Email>() + annotation<SerialName>("value" to "n".lit)).toString(),
+        )
+    }
+
+    /**
+     * The gap this closes, measured from where it matters: a *consumer* of the published artifact.
+     * The KDoc's old spelling cannot compile there at all, and it must stay that way — the ruling is
+     * that [Annotations.list] remains internal and the extension is the supported route.
+     */
+    @OptIn(ExperimentalCompilerApi::class)
+    @Test
+    fun `the internal list is unreachable from a consumer and the extension is not`() {
+        val viaList = compileDsl(
+            """
+            annotation class Positive(val min: Int)
+
+            fun p() = param("x", INT.annotated(*ann<Positive>("min" to 0.lit).list.toTypedArray()))
+            """.trimIndent(),
+            // KotlinPoet's own `annotated` is a top-level extension in `TypeNames.kt`, so the old
+            // spelling needs that import as well — given here, so the only thing left to fail is
+            // the access to `list`.
+            extraImports = listOf("com.squareup.kotlinpoet.INT", "com.squareup.kotlinpoet.annotated"),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, viaList.exitCode, viaList.messages)
+        assertTrue("it is internal in" in viaList.messages, viaList.messages)
+
+        val viaExtension = compileDsl(
+            """
+            annotation class Positive(val min: Int)
+
+            fun p() = param("x", INT.annotated(ann<Positive>("min" to 0.lit)))
+            """.trimIndent(),
+            extraImports = listOf("com.squareup.kotlinpoet.INT"),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, viaExtension.exitCode, viaExtension.messages)
+    }
 }

@@ -273,18 +273,19 @@ public fun typeSpec(
 // --- functions --------------------------------------------------------------------------------
 
 /**
- * A function parameter. Type-position annotations come free, through KotlinPoet's own
- * `TypeName.annotated` and this DSL's [annotation]/[ann]:
+ * A function parameter. Type-position annotations come through [annotated], this DSL's bridge from
+ * [annotation]/[ann] to a [TypeName]:
  *
- *     param("x", INT.annotated(*ann<Positive>().list.toTypedArray()))   // x: @Positive Int
- *     param("x", INT.annotated(Positive::class))                        // the same, with no arguments
+ *     param("x", INT.annotated(ann<Positive>("min" to 0.lit)))   // x: @Positive(min = 0) Int
+ *     param("x", INT.annotated(Positive::class))                 // KotlinPoet's own, for a marker
  *
  * The example this KDoc carried until D31 — `param("x", INT.annotated<Positive>())` — matched no
- * overload and never compiled: `TypeName.annotated` takes `vararg AnnotationSpec`,
- * `List<AnnotationSpec>`, `vararg ClassName` or `vararg KClass<out Annotation>`, and KotlinPoet 2.3.0
- * has no reified form. No reified helper was added for it either, deliberately: [annotation] already
- * builds the [com.squareup.kotlinpoet.AnnotationSpec] — arguments and all — and the `KClass` overload
- * covers the bare case in fewer characters than a wrapper would.
+ * overload and never compiled: KotlinPoet's `TypeName.annotated` takes `vararg AnnotationSpec`,
+ * `List<AnnotationSpec>`, `vararg ClassName` or `vararg KClass<out Annotation>`, and 2.3.0 has no
+ * reified form. The spelling that replaced it — spreading `ann<Positive>().list` — was no better: it
+ * reaches `@PublishedApi internal` state and does not compile outside this module at all. [annotated]
+ * is the supported route, and the only public one for an annotation *with arguments* in type
+ * position; KotlinPoet's `KClass` overload still covers a marker in fewer characters.
  *
  * [name] is a *request*, not a guarantee: a parameter that would shadow a binding of the enclosing
  * scope is uniquified when the function is built, exactly as a lambda parameter is (ADR 0009). The

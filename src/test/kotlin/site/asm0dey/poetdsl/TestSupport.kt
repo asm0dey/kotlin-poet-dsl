@@ -17,6 +17,12 @@ import kotlin.test.assertEquals
 private fun compileKotlin(fileName: String, source: String): JvmCompilationResult = KotlinCompilation().apply {
     sources = listOf(SourceFile.kotlin(fileName, source))
     inheritClassPath = true
+    // kctfork defaults to JVM target 1.8, while this module is built against 17. That only shows
+    // up when a snippet *inlines* one of the DSL's `inline` functions — `ann<T>()` and the rest —
+    // which fails with "Cannot inline bytecode built with JVM target 17 into bytecode that is
+    // being built with JVM target 1.8". A consumer compiles against the same toolchain, so this is
+    // what a snippet should have been compiled with all along.
+    jvmTarget = "17"
     messageOutputStream = OutputStream.nullOutputStream()
 }.compile()
 
