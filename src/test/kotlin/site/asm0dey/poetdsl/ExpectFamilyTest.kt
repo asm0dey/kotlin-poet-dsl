@@ -947,6 +947,14 @@ class ExpectFamilyTest {
             "public expect class E {\n  public class N : Base()\n}" to "cannot initialize supertypes",
             "public expect class E {\n  public class N(\n    z: Int,\n  ) : Base()\n}" to
                 "cannot initialize supertypes",
+            // The renders this round removed. Each is what the DSL produced at `0a9f6d1`.
+            "public expect class E {\n  public annotation class N(\n    public var x: Int,\n  )\n}" to
+                "annotation parameter cannot be 'var'",
+            "public annotation class N(\n  public var x: Int,\n)" to "annotation parameter cannot be 'var'",
+            "public annotation class N(\n  x: Int,\n)" to "'val' keyword is missing",
+            "public expect class E {\n  public enum class Z(\n    x: Int,\n  )\n}" to
+                "enum class cannot have a constructor",
+            "public expect enum class Z(\n  x: Int,\n)" to "enum class cannot have a constructor",
             "public expect class E {\n  public companion object : Base()\n}" to
                 "cannot initialize supertypes",
         ).forEach { (source, diagnostic) ->
@@ -997,6 +1005,12 @@ class ExpectFamilyTest {
                     superclass(ClassName("com.example", "Base"))
                     `constructor`(param("d", INT)) { }
                 }
+                // This round's control rows, rendered rather than described: an `enum class` with no
+                // constructor, a named object reaching its supertype through `superinterface`, and
+                // `superclass(ANY)`, which emits no supertype clause at all.
+                `class`(KModifier.ENUM, "Z") { }
+                `object`("Obj") { superinterface(iface) }
+                `class`("AnyBased") { superclass(ANY) }
                 companionObject { `fun`("of", returns = INT) { } }
             }
             `fun`(EXPECT, "top", returns = INT) { }
@@ -1012,6 +1026,8 @@ class ExpectFamilyTest {
             "must be initialized",
             "'val' keyword is missing",
             "final read-only",
+            "cannot be 'var'",
+            "enum class cannot have a constructor",
         ).forEach { diagnostic -> assertFalse(diagnostic in messages, "$diagnostic\n$rendered\n$messages") }
     }
 }
