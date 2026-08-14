@@ -11,7 +11,10 @@ import com.squareup.kotlinpoet.KModifier.EXTERNAL
 import com.squareup.kotlinpoet.KModifier.FUN
 import com.squareup.kotlinpoet.KModifier.LATEINIT
 import com.squareup.kotlinpoet.KModifier.INNER
+import com.squareup.kotlinpoet.KModifier.INTERNAL
 import com.squareup.kotlinpoet.KModifier.OPEN
+import com.squareup.kotlinpoet.KModifier.PRIVATE
+import com.squareup.kotlinpoet.KModifier.PROTECTED
 import com.squareup.kotlinpoet.KModifier.SEALED
 import com.squareup.kotlinpoet.KModifier.VALUE
 import com.squareup.kotlinpoet.STRING
@@ -460,6 +463,49 @@ class KindBodyTest {
                     `val`("p", INT, getter = { ret(1.lit) })
                 }
                 `interface`("H") { `val`("p", INT) }
+            },
+        )
+    }
+
+    // --- a secondary constructor of an `enum` or a `sealed` class ------------------------------
+
+    @Test
+    fun `a secondary constructor that renders public is refused in an enum and a sealed class`() {
+        val e = message { `class`(ENUM, "E") { `constructor`(param("q", INT)) { } } }
+        assertTrue("constructor must be private in enum class" in e, e)
+        val s = message { `class`(SEALED, "S") { `constructor`(param("q", INT)) { } } }
+        assertTrue("constructor must be private or protected in sealed class" in s, s)
+        // INTERNAL and PROTECTED are refused in an enum, INTERNAL in a sealed class — measured, all
+        // three frontends, so the accepted set is exactly what the message names.
+        assertTrue(
+            "must be private in enum class" in message {
+                `class`(ENUM, "E") { `constructor`(PROTECTED, param("q", INT)) { } }
+            },
+        )
+        assertTrue(
+            "must be private in enum class" in message {
+                `class`(ENUM, "E") { `constructor`(INTERNAL, param("q", INT)) { } }
+            },
+        )
+        assertTrue(
+            "must be private or protected in sealed class" in message {
+                `class`(SEALED, "S") { `constructor`(INTERNAL, param("q", INT)) { } }
+            },
+        )
+    }
+
+    /** The control rows: the visibilities that do render, and the kinds the rule leaves alone. */
+    @Test
+    fun `a private or protected secondary constructor still renders`() {
+        assertCompiles(
+            render {
+                `class`(ENUM, "E") { `constructor`(PRIVATE, param("q", INT)) { } }
+                `class`(SEALED, "S") { `constructor`(PRIVATE, param("q", INT)) { } }
+                `class`(SEALED, "T") { `constructor`(PROTECTED, param("q", INT)) { } }
+                // Every other kind keeps the public secondary constructor it always had.
+                `class`("C") { `constructor`(param("q", INT)) { } }
+                `class`(OPEN, "O") { `constructor`(param("q", INT)) { } }
+                `class`(ABSTRACT, "A") { `constructor`(param("q", INT)) { } }
             },
         )
     }

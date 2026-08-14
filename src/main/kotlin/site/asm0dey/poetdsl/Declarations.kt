@@ -1152,6 +1152,20 @@ internal fun TypeScope.beginSecondaryConstructor() {
  * the block scope by hand.
  */
 internal fun TypeScope.addSecondaryConstructor(spec: FunSpec) {
+    // The classifier-kind family's constructor side, read off the **built spec's** modifiers because
+    // that is what decides what renders. See [constructorVisibility] for why this one is half a
+    // render gap.
+    if (KModifier.ENUM in builder.modifiers && KModifier.PRIVATE !in spec.modifiers) {
+        constructorVisibility("enum", "private", "constructor must be private in enum class")
+    }
+    if (KModifier.SEALED in builder.modifiers &&
+        KModifier.PRIVATE !in spec.modifiers && KModifier.PROTECTED !in spec.modifiers
+    ) {
+        constructorVisibility(
+            "sealed", "private or protected",
+            "constructor must be private or protected in sealed class",
+        )
+    }
     val delegatesToPrimary = spec.delegateConstructor == DelegationTarget.THIS.keyword
     // The `expect` exemption is the same one [addConstructorParam] carries, for the same measured
     // reason: an `expect` class's secondary constructor must **not** delegate, so requiring it here

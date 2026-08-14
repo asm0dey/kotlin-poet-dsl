@@ -444,6 +444,44 @@ internal fun funInterfaceHoldsNoAbstractProperty(construct: String, name: String
 )
 
 /**
+ * A secondary constructor of an `enum class` must be `private`, and of a `sealed class` `private` or
+ * `protected` — and this is **half a render gap**, which is why it is a refusal with a working
+ * remedy rather than a silent pass.
+ *
+ * KotlinPoet emits an explicit visibility keyword on every secondary constructor
+ * (`CodeWriter.shouldEmitPublicModifier`, the same mechanism that makes a local class unrenderable —
+ * D20), so `` `constructor`(param("q", INT)) { } `` in an `enum class` renders
+ * `public constructor(q: Int)` where hand-written Kotlin would have written `constructor(q: Int)`
+ * and got the default visibility, which is exactly the one Kotlin requires. Measured, one file per
+ * row, all three frontends identical:
+ *
+ *     enum class E { ; public constructor(q: Int) }       constructor must be private in enum class.
+ *     enum class E { ; protected constructor(q: Int) }
+ *     enum class E { ; internal constructor(q: Int) }
+ *     sealed class S { public constructor(q: Int) }       constructor must be private or protected
+ *     sealed class S { internal constructor(q: Int) }      in sealed class.
+ *
+ * and the controls, clean on all three — which is what makes the remedy real:
+ *
+ *     enum class E { ; private constructor(q: Int) }      sealed class S { private constructor(q: Int) }
+ *     sealed class S { protected constructor(q: Int) }
+ *     class C { constructor(q: Int) }                     open class O { constructor(q: Int) }
+ *     abstract class A { constructor(q: Int) }            — every other kind is untouched
+ *
+ * The **primary** constructor is untouched and needs no rule: KotlinPoet writes no visibility
+ * keyword into a class header, so `enum class E(val x: Int)` renders and compiles clean.
+ */
+internal fun constructorVisibility(kindWord: String, allowed: String, diagnostic: String): Nothing =
+    kindRefusal(
+        "`constructor`",
+        "this secondary constructor renders `public` — KotlinPoet writes an explicit visibility " +
+            "keyword on every one of them — and a `$kindWord class` constructor must be $allowed",
+        diagnostic,
+        "Declare it `constructor`(${allowed.uppercase().replace(" OR ", ", ")}, …) — Kotlin's own " +
+            "default for a $kindWord class constructor is what KotlinPoet cannot render.",
+    )
+
+/**
  * Whether a classifier may be declared *inside* this one.
  *
  * An `inner class` is the one container that holds no nested classifier at all, and the exception is
