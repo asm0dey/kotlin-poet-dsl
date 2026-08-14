@@ -313,8 +313,8 @@ class AccessorsTest {
             }
         }
         assertEquals(
-            "Handle from scope 'the extension property 'size' on kotlin.String (reach it through a " +
-                "receiver handle — h.prop(\"size\") — or, inside an extension on kotlin.String, as " +
+            "Handle from scope 'the extension property `size` on kotlin.String (reach it through a " +
+                "receiver handle — h.prop(\"size\") — or, wherever a kotlin.String receiver is in scope, as " +
                 "expression(\"size\"))' does not enclose the current scope 'fun(f)'.",
             failure.message,
         )
@@ -363,8 +363,8 @@ class AccessorsTest {
             }
         }
         assertEquals(
-            "Handle from scope 'the extension property 'head' on kotlin.String (reach it through a " +
-                "receiver handle — h.prop(\"head\") — or, inside an extension on kotlin.String, as " +
+            "Handle from scope 'the extension property `head` on kotlin.String (reach it through a " +
+                "receiver handle — h.prop(\"head\") — or, wherever a kotlin.String receiver is in scope, as " +
                 "expression(\"head\"))' does not enclose the current scope 'fun(f)'.",
             failure.message,
         )

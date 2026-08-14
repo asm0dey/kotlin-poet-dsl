@@ -26,7 +26,11 @@ private fun Scope.handle(unique: String, type: TypeName?, mutable: Boolean? = nu
 
 /**
  * The owning [ScopeId] of an **extension property's** handle: a child of the declaring scope that
- * nothing is ever nested inside, so [checkOwned] — untouched — refuses the handle in every position.
+ * nothing is ever nested inside, so [checkOwned] — untouched — refuses the handle in every position
+ * [checkOwned] judges. That is not every position: a property initializer, a delegate and
+ * `superclass(…, args)` never run it at all (see the note at `constructorParam`), so
+ * `` `val`("x", INT, init = size) `` still renders `public val x: Int = size`, which does not
+ * compile. That boundary predates this owner and is unchanged by it.
  *
  * The handle renders as a bare name, and a bare name is not how an extension property is reached:
  * `` `val`("size", INT, receiver = STRING) { … } `` followed by `` `fun`("f") { +size } `` rendered
@@ -36,20 +40,27 @@ private fun Scope.handle(unique: String, type: TypeName?, mutable: Boolean? = nu
  * folded into the label, since [checkOwned] interpolates `owner.label` and takes no message of its
  * own.
  *
- * Here the *reachable* legal set is empty. Kotlin does resolve the bare name inside another
- * extension declaration on the same receiver (measured: `fun String.f(): Int = size` compiles), but
- * that position is not something ownership can recognise — an extension function's body is built as
- * a child of the file or type scope, not of any property — and deciding it would mean comparing
- * receiver *types*, a second mechanism ADR 0008 does not have. So the label names both spellings
- * instead: `h.prop("size")` through a receiver handle, and `expression("size")` inside an extension
- * on the same receiver, which is the only position where the bare name is legal.
+ * Here the *reachable* legal set is empty. Kotlin resolves the bare name wherever a receiver of the
+ * matching type is in scope — inside another extension declaration on that receiver (measured:
+ * `fun String.f(): Int = size` compiles), and equally on any *implicit* receiver, which this DSL can
+ * express: `s.call("apply") { … }`, `call(member("kotlin", "with"), s) { … }`, or a member extension
+ * inside a `class`. **Every one of those rendered working Kotlin from the handle at base and throws
+ * now.** That is the cost of the ruling, and it is wider than "one shape": the refusal is total.
+ *
+ * It is deliberate anyway, because none of those positions is something ownership can recognise — an
+ * extension function's body is built as a child of the file or type scope, not of any property, and
+ * an implicit receiver is not a scope at all. Deciding them would mean comparing receiver *types*, a
+ * second mechanism ADR 0008 does not have. So the label names the spellings that work instead:
+ * `h.prop("size")` through a receiver handle, and `expression("size")` wherever a receiver of the
+ * right type is in scope. Nothing becomes unreachable; every refused position keeps a working
+ * spelling, and the refusal is loud rather than an unresolved reference in generated output.
  */
 private fun Scope.ownerOf(name: String, receiver: TypeName?): ScopeId =
     if (receiver == null) id else extensionPropertyId(name, receiver)
 
 private fun Scope.extensionPropertyId(name: String, receiver: TypeName): ScopeId = id.child(
-    "the extension property '$name' on $receiver (reach it through a receiver handle — " +
-        "h.prop(\"$name\") — or, inside an extension on $receiver, as expression(\"$name\"))",
+    "the extension property `$name` on $receiver (reach it through a receiver handle — " +
+        "h.prop(\"$name\") — or, wherever a $receiver receiver is in scope, as expression(\"$name\"))",
 )
 
 /**
