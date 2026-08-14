@@ -291,6 +291,9 @@ class UninitializedPropertyTest {
      * is the expensive direction, while exempting it costs at worst kotlinc's own clear message on a
      * JVM target. Unlike `EXPECT` this one is **not** measurable by the test suite — kctfork compiles
      * for the JVM only — so the evidence above is a hand-run measurement, not a test.
+     *
+     * **File level only** — see `an external property in a type is rejected` for the other half, and
+     * D37 for the rule that separates them.
      */
     @Test
     fun `an external property needs no value`() {
@@ -309,6 +312,54 @@ class UninitializedPropertyTest {
                 `val`(EXTERNAL, "x", INT)
                 `var`(EXTERNAL, "y", INT)
             }.toString(),
+        )
+    }
+
+    /**
+     * The exemption above is the **file-level** one and stops there. A *member* `external` property
+     * is rejected on every frontend that ships with Kotlin 2.4.10 — there is no target where it
+     * compiles, which is precisely the bar the top-level exemption clears and this one does not
+     * (D37). One file each, re-measured for this round:
+     *
+     * ```
+     * kotlinc       class C  { external val a: Int } → modifier 'external' is not applicable to 'property'
+     * kotlinc       object O { external val a: Int } → modifier 'external' is not applicable to 'property'
+     * kotlinc-js    class C  { external val a: Int } → non-top-level 'external' declaration.
+     * kotlinc-js    object O { external val a: Int } → non-top-level 'external' declaration.
+     * kotlinc-wasm  class C  { external val a: Int } → non-top-level 'external' declaration.
+     * kotlinc-wasm  object O { external val a: Int } → non-top-level 'external' declaration.
+     * ```
+     *
+     * This is a **regression pin**: at `68f7fd3` `EXTERNAL` was on no exempt list at all, so both
+     * positions below threw. Adding the modifier to a container-blind exempt list flipped the member
+     * position from refusing to emitting, and only the file-level half of that was intended.
+     *
+     * The remedy list is unchanged and still names none of `EXTERNAL`: "declare it EXTERNAL" means
+     * "the definition lives in JavaScript", which is not an answer to "this property has no value".
+     */
+    @Test
+    fun `an external property in a type is rejected`() {
+        listOf<Pair<String, FileScope.() -> Unit>>(
+            valMessage() to { `class`("C") { `val`(EXTERNAL, "x", INT) } },
+            valMessage() to { `object`("O") { `val`(EXTERNAL, "x", INT) } },
+            valMessage() to { `class`("C") { companionObject { `val`(EXTERNAL, "x", INT) } } },
+            valMessage() to { `class`("C") { `class`("N") { `val`(EXTERNAL, "x", INT) } } },
+            // A `var` still gets its own container's remedy — the exempt list and the remedy list are
+            // separate mechanisms, and only the first one moved.
+            valMessage(keyword = "var", modifiers = "LATEINIT") to
+                { `class`("C") { `var`(EXTERNAL, "x", INT) } },
+        ).forEachIndexed { index, (message, position) ->
+            val e = assertFailsWith<IllegalStateException>("position $index") {
+                file("com.example", "A", body = position)
+            }
+            assertEquals(message, e.message, "position $index")
+        }
+        // …and the detached builder, whose container is a type as well.
+        assertEquals(
+            valMessage(),
+            assertFailsWith<IllegalStateException> {
+                typeSpec(name = "C") { `val`(EXTERNAL, "x", INT) }
+            }.message,
         )
     }
 
