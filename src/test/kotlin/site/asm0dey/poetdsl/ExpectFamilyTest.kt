@@ -2,6 +2,7 @@ package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.INT
+import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.KModifier.ANNOTATION
 import com.squareup.kotlinpoet.KModifier.EXPECT
 import com.squareup.kotlinpoet.KModifier.VALUE
@@ -181,6 +182,16 @@ class ExpectFamilyTest {
                 typeSpec(EXPECT.toModifiers(), name = "E") { constructorParam(ParamKind.VAL, "x", INT) }
             }.message,
         )
+        // The exempt set is exactly `ANNOTATION` and `VALUE`, and these are what say so: every other
+        // classifier modifier a nested type can carry is still *expected class constructor cannot
+        // have a property parameter* on all three frontends, so widening the set by one row would be
+        // a new render nothing accepts. Measured, not reasoned — the same discipline that kept
+        // `LATEINIT` and `EXTERNAL` out of the accessor exemption one round ago.
+        for (modifier in listOf(KModifier.DATA, KModifier.INNER, KModifier.SEALED, KModifier.OPEN)) {
+            refused(ctorParamMessage("val")) {
+                `class`(EXPECT, "E") { `class`(modifier, "N") { constructorParam(ParamKind.VAL, "x", INT) } }
+            }
+        }
     }
 
     /**

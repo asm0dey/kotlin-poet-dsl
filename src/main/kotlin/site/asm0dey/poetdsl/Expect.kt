@@ -26,6 +26,7 @@ import com.squareup.kotlinpoet.KModifier
 // | 7 | `addInitializerBlock` | [addInitializerBlock] | an `init` block | yes — this file |
 // | 8 | `primaryConstructor` | `TypeScope.finish` ← [addConstructorParam] | the primary constructor | yes, at row 2 — a *plain* parameter is legal (measured) |
 // | 9 | `addSuperclassConstructorParameter` | `applySuperclass` | the supertype's arguments | yes — this file |
+// | 9b | `superclass` | `applySuperclass`, judged in [TypeScope.finish] | the supertype *itself*, one level down | yes — [nestedSupertypeRenderGap], because at depth KotlinPoet writes the parentheses whether or not there are arguments |
 // | 10 | `addType` | `declareType`, `addCompanionObject`, `TypeSpec.unaryPlus` | a nested classifier | not a refusal: `expect` is *inherited* here (D36), and the splice is D39 |
 //
 // Rows 3 and 6 are deliberately not judged, and that is the one place this rule stops: a detached
@@ -56,6 +57,9 @@ import com.squareup.kotlinpoet.KModifier
 //     expect class E : Base(1)                            expected classes cannot initialize
 //     expect class E(x: Int) : Base(x)                    supertypes.
 //     expect class E { class N : Base(1) }
+//     expect class E { class N : Base() }                 — the *empty* argument list, too, which
+//     expect class E { class N(z: Int) : Base() }           is what a nested `superclass(Base)`
+//     expect class E { companion object : Base() }          renders; see [nestedSupertypeRenderGap]
 //     expect class E : Base { constructor(p: Int) : super(p) }    explicit delegation call for
 //     expect class E { constructor(p: Int) : this() }             constructor of expected class is
 //     expect class E { class N : Base { constructor(p: Int) : super(p) } }         prohibited.
@@ -71,6 +75,14 @@ import com.squareup.kotlinpoet.KModifier
 //     expect class E(x: Int) { constructor(p: Long) }      — and *without* a delegation call, which
 //     expect class E(x: Int) : Base { constructor(p: Long) }  an ordinary class is refused for
 //                                                             ("primary constructor call expected")
+//     expect class E { annotation class N(val x: Int) }    — the two kinds whose parameters Kotlin
+//     expect class E { value class V(val y: Int) }           *requires* to be `val`; see
+//                                                            [PROPERTY_PARAM_KINDS]
+//     expect class E { class N : Iface }                   — a superinterface is never parenthesized
+//     expect class E { class N : Base { constructor(p: Int) } }  — the one supertype shape KotlinPoet
+//                                                                  renders without parentheses
+//     expect class E { class N { var String.a: Int } }     — an extension property is a signature
+//     expect class E { class N { val String.a: Int } }       here too, at every depth
 //
 // The last two are why D25's "every secondary constructor must delegate to the primary one" carries
 // an `expect` exemption since this round: the delegation call is prohibited here, so requiring one
@@ -86,12 +98,21 @@ import com.squareup.kotlinpoet.KModifier
 // | function | **at every depth** (`TypeSpec.kt:335`/`348` pass `modifiers + implicitModifiers`) | `build()` `require`s an empty body — direct members only, `IllegalArgumentException`; `FunSpec.emit` `check`s it again at every depth, from `toString()` |
 // | nested type | **never** — `TypeSpec.emit` hardcodes `setOf(PUBLIC)` as its own implicit modifiers (`TypeSpec.kt:184`), which is D39's third row |
 // | `init` block | — | `addInitializerBlock` `check`s `EXPECT !in modifiers` — direct members only |
-// | superclass arguments | — | **none**: `TypeSpec.emit` silently *drops* them (`TypeSpec.kt:239`), so `expect class E : Base(1)` renders as `expect class E : Base` |
+// | superclass arguments | — | **none**: `TypeSpec.emit` silently *drops* them (`TypeSpec.kt:239`), so `expect class E : Base(1)` renders as `expect class E : Base` — **direct members only**, so one level down they are kept *and so are the parentheses around an empty list*, which is [nestedSupertypeRenderGap] |
+// | a `val`/`var` primary-constructor parameter | — | `addProperty` `require`s a null initializer under `EXPECT` (`TypeSpec.kt:725-733`) — **direct members only**, with no exemption for the two kinds Kotlin exempts, which is what makes `expect annotation class A(val x: Int)` unrenderable and `expect class E { annotation class N(val x: Int) }` free |
 //
-// So KotlinPoet's own checks are a fragment of the rule in three different shapes — the wrong
+// So KotlinPoet's own checks are a fragment of the rule in four different shapes — the wrong
 // exception type, the right one with a message naming neither construct, an exception thrown from
 // `toString()` rather than from a DSL call, and one case of silently dropped output. Guarding what
 // KotlinPoet guards, where it guards it, is what left this family half-closed for three rounds.
+//
+// **And every one of those "direct members only" rows is why this round exists.** Three guards were
+// verified at the top level and inverted one level down, all three in the same direction the
+// previous round's method could not see: falsification shows a guard is load-bearing against the
+// *test set*, and only a control row — the nearest *valid* neighbour of a refused shape, measured —
+// can show it is not over-broad against the *language*. For a guard keyed on a container fact, the
+// nested case is the control that matters, because the container's own modifiers are exactly what
+// KotlinPoet stops reading one level down.
 
 /**
  * Whether a declaration written *in* this scope is `expect` — the container's half of the rule.
