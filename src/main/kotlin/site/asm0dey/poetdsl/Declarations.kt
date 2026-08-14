@@ -96,6 +96,16 @@ internal fun Scope.declareType(
             "A local $kindName is not valid Kotlin. Declare it at file or type level."
         }
     }
+    // The two rules of the classifier-kind family that are about *this* declaration's placement
+    // rather than about its body, asked before the name is registered so that a refused declaration
+    // does not burn a name — the same ordering Task 12 gave a rejected binding. See [Kinds] for the
+    // measured rows and their controls; both fire in every container and neither is inherited.
+    if (KModifier.INNER in modifiers.toList() && !innerAllowed) {
+        innerNeedsAnEnclosingClass(kindName, name)
+    }
+    if (!nestedTypesAllowed && KModifier.INNER !in modifiers.toList()) {
+        innerHoldsNoNestedType(kindName, name)
+    }
     // Types only: Kotlin permits function overloads, so duplicate `fun` names are legal and
     // must never go through `declaredTypeNames`.
     check(name !in declaredTypeNames) {
