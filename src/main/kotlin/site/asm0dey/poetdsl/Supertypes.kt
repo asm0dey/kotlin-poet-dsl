@@ -135,7 +135,26 @@ internal fun TypeScope.applySuperclass(type: TypeName, args: Array<out Expr>) {
  *
  * So this is half language rule and half **render gap**, and the message says both: the Kotlin the
  * DSL would emit is refused everywhere, *and* the Kotlin the author wanted is unreachable through
- * KotlinPoet in the common shape. The remedy names the one shape that does reach it.
+ * KotlinPoet in the common shape.
+ *
+ * **The remedy is kind-dependent, and for an object there is none.** The `:238` fallback needs a
+ * secondary constructor, and `beginSecondaryConstructor` has refused one to anything but a class
+ * since Task 19 — *constructor: a companion object cannot declare a constructor; only a class can* —
+ * which is the right refusal, because Kotlin gives an object no constructor either. So this message
+ * used to advise a shape the DSL itself rejects. Measured, all three frontends:
+ *
+ *     expect class E { object O : Base }             clean          — no DSL spelling reaches it
+ *     expect class E { companion object : Base }     clean          — nor this
+ *     expect object O { class N : Base }             clean          — nor this
+ *     expect class E { object O : Iface }            clean          — `superinterface` reaches this
+ *     expect class E { object O : Base() }           supertype initialization is impossible without
+ *     expect class E { companion object : Base() }    a primary constructor.  and  expected classes
+ *                                                     cannot initialize supertypes.
+ *
+ * That is a **second render gap of the same kind** as `expect class E { class N : Base }`, one the
+ * previous round rediscovered without noticing while fixing the identical defect for
+ * `constructorParam`. Both are recorded in D40's row-9b table; neither has an upstream fix short of
+ * KotlinPoet reading the enclosing builder's `EXPECT`.
  */
 internal fun nestedSupertypeRenderGap(kindName: String, type: TypeName): Nothing = expectRefusal(
     "superclass",
@@ -144,9 +163,17 @@ internal fun nestedSupertypeRenderGap(kindName: String, type: TypeName): Nothing
         "when the type's own modifiers carry EXPECT, which Kotlin forbids on a nested classifier, " +
         "or when the type has secondary constructors and no primary one (`TypeSpec.kt:238-239`)",
     "expected classes cannot initialize supertypes",
-    "Use superinterface if $type is an interface; or give this $kindName a secondary `constructor` " +
-        "and no constructorParam, which is the one shape KotlinPoet renders as `: $type`; or drop " +
-        "the supertype and declare it on the `actual` declaration.",
+    if (kindName == "class") {
+        "Use superinterface if $type is an interface; or give this $kindName a secondary " +
+            "`constructor` and no constructorParam, which is the one shape KotlinPoet renders as " +
+            "`: $type`; or drop the supertype and declare it on the `actual` declaration."
+    } else {
+        "Use superinterface if $type is an interface. Otherwise there is no spelling for this: the " +
+            "one shape KotlinPoet renders as `: $type` needs a secondary `constructor`, and " +
+            "${article(kindName)} $kindName cannot declare one — so drop the supertype and " +
+            "declare it on the " +
+            "`actual` declaration."
+    },
 )
 
 /** What the generated `superinterface` runs. */

@@ -119,6 +119,15 @@ class ExpectFamilyTest {
             "param(VAL, \"$name\", …)."
     }
 
+    private fun enumConstructorMessage(name: String) = refusal(
+        "constructorParam",
+        "this `enum class` is `expect` — by its own EXPECT modifier, or by the `expect` type it is " +
+            "declared in — and '$name' would give it a primary constructor",
+        "expected enum class cannot have a constructor",
+        "Drop the primary constructor entirely — an `expect` enum class can have none, whatever " +
+            "the parameter's kind — and declare it on the `actual` enum class.",
+    )
+
     private fun bodyMessage(name: String) = refusal(
         "`fun`",
         "'$name' is `expect` — by its own EXPECT modifier, or by the `expect` type it is declared " +
@@ -165,9 +174,22 @@ class ExpectFamilyTest {
             "forbids on a nested classifier, or when the type has secondary constructors and no " +
             "primary one (`TypeSpec.kt:238-239`)",
         "expected classes cannot initialize supertypes",
-        "Use superinterface if com.example.Base is an interface; or give this $kindName a secondary " +
-            "`constructor` and no constructorParam, which is the one shape KotlinPoet renders as " +
-            "`: com.example.Base`; or drop the supertype and declare it on the `actual` declaration.",
+        // The remedy is kind-dependent, and for an object there is none: the `:238` fallback needs a
+        // secondary constructor, and `constructor: a companion object cannot declare a constructor;
+        // only a class can` has refused one to anything but a class since Task 19. The previous
+        // round fixed exactly this defect for `constructorParam` and rediscovered it here.
+        if (kindName == "class") {
+            "Use superinterface if com.example.Base is an interface; or give this $kindName a " +
+                "secondary `constructor` and no constructorParam, which is the one shape KotlinPoet " +
+                "renders as `: com.example.Base`; or drop the supertype and declare it on the " +
+                "`actual` declaration."
+        } else {
+            "Use superinterface if com.example.Base is an interface. Otherwise there is no spelling " +
+                "for this: the one shape KotlinPoet renders as `: com.example.Base` needs a " +
+                "secondary `constructor`, and ${if (kindName == "interface") "an" else "a"} " +
+                "$kindName cannot declare one — so drop the supertype and declare it on the " +
+                "`actual` declaration."
+        },
     )
 
     private fun refused(message: String, body: FileScope.() -> Unit) {
@@ -213,6 +235,54 @@ class ExpectFamilyTest {
                 `class`(EXPECT, "E") { `class`(modifier, "N") { constructorParam(ParamKind.VAL, "x", INT) } }
             }
         }
+    }
+
+    /**
+     * `ENUM` is the row that used to be in the loop above and is now its own refusal, because for an
+     * `enum class` the remedy that loop's message prints — *declare it as a plain parameter* — names
+     * a shape this DSL rendered and no frontend accepts: `expect class E { enum class Z(x: Int) }`
+     * is *expected enum class cannot have a constructor* on all three, and so is the `val` form, and
+     * so is an empty parameter list. An `expect` enum class has no primary constructor at all.
+     *
+     * The previous round's report claimed the plain-parameter remedy "is now only ever printed where
+     * it works". This is the row where it did not, and its own control row 16 already recorded the
+     * diagnostic.
+     */
+    @Test
+    fun `an expect enum class has no primary constructor of any kind`() {
+        for (kind in listOf(ParamKind.VAL, ParamKind.VAR, null)) {
+            refused(enumConstructorMessage("x")) {
+                `class`(EXPECT, "E") { `class`(KModifier.ENUM, "Z") { constructorParam(kind, "x", INT) } }
+            }
+            // The file-level form: the modifier is the declaration's own rather than inherited.
+            refused(enumConstructorMessage("x")) {
+                `class`(EXPECT + KModifier.ENUM, "Z") { constructorParam(kind, "x", INT) }
+            }
+        }
+        // The controls, clean on all three frontends: an `expect` enum class with no constructor at
+        // all, and an ordinary one with a constructor, which is unchanged.
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+
+            public expect class E {
+              public enum class Z
+            }
+
+            public class Ordinary {
+              public enum class Y(
+                y: Int,
+              )
+            }
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `class`(EXPECT, "E") { `class`(KModifier.ENUM, "Z") { } }
+                `class`("Ordinary") { `class`(KModifier.ENUM, "Y") { constructorParam(null, "y", INT) } }
+            }.toString(),
+        )
     }
 
     /**
@@ -595,6 +665,17 @@ class ExpectFamilyTest {
         refused(nestedSupertypeMessage("companion object")) {
             `class`(EXPECT, "E") { companionObject { superclass(base) } }
         }
+        // The named object, which nothing had a row for — and the reason the remedy is now
+        // kind-dependent: `expect class E { object O : Base }` and `expect class E { companion
+        // object : Base }` are **clean** on all three frontends, `: Base()` is refused on all three,
+        // and the shape KotlinPoet renders without parentheses needs a secondary `constructor` that
+        // no object may declare. A second render gap of the same kind, recorded in D40's row 9b.
+        refused(nestedSupertypeMessage("named object")) {
+            `class`(EXPECT, "E") { `object`("O") { superclass(base) } }
+        }
+        refused(nestedSupertypeMessage("named object")) {
+            `object`(EXPECT, "O") { `class`("N") { `object`("P") { superclass(base) } } }
+        }
         refused(nestedSupertypeMessage("class")) {
             `class`(EXPECT, "E") {
                 `class`("N") {
@@ -650,6 +731,8 @@ class ExpectFamilyTest {
               }
 
               public class S
+
+              public object T : Iface
             }
 
             public class Outer {
@@ -677,6 +760,11 @@ class ExpectFamilyTest {
                     // message claiming a `: kotlin.Any()` KotlinPoet never writes — the control row
                     // the term that refused it never had.
                     `class`("S") { superclass(ANY) }
+                    // The one remedy a named object inside an `expect` type can actually follow:
+                    // `expect class E { object O : Iface }` is clean on all three frontends and
+                    // `superinterface` is never parenthesized. The `superclass` half has no
+                    // spelling at all, which is what the refusal now says.
+                    `object`("T") { superinterface(iface) }
                 }
                 `class`("Outer") { `class`("N") { superclass(base) } }
             }.toString(),

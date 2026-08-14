@@ -300,6 +300,13 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     if (propertyParamKind != null && kind != ParamKind.VAL) {
         propertyParamMustBeVal(name, kind, propertyParamKind)
     }
+    // The other kind whose answer does not depend on `kind` at all. An `expect` `enum class` has no
+    // primary constructor of any sort — *expected enum class cannot have a constructor* on all three
+    // frontends, with or without `val`, and with an empty parameter list too — so the family's
+    // generic remedy ("declare it as a plain parameter") named a shape this DSL rendered and no
+    // frontend accepts. Refused before the property-parameter rule so that the message the caller
+    // gets is the one they can act on. See [expectEnumConstructor].
+    if (isExpectContainer && KModifier.ENUM in builder.modifiers) expectEnumConstructor(name)
     if (kind != null && isExpectContainer) {
         val keyword = if (kind == ParamKind.VAR) "var" else "val"
         when {

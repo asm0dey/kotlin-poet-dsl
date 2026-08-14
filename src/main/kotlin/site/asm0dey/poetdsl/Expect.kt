@@ -284,6 +284,36 @@ internal fun annotationOrValueRenderGap(name: String, kindModifier: KModifier): 
 }
 
 /**
+ * An `expect` `enum class` has **no primary constructor at all** — not a property parameter, not a
+ * plain one — so the family's usual remedy ("declare it as a plain parameter") is a shape the
+ * frontends refuse just as hard. Measured, one file per row, all three identical:
+ *
+ *     expect class E { enum class Z(x: Int) }            expected enum class cannot have a
+ *     expect class E { enum class Z(val x: Int) }         constructor.  (the `val` row adds
+ *     expect class E { enum class Z() }                   *expected class constructor cannot have a
+ *     expect enum class Z(x: Int)                          property parameter*, and the entry row
+ *     expect class E { enum class Z(x: Int) { A(1) } }     adds *expected classes cannot initialize
+ *                                                          supertypes*)
+ *
+ * and the controls, clean on all three:
+ *
+ *     expect class E { enum class Z }        expect enum class Z
+ *     class E { enum class Z(x: Int) }       enum class Z(x: Int)     — outside `expect`, unchanged
+ *
+ * The `val` row was already refused, by the property-parameter rule, and told the caller to write
+ * the *plain* row — which this DSL rendered and no frontend accepts. So the remedy was unfollowable
+ * exactly where the previous round claimed it "is now only ever printed where it works". Both rows
+ * are this one refusal now, and the family's generic remedy is never printed for an `enum class`.
+ */
+internal fun expectEnumConstructor(name: String): Nothing = expectRefusal(
+    "constructorParam",
+    "${expectSubject("this `enum class`")} '$name' would give it a primary constructor",
+    "expected enum class cannot have a constructor",
+    "Drop the primary constructor entirely — an `expect` enum class can have none, whatever the " +
+        "parameter's kind — and declare it on the `actual` enum class.",
+)
+
+/**
  * How a member says it is `expect` when **both** sources can apply: its own `EXPECT` modifier (the
  * file level's answer, and a detached builder's) or the `expect` type it is declared in. Spelled
  * once so the two halves of the rule are never described differently.
