@@ -4,6 +4,7 @@ import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.ABSTRACT
 import com.squareup.kotlinpoet.KModifier.ENUM
 import com.squareup.kotlinpoet.KModifier.EXPECT
+import com.squareup.kotlinpoet.KModifier.EXTERNAL
 import com.squareup.kotlinpoet.KModifier.LATEINIT
 import com.squareup.kotlinpoet.KModifier.SEALED
 import com.squareup.kotlinpoet.STRING
@@ -198,6 +199,47 @@ class UninitializedPropertyTest {
             }
         }
         assertEquals(valMessage(), e.message)
+    }
+
+    /**
+     * `EXTERNAL` is the second modifier whose answer depends on a target this DSL cannot see, and
+     * E2b got it exactly backwards: *"`external` is not an exempt case, and never could be."*
+     *
+     * Measured, kotlinc 2.4.10, three frontends, one file each:
+     *
+     * ```
+     * kotlinc            external val a: Int  → modifier 'external' is not applicable to 'property'
+     * kotlinc-js         external val a: Int  → OK           external var a: Int → OK
+     * kotlinc-wasm       external val a: Int  → OK
+     * kotlinc-js         external val a: Int = 1
+     *                        → wrong initializer of external declaration. Must be ' = definedExternally'.
+     * ```
+     *
+     * So on the two platforms where an `external` property exists at all, it takes **no** initializer
+     * — the DSL's "Pass init = …" was the one piece of advice guaranteed to be wrong there. Exempted
+     * for the same reason `EXPECT` is: refusing it would refuse valid Kotlin/JS generator code, which
+     * is the expensive direction, while exempting it costs at worst kotlinc's own clear message on a
+     * JVM target. Unlike `EXPECT` this one is **not** measurable by the test suite — kctfork compiles
+     * for the JVM only — so the evidence above is a hand-run measurement, not a test.
+     */
+    @Test
+    fun `an external property needs no value`() {
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+
+            public external val x: Int
+
+            public external var y: Int
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `val`(EXTERNAL, "x", INT)
+                `var`(EXTERNAL, "y", INT)
+            }.toString(),
+        )
     }
 
     /** The other side of the boundary: everything that already carried a value still renders. */

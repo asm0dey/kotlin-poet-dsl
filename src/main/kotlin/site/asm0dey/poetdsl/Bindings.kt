@@ -386,9 +386,32 @@ internal fun checkProperty(
     //   Nothing else exempts: not a companion object inside an interface, not an enum, not a sealed
     //   class. [PropertyContainer.needsValue] carries the answer down from the scope rather than
     //   being inferred from anything visible here.
-    // - **modifier**: ABSTRACT, LATEINIT and EXPECT.
+    // - **modifier**: ABSTRACT, LATEINIT, EXPECT and EXTERNAL.
     //
-    // The E2b brief's list also named `external`, and E2b's answer to it is revisited separately.
+    // EXTERNAL is on that list against E2b's finding, which read *"`external` is not an exempt case,
+    // and never could be"* off a JVM-only measurement. It is a **platform** question, and two of the
+    // three frontends shipped with Kotlin 2.4.10 disagree with the JVM (one file each, measured):
+    //
+    //     kotlinc        external val a: Int  → modifier 'external' is not applicable to 'property'
+    //     kotlinc-js     external val a: Int  → OK        external var a: Int → OK
+    //     kotlinc-wasm   external val a: Int  → OK
+    //     kotlinc-js     external val a: Int = 1
+    //                        → wrong initializer of external declaration. Must be ' = definedExternally'.
+    //
+    // Where an `external` property exists at all it takes *no* initializer, so "Pass init = …" was
+    // the one remedy guaranteed to be wrong for it — and a `check` refusing the modifier, which the
+    // fix brief asked for, would have made Kotlin/JS external declarations ungenerable. This is the
+    // EXPECT trade exactly: refusing costs valid generator code, exempting costs at worst kotlinc's
+    // own clear message on the wrong target. EXTERNAL is deliberately *not* named in the remedy list
+    // below — "declare it EXTERNAL" means "the definition lives in JavaScript", which is not an
+    // answer to "this property has no value".
+    //
+    // Unlike the `expect` rows this one is **not** measurable by the suite: kctfork compiles for the
+    // JVM only, so the three lines above are hand-run and the tests pin the render alone.
+    //
+    // Still open, and not this round's: `external` on a *member* property is invalid everywhere
+    // measured — `non-top-level 'external' declaration` on JS and on Wasm, and not applicable to a
+    // property at all on the JVM — and this DSL says nothing about it.
     //
     // Both `expect` rows *are* measured, contrary to E2b's report: `-Xmulti-platform` gets the
     // frontend past `'expect' and 'actual' declarations can be used only in multiplatform projects`,
@@ -401,7 +424,8 @@ internal fun checkProperty(
     // field, which is more useful than this one. By the time control reaches here a `receiver`
     // implies a getter or a delegate, so the condition needs no term for it.
     if (container.needsValue && init == null && by == null && getter == null) {
-        val exempt = listOf(KModifier.ABSTRACT, KModifier.LATEINIT, KModifier.EXPECT)
+        val exempt =
+            listOf(KModifier.ABSTRACT, KModifier.LATEINIT, KModifier.EXPECT, KModifier.EXTERNAL)
         // The remedy list is built from what is legal *in this container*, not from the exempt list.
         // The two are not the same set, and a remedy that does not compile where it is offered is
         // worse than none: `abstract val a: Int` at file level is `modifier 'abstract' is not
