@@ -71,13 +71,25 @@ class UninitializedPropertyCompileTest {
      *
      * The control at the bottom is the same shape with the `expect` taken off the outer class, where
      * the ordinary rule fires instead.
+     *
+     * The initialized half goes in through `+propertySpec(…)`, and has to: since
+     * [ExpectSignatureTest] the attached `` `val` `` refuses an initializer anywhere an `expect`
+     * container reaches, because *expected property cannot have an initializer* is what this very
+     * test measures. The splice is the documented escape hatch — a detached builder answers to no
+     * container ([PropertyContainer.UNKNOWN]) — so the source below is still this DSL's own render
+     * rather than a hand-written snippet, which is the property that makes this a measurement of the
+     * guard's boundary and not of the language alone.
      */
     @Test
     fun `an expect class exempts every classifier inside it`() {
         fun render(inner: Expr?) = file("com.example", "Expected") {
             `class`(EXPECT, "E") {
-                `class`("N") { `val`("x", INT, init = inner) }
-                companionObject { `val`("y", INT, init = inner) }
+                `class`("N") {
+                    if (inner == null) `val`("x", INT) else +propertySpec(name = "x", type = INT, init = inner)
+                }
+                companionObject {
+                    if (inner == null) `val`("y", INT) else +propertySpec(name = "y", type = INT, init = inner)
+                }
             }
         }.toString()
 
@@ -114,7 +126,11 @@ class UninitializedPropertyCompileTest {
     @Test
     fun `the expect diagnostics do not depend on the multiplatform flag`() {
         fun render(inner: Expr?) = file("com.example", "Expected") {
-            `class`(EXPECT, "E") { `class`("N") { `val`("x", INT, init = inner) } }
+            `class`(EXPECT, "E") {
+                `class`("N") {
+                    if (inner == null) `val`("x", INT) else +propertySpec(name = "x", type = INT, init = inner)
+                }
+            }
         }.toString()
 
         val bare = compile(render(null)).messages

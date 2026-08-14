@@ -249,6 +249,12 @@ internal fun PropertySpec.Builder.addAccessors(
  *
  * @property needsValue whether a property here *must* be given an initializer, a delegate or a
  *   getter. False in an interface body and in every `expect` body, at any nesting depth.
+ * @property isExpectContext whether a property here **is** `expect` by virtue of the container, so
+ *   that it is a signature and may carry no value of any kind. The same [TypeScope.isExpect] that
+ *   [needsValue] reads, asked the opposite way round: one says a value is not required, this one
+ *   says a value is not permitted, and the two are separate fields because they are separate
+ *   questions with separate call sites. Inherited to every nesting depth, exactly as `needsValue`'s
+ *   `expect` term is.
  * @property abstractAllowed whether `ABSTRACT` is legal on a property here.
  * @property expectAllowed whether `EXPECT` is legal on a property here — read off the **immediate**
  *   builder's own modifiers rather than [TypeScope.isExpect], and the difference is load-bearing in
@@ -266,6 +272,7 @@ internal fun PropertySpec.Builder.addAccessors(
  */
 internal class PropertyContainer(
     val needsValue: Boolean,
+    val isExpectContext: Boolean,
     val abstractAllowed: Boolean,
     val expectAllowed: Boolean,
     val externalAllowed: Boolean,
@@ -276,9 +283,17 @@ internal class PropertyContainer(
          * returns a bare `PropertySpec` and an interface body is a legitimate destination. Every
          * container-dependent rule is therefore off here, which is the same answer
          * `containerNeedsValue = false` gave before this class existed.
+         *
+         * The rules that are **not** container-dependent still run, and one of them reads a field on
+         * this object: [isExpectContext] is false, so `expect`-ness can only come from the
+         * property's own `EXPECT` modifier — and a property carrying it is a signature wherever it
+         * is spliced, so `propertySpec(EXPECT.toModifiers(), …, init = 1.lit)` is refused here as it
+         * is at file level. Nothing about *where* it lands changes that answer, which is exactly why
+         * it is safe to give here.
          */
         val UNKNOWN: PropertyContainer = PropertyContainer(
             needsValue = false,
+            isExpectContext = false,
             abstractAllowed = true,
             expectAllowed = true,
             externalAllowed = true,
@@ -291,6 +306,7 @@ private fun Scope.propertyContainer(): PropertyContainer {
     if (this !is TypeScope) {
         return PropertyContainer(
             needsValue = true,
+            isExpectContext = false,
             abstractAllowed = false,
             expectAllowed = true,
             // The file level is the only place an `external` property renders the keyword and still
@@ -303,6 +319,9 @@ private fun Scope.propertyContainer(): PropertyContainer {
         // [TypeScope.isExpect], not `EXPECT in typeModifiers`: the modifier sits on the *outermost*
         // `expect class` only, and every classifier nested inside one inherits the rule.
         needsValue = !(kindName == "interface" || isExpect),
+        // The same [TypeScope.isExpect] the line above reads, asked the other way round: an `expect`
+        // property needs no value *and* may have none. Two questions, two fields, two call sites.
+        isExpectContext = isExpect,
         // Exactly Kotlin's list, which is narrower than KotlinPoet's on one row: KotlinPoet accepts
         // an abstract property in an `abstract object`, and Kotlin has no such thing. `kindName`
         // separates the three builders this DSL uses — `classBuilder`, `objectBuilder`,
@@ -464,6 +483,57 @@ internal fun checkProperty(
         check(!mutable || setter != null || by != null) {
             "$construct: '$name' is a mutable extension property, which has no backing field, so it " +
                 "needs a setter as well as a getter (or a delegate)."
+        }
+    }
+    // The dual of [PropertyContainer.needsValue], and the reason it is a second field rather than a
+    // second reading of the first: an `expect` property needs no value *and* may have none. It is a
+    // signature, and the `actual` declaration on each platform carries everything else.
+    //
+    // Two sources make a property `expect`, and both have to be asked or the rule holds at one site
+    // only — which is the defect this round removes elsewhere. Its own `EXPECT` modifier is the file
+    // level's answer; [PropertyContainer.isExpectContext] is the container's, inherited to every
+    // depth because Kotlin writes no keyword on a classifier nested inside an `expect` one (D36).
+    //
+    // KotlinPoet checks a fragment of this itself, from `TypeSpec.Builder.addProperty`, and as
+    // `IllegalArgumentException: properties in expect classes can't have initializers` / `… can't
+    // have getters and setters` — Global Constraint 26's forbidden exception type, with a message
+    // naming neither construct. Its check reads the *immediate* builder's own `EXPECT`, so it sees
+    // the first row below and none of the others; guarding only what it guards would have been the
+    // same one-site mistake in a new place. Measured, one file per row, all three frontends:
+    //
+    //     expect class E { val a: Int = 1 }               (KotlinPoet's own row)
+    //     expect val a: Int = 1                           expected property cannot have an initializer.
+    //     expect class E { class N { val a: Int = 1 } }        — D36's table, row 2
+    //     expect class E { companion object { val a: Int = 1 } }
+    //     expect class E { object N { val a: Int = 1 } }
+    //     expect val a: Int by lazy { 1 }                 expected property cannot be delegated.
+    //     expect class E { val a: Int by lazy { 1 } }
+    //     expect val a: Int get() = 1                     expected declaration cannot have a body.
+    //     expect class E { class N { val a: Int get() = 1 } }
+    //     expect lateinit var a: String                   expected property cannot be 'lateinit'.
+    //     expect class E { lateinit var a: String }
+    //
+    // Every one of them rendered from this DSL until this round, and no frontend accepts any. The
+    // control that keeps the boundary honest is `expect class E { val a: Int }`, which draws nothing
+    // but the missing-`actual` complaint on all three, and still renders.
+    if (container.isExpectContext || KModifier.EXPECT in declared) {
+        val expected = "$construct: '$name' is an `expect` declaration — by its own EXPECT modifier, " +
+            "or by the `expect` type it is declared in — and an expected property is a signature: "
+        check(init == null) {
+            expected + "\"expected property cannot have an initializer\" on the JVM, on Kotlin/JS " +
+                "and on Kotlin/Wasm alike. Drop init = …; the value belongs on the `actual` declaration."
+        }
+        check(by == null) {
+            expected + "\"expected property cannot be delegated\" on all three frontends. Drop " +
+                "by = …; the delegate belongs on the `actual` declaration."
+        }
+        check(getter == null && setter == null) {
+            expected + "\"expected declaration cannot have a body\" on all three frontends. Drop " +
+                "the accessor; it belongs on the `actual` declaration."
+        }
+        check(KModifier.LATEINIT !in declared) {
+            expected + "\"expected property cannot be 'lateinit'\" on all three frontends. Drop " +
+                "LATEINIT; it belongs on the `actual` declaration."
         }
     }
     // A property with no initializer, no delegate and no getter renders `val x: Int`, and kotlinc
