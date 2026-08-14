@@ -465,6 +465,15 @@ class ExpectFamilyTest {
                 typeSpec(EXPECT.toModifiers(), name = "E") { `class`("N") { superclass(base) } }
             }.message,
         )
+        // `TypeSpec.emit` also drops the parentheses for an `external` type (`areNestedExternal`,
+        // same line), and this check deliberately does not read that: `external` inside `expect` is
+        // *expected declaration cannot be external* on all three frontends, plus *external type
+        // extends non-external type 'Base'* and *non-top-level 'external' declaration* on JS and
+        // Wasm, so no target accepts the shape either way. The refusal is pinned here because the
+        // message's "renders that as `: Base()`" is the one clause that is inexact for it.
+        refused(nestedSupertypeMessage("class")) {
+            `class`(EXPECT, "E") { `class`(KModifier.EXTERNAL, "N") { superclass(base) } }
+        }
     }
 
     /** The control rows for the refusal above, rendered rather than described. */

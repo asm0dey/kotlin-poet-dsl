@@ -245,15 +245,23 @@ public class TypeScope internal constructor(
         // with (`TypeSpec.kt:238`), and those can be written after the `superclass(…)` call, so an
         // eager check in `applySuperclass` would answer on writing order alone.
         //
-        // `EXPECT`/`EXTERNAL` are read off this builder's **own** modifiers because that is exactly
-        // what `TypeSpec.emit` reads at `:239` — [isExpect] is the inherited fact, which is what
-        // makes the *frontends* apply the rule, and the two together are the render gap. See
+        // `EXPECT` is read off this builder's **own** modifiers because that is exactly what
+        // `TypeSpec.emit` reads at `:239` — [isExpect] is the inherited fact, which is what makes the
+        // *frontends* apply the rule, and the two together are the render gap. See
         // [nestedSupertypeRenderGap].
-        val ownModifiers = builder.modifiers
+        //
+        // `TypeSpec.emit` reads `areNestedExternal` on the same line, and this check deliberately
+        // does **not**: the term failed zero tests under falsification, and the reason is that the
+        // shape it would protect is refused on other grounds by every frontend —
+        // `expect class E { external class N : Base }` is *expected declaration cannot be external*
+        // on all three, plus *external type extends non-external type 'Base'* and *non-top-level
+        // 'external' declaration* on JS and Wasm (measured). So no target accepts it either way, and
+        // a term nothing can falsify is a term nothing is maintaining. The one imprecision that
+        // leaves is in the message, which says KotlinPoet renders `: Base()` where for that shape it
+        // renders `: Base`; the row below pins the refusal so the trade is recorded rather than
+        // discovered.
         val parenthesized = hasCtor || secondaryCtors.isEmpty()
-        if (isExpect && parenthesized && KModifier.EXPECT !in ownModifiers &&
-            KModifier.EXTERNAL !in ownModifiers
-        ) {
+        if (isExpect && parenthesized && KModifier.EXPECT !in builder.modifiers) {
             superclassType?.let { nestedSupertypeRenderGap(kindName, it) }
         }
         if (hasCtor) builder.primaryConstructor(ctor.build())
