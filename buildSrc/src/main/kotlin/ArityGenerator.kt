@@ -508,8 +508,8 @@ private val TYPE_BODY: List<Overload> = listOf(
         params = listOf("body: BlockScope.() -> Unit"),
         returns = null,
         body = "t.addInitializerBlock(body)",
-        shadow = "`init` is only valid inside a class or object body. Written in a block it would " +
-            "silently attach an initializer block to the enclosing type.",
+        shadow = "`init` is only valid inside a class, object or companion object body. Written in " +
+            "a block it would silently attach an initializer block to the enclosing type.",
     ),
     Overload(
         doc = """

@@ -70,11 +70,17 @@ internal fun TypeScope.addInitializerBlock(body: BlockScope.() -> Unit) {
  * What both generated `companionObject` overloads run; [name] is null for the anonymous form,
  * which Kotlin renders as a bare `companion object` and refers to as `Companion`.
  *
- * The companion's own [TypeScope] is rooted the way [declareType] roots a nested type — a fresh
- * [NameScope], a child [ScopeId] — and for the same reason: a companion object is a *nested* object,
- * so it cannot see the enclosing type's instance members, and chaining the names would rename its
- * members against members it can never shadow. The [ScopeId] still chains, so ADR 0008 keeps
- * rejecting a handle smuggled in from an unrelated scope.
+ * The companion's own [TypeScope] is rooted on *both* axes — a fresh [NameScope] and a **root**
+ * [ScopeId]`(null, …)`, the same shape [declareType] gives a nested type — and for the same reason:
+ * a companion object is a *nested* object, so it cannot see the enclosing type's instance members,
+ * and chaining either would carry them in. Chaining the names would rename the companion's own
+ * members against members they can never shadow; chaining the [ScopeId] is worse — it would make
+ * [checkOwned] *accept* an enclosing-instance handle (a constructor parameter or property of the
+ * type the companion belongs to) inside the companion body, and Kotlin does not:
+ * `class F(val id: Long) { companion object { fun show() { println(id) } } }` is
+ * `e: Unresolved reference 'id'.` (measured). A root [ScopeId] rejects that exactly as it rejects a
+ * handle smuggled in from any other unrelated scope — [ScopeId.isAncestorOf] walks up from the use
+ * site and reaches neither.
  *
  * Its [TypeScope.kindName] is `"companion object"`, which is what makes the messages of the
  * constructs it does *not* support name it: an object has no constructors, so
@@ -100,7 +106,7 @@ internal fun TypeScope.addCompanionObject(name: String?, body: TypeScope.() -> U
     val scope = TypeScope(
         TypeSpec.companionObjectBuilder(name),
         NameScope(null),
-        id.child("type"),
+        ScopeId(null, "companion object"),
         "companion object",
     )
     scope.body()

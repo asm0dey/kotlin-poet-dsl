@@ -214,7 +214,10 @@ class ShadowsTest {
             "'fun BlockScope.init(body: BlockScope.() -> Unit): Nothing' is deprecated" in result.messages,
             result.messages,
         )
-        assertTrue("`init` is only valid inside a class or object body" in result.messages, result.messages)
+        assertTrue(
+            "`init` is only valid inside a class, object or companion object body" in result.messages,
+            result.messages,
+        )
     }
 
     /** Both companion overloads are shadowed, so neither form falls through to the context function. */

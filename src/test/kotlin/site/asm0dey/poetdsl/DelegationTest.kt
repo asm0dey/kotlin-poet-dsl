@@ -1,6 +1,7 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.ClassName
+import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.OPEN
 import com.squareup.kotlinpoet.LONG
@@ -352,6 +353,32 @@ class DelegationTest {
             }
         }.toString()
         assertTrue("public constructor(q: Int, r: Int) : this(q)" in out, out)
+        assertCompiles(out)
+    }
+
+    /**
+     * Important 1 (review): a sibling constructor spliced in as a raw `FunSpec` bypasses
+     * `addSecondaryConstructor` entirely, via `` +spliced ``'s `unaryPlus`. The guard above used to
+     * count secondary constructors off a field that only `addSecondaryConstructor` incremented, so
+     * this class's second constructor went uncounted, the count read 1 instead of 2, and the guard
+     * fired on a class that plainly delegates to a real sibling rather than to itself — measured
+     * `IllegalStateException` on Kotlin kotlinc accepts unchanged. Counting straight off
+     * `builder.funSpecs` at `finish` closes it, because the splice still lands there.
+     */
+    @Test
+    fun `a spliced sibling constructor counts toward the self-delegation guard`() {
+        val spliced = FunSpec.constructorBuilder()
+            .addParameter("n", INT)
+            .addParameter("m", INT)
+            .build()
+        val out = file("com.example", "S") {
+            `class`("S") {
+                `constructor`(param("q", INT)) { q -> `this`(q, 1.lit) }
+                +spliced
+            }
+        }.toString()
+        assertTrue("public constructor(q: Int) : this(q, 1)" in out, out)
+        assertTrue("public constructor(n: Int, m: Int)" in out, out)
         assertCompiles(out)
     }
 

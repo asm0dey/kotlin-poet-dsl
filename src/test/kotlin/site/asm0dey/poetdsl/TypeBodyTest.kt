@@ -103,6 +103,27 @@ class TypeBodyTest {
         assertCompiles(rendered)
     }
 
+    /**
+     * Minor 4: the shadow's message used to say `init` is only valid "inside a class or object
+     * body", which is too narrow — a companion object (of a class, or of an interface, which has
+     * no state of its own but whose companion is an object like any other) both compile. Both are
+     * exercised here as the message's positive control.
+     */
+    @Test
+    fun `an init block compiles inside a class's companion object and an interface's`() {
+        val classCompanion = file("com.example", "A") {
+            `class`("A") { companionObject { `init` { +call("println", "loaded".lit) } } }
+        }.toString()
+        assertTrue("init {" in classCompanion, classCompanion)
+        assertCompiles(classCompanion)
+
+        val interfaceCompanion = file("com.example", "B") {
+            `interface`("B") { companionObject { `init` { +call("println", "loaded".lit) } } }
+        }.toString()
+        assertTrue("init {" in interfaceCompanion, interfaceCompanion)
+        assertCompiles(interfaceCompanion)
+    }
+
     /** A local declared in an init block renames away from the parameters it would shadow. */
     @Test
     fun `an init block local renames against both parameter levels`() {
@@ -276,6 +297,55 @@ class TypeBodyTest {
             }
         }.toString()
         assertTrue("public fun of(id: Long)" in rendered, rendered)
+        assertCompiles(rendered)
+    }
+
+    /**
+     * Important 2: the companion's `ScopeId` used to chain to the enclosing type's, so `checkOwned`
+     * wrongly *accepted* a handle to the enclosing type's own instance state (a `val`/`var`
+     * constructor parameter or property) used inside a companion body — a companion object is a
+     * nested object, and Kotlin does not let it see the enclosing type's instance members any more
+     * than a nested type can. The DSL now refuses to render that instead of emitting Kotlin that
+     * does not compile (Global Constraint 26).
+     */
+    @Test
+    fun `an enclosing-instance handle is rejected inside a companion object`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "F") {
+                `class`("F", param(VAL, "id", LONG)) { id ->
+                    companionObject { `fun`("show") { +call("println", id) } }
+                }
+            }
+        }
+        assertTrue("does not enclose the current scope" in failure.message.orEmpty(), "${failure.message}")
+    }
+
+    /** kotlinc's word on the shape the guard above refuses to produce. */
+    @Test
+    fun `kotlinc refuses the enclosing-instance handle a companion object would have smuggled in`() {
+        val result = compile(
+            "class F(val id: Long) { companion object { fun show() { println(id) } } }",
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+        assertTrue("Unresolved reference" in result.messages, result.messages)
+    }
+
+    /**
+     * The companion's own root `ScopeId` still accepts everything legitimate: a handle declared
+     * inside the companion body is usable in that same companion's member functions, exactly as it
+     * would be in any other type body.
+     */
+    @Test
+    fun `a companion object's own property is usable inside its own member function`() {
+        val rendered = file("com.example", "A") {
+            `class`("A") {
+                companionObject {
+                    val max = `val`(CONST, "MAX", INT, init = 10.lit)
+                    `fun`("show") { +call("println", max) }
+                }
+            }
+        }.toString()
+        assertTrue("println(MAX)" in rendered, rendered)
         assertCompiles(rendered)
     }
 

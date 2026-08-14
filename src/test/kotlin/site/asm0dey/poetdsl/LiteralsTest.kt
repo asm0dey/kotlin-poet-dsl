@@ -246,6 +246,24 @@ class LiteralsTest {
         )
     }
 
+    /**
+     * The negative half of the KDoc claim above: with no explicit `null` target, the spread's first
+     * element binds positionally to `target: UseSiteTarget?` instead of the vararg, and fails to
+     * type-check. Only the positive form (`annotation(cls, null, *args)`) had a test before this.
+     */
+    @Test
+    fun `annotation with a spread list and no explicit target does not compile`() {
+        val result = compileDsl(
+            """
+            val cls = ClassName("com.example", "Tags")
+            val args = listOf("a".lit, "b".lit).toTypedArray()
+            val ann = annotation(cls, *args)
+            """.trimIndent(),
+            extraImports = listOf("com.squareup.kotlinpoet.ClassName"),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+    }
+
     /** `%T`/`%M` in the elements survive the join, so imports still resolve at render time. */
     @Test
     fun `array literal keeps placeholders`() {

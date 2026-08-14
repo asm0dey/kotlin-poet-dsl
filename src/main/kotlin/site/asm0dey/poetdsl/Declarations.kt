@@ -36,6 +36,21 @@ import com.squareup.kotlinpoet.TypeSpec
  * (Task 19's local functions and beyond) still chain through `BlockScope.child`, which is the
  * case ADR 0009's shadowing rationale actually describes — this only changes how a *type's own*
  * scope is rooted.
+ *
+ * A nested type's [ScopeId], not just its [NameScope], is rooted too — `ScopeId(null, "type")`
+ * rather than `id.child("type")` — when the enclosing scope is itself a [TypeScope], for the
+ * identical reason [addCompanionObject]'s is: chaining would let `checkOwned`
+ * *accept* a handle from the enclosing type's own scope (a constructor parameter or property)
+ * inside the nested type's member bodies, which Kotlin does not allow a non-`inner` nested class
+ * — `class N2(val id: Long) { class Inner { init { println(id) } } }` is
+ * `e: Unresolved reference 'id'.` (measured). A *top-level* type keeps chaining to the enclosing
+ * [FileScope]'s [id], because that direction is legitimate: a top-level property or function is
+ * visible in every type's body in the same file, chained or not, and Kotlin agrees. One
+ * consequence of rooting only the [TypeScope] branch: a type nested two or more levels deep no
+ * longer chains back to the file's own scope either, so a file-level handle used inside a
+ * doubly-nested type's member body would now be rejected — code that is legal Kotlin. No test in
+ * this suite reaches that depth, and it is a narrower, pre-existing gap of the same kind
+ * `` `param(VAL, …)` `` documents for other rejections, not a new source of invalid output.
  */
 internal fun Scope.declareType(
     builder: TypeSpec.Builder,
@@ -62,7 +77,7 @@ internal fun Scope.declareType(
     val scope = TypeScope(
         builder.addModifiers(modifiers.toList()),
         NameScope(null),
-        id.child("type"),
+        if (this is TypeScope) ScopeId(null, "type") else id.child("type"),
         kindName,
     )
     scope.addAll(annotations)
@@ -508,7 +523,6 @@ internal fun TypeScope.beginSecondaryConstructor() {
     check(kindName == "class") {
         "constructor: a $kindName cannot declare a constructor; only a class can."
     }
-    hasSecondaryCtor = true
 }
 
 /**
@@ -524,10 +538,9 @@ internal fun TypeScope.addSecondaryConstructor(spec: FunSpec) {
     val delegatesToPrimary = spec.delegateConstructor == DelegationTarget.THIS.keyword
     check(!hasCtor || delegatesToPrimary) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
     if (!delegatesToPrimary) hasUndelegatedSecondaryCtor = true
-    // Counted for the self-delegation cycle [TypeScope.finish] rejects; see
-    // [LONE_SECONDARY_DELEGATING_TO_ITSELF] for why it cannot be decided here.
-    secondaryCtorCount++
-    if (delegatesToPrimary) thisDelegatingSecondaryCtorCount++
+    // The self-delegation cycle [TypeScope.finish] rejects is counted there, off `builder.funSpecs`
+    // — not here — so a sibling constructor spliced in as a raw `FunSpec` (bypassing this function
+    // entirely) still counts. See [TypeScope.finish] for why it cannot be decided at this call either.
     builder.addFunction(spec)
 }
 

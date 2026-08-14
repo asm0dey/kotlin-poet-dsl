@@ -106,10 +106,15 @@ public class TypeScope internal constructor(
 
     /**
      * See [initializerNames]. The label is what [checkOwned] prints when a plain parameter's handle
-     * is used in a member body — "Handle from scope 'the primary constructor's plain parameters'
-     * does not enclose the current scope 'fun(f)'." — so it names the level rather than the type.
+     * is used in a member body — "Handle from scope 'the primary constructor's plain parameters (use
+     * param(VAL, …) to reach it from a member body)' does not enclose the current scope 'fun(f)'." —
+     * so it names the level rather than the type, and, since [checkOwned] only ever interpolates
+     * `owner.label` and takes no message of its own, folds the remedy into the label rather than
+     * touching [checkOwned] itself.
      */
-    internal val initializerId: ScopeId = id.child("the primary constructor's plain parameters")
+    internal val initializerId: ScopeId = id.child(
+        "the primary constructor's plain parameters (use param(VAL, …) to reach it from a member body)",
+    )
 
     /**
      * Whether a `companionObject` was already declared. Kotlin allows one per type, and KotlinPoet
@@ -123,14 +128,6 @@ public class TypeScope internal constructor(
     internal var hasCtor: Boolean = false
 
     /**
-     * Whether a secondary `` `constructor` `` was already declared. Read by [finish], which rejects
-     * superclass constructor arguments carried in the class header when the type has secondary
-     * constructors but no primary one — `Supertype initialization is impossible without a primary
-     * constructor` (measured).
-     */
-    internal var hasSecondaryCtor: Boolean = false
-
-    /**
      * Whether a secondary `` `constructor` `` was declared that does **not** delegate with
      * `` `this`(…) `` — either it delegates with `` `super`(…) `` or it delegates not at all.
      *
@@ -140,22 +137,13 @@ public class TypeScope internal constructor(
      * (measured, both for a plain secondary and for one calling `: super(…)`). Tracked because the
      * two constructs can be written in either order and the broken output is the same — see the
      * guards in [addConstructorParam] and [addSecondaryConstructor].
+     *
+     * Unlike [finish]'s two checks below, this one has to be eager — a `constructorParam` written
+     * *after* an undelegated secondary constructor is the pair D25 rejects outright, at the call
+     * that creates it — so it stays a field rather than something read off [builder]. See the
+     * review note on [finish] for why the other two do not.
      */
     internal var hasUndelegatedSecondaryCtor: Boolean = false
-
-    /**
-     * How many secondary constructors were declared, and how many of those delegate with
-     * `` `this`(…) ``. Together with [hasCtor] they decide the one delegation cycle that is
-     * decidable without tracking which constructor delegates to which: a class whose *only*
-     * constructor is a secondary one delegating with `` `this` `` delegates to itself, and Kotlin
-     * answers `e: There's a cycle in the delegation calls chain.` (measured). Checked in [finish],
-     * not at the call, because a `constructorParam` written later can still give the class a primary
-     * constructor and make the pair valid.
-     */
-    internal var secondaryCtorCount: Int = 0
-
-    /** See [secondaryCtorCount]. */
-    internal var thisDelegatingSecondaryCtorCount: Int = 0
 
     /**
      * Constructor parameter names declared directly in this type via [addConstructorParam].
@@ -182,14 +170,27 @@ public class TypeScope internal constructor(
      *
      * The self-delegation cycle checked second is deferred for the identical reason: a class whose
      * only constructor delegates with `` `this`(…) `` calls itself, but a `constructorParam` written
-     * further down the body still turns that into a legal call to the primary constructor. See
-     * [secondaryCtorCount].
+     * further down the body still turns that into a legal call to the primary constructor.
+     *
+     * Both checks below count secondary constructors by reading [builder]`.funSpecs` (KotlinPoet's
+     * own record) rather than an incrementally-tracked field. A secondary constructor spliced in as
+     * a raw `FunSpec` — `` +ctorSpec `` via [unaryPlus] — bypasses [addSecondaryConstructor]
+     * entirely, so a field that only [addSecondaryConstructor] incremented undercounted it: a class
+     * with one `` `constructor` `` delegating with `` `this`(…) `` plus one spliced sibling was
+     * measured tripping [LONE_SECONDARY_DELEGATING_TO_ITSELF] even though it has two constructors
+     * and kotlinc accepts the identical Kotlin. `builder.funSpecs` already carries every secondary
+     * constructor regardless of how it was added, and `FunSpec.isConstructor`/`delegateConstructor`
+     * read back exactly what [addSecondaryConstructor] would otherwise have tracked by hand — so
+     * reading the builder here, once, replaces three fields (`hasSecondaryCtor`, `secondaryCtorCount`,
+     * `thisDelegatingSecondaryCtorCount`) with none.
      */
     internal fun finish(): TypeSpec {
-        check(builder.superclassConstructorParameters.isEmpty() || !hasSecondaryCtor || hasCtor) {
+        val secondaryCtors = builder.funSpecs.filter { it.isConstructor }
+        check(builder.superclassConstructorParameters.isEmpty() || secondaryCtors.isEmpty() || hasCtor) {
             superclassArgsPlusSecondary(kindName)
         }
-        check(hasCtor || secondaryCtorCount != 1 || thisDelegatingSecondaryCtorCount != 1) {
+        val delegatesToPrimary = { spec: FunSpec -> spec.delegateConstructor == DelegationTarget.THIS.keyword }
+        check(hasCtor || secondaryCtors.size != 1 || !delegatesToPrimary(secondaryCtors.single())) {
             LONE_SECONDARY_DELEGATING_TO_ITSELF
         }
         if (hasCtor) builder.primaryConstructor(ctor.build())

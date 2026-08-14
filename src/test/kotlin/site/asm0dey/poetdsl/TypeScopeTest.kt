@@ -116,6 +116,51 @@ class TypeScopeTest {
         )
     }
 
+    /**
+     * The nested-type twin of Important 2's companion fix: a nested (non-`inner`) type's
+     * `ScopeId` used to chain to its enclosing type's, the same hole that made a companion body
+     * wrongly accept an enclosing-instance handle. A nested type cannot see the enclosing type's
+     * instance members either, so this is the identical measured shape one level over.
+     */
+    @Test
+    fun `an enclosing-instance handle is rejected inside a nested type's member body`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "N2") {
+                `class`("N2", param(VAL, "id", LONG)) { id ->
+                    `class`("Inner") { `init` { +call("println", id) } }
+                }
+            }
+        }
+        assertTrue("does not enclose the current scope" in failure.message.orEmpty(), "${failure.message}")
+    }
+
+    /** kotlinc's word on the shape the guard above refuses to produce. */
+    @Test
+    fun `kotlinc refuses the enclosing-instance handle a nested type would have smuggled in`() {
+        val result = compile("class N2(val id: Long) { class Inner { init { println(id) } } }")
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+        assertTrue(
+            "Outer class 'class N2 : Any' of non-inner class cannot be used as receiver" in result.messages,
+            result.messages,
+        )
+    }
+
+    /**
+     * The other half of [declareType]'s conditional root: a *top-level* type still chains to the
+     * enclosing file's scope, because that direction is legitimate — a file-level declaration is
+     * visible in every type's body in the same file, nested or not, and kotlinc agrees.
+     */
+    @Test
+    fun `a file-level handle is accepted inside a top-level type's member body`() {
+        var handle: Expr? = null
+        val rendered = file("com.example", "Api") {
+            handle = `val`("limit", INT, init = 10.lit)
+            `class`("C") { `fun`("f") { +call("println", handle) } }
+        }.toString()
+        assertTrue("println(limit)" in rendered, rendered)
+        assertCompiles(rendered)
+    }
+
     @Test
     fun `constructor parameter handles are visible to sibling members`() {
         val out = file("com.example", "User") {
@@ -584,8 +629,8 @@ class TypeScopeTest {
             }
         }
         assertEquals(
-            "Handle from scope 'the primary constructor's plain parameters' does not enclose the " +
-                "current scope 'fun(f)'.",
+            "Handle from scope 'the primary constructor's plain parameters (use param(VAL, …) to " +
+                "reach it from a member body)' does not enclose the current scope 'fun(f)'.",
             failure.message,
         )
     }
