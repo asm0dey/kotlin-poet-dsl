@@ -103,8 +103,13 @@ internal fun compileDsl(body: String, extraImports: List<String> = emptyList()):
  * it lands.
  */
 @OptIn(ExperimentalCompilerApi::class)
-private fun compileNonJvm(source: String, property: String, extraArgs: List<String>): JsCompilationResult {
-    val klib = requireNotNull(System.getProperty(property)?.takeIf { it.isNotBlank() }) {
+private fun compileNonJvm(
+    source: String,
+    property: String,
+    extraArgs: List<String>,
+    klibOverride: String? = null,
+): JsCompilationResult {
+    val klib = klibOverride ?: requireNotNull(System.getProperty(property)?.takeIf { it.isNotBlank() }) {
         "$property is not set: the test JVM was started without the frontend's stdlib klib. See the " +
             "`jsStdlib`/`wasmStdlib` configurations in build.gradle.kts."
     }.split(File.pathSeparator).first()
@@ -129,6 +134,16 @@ internal fun compileJs(source: String): JsCompilationResult =
 @OptIn(ExperimentalCompilerApi::class)
 internal fun compileWasm(source: String): JsCompilationResult =
     compileNonJvm(source, "kotlin.stdlib.wasm", listOf("-Xwasm"))
+
+/**
+ * [compileWasm] with the stdlib klib named explicitly, so that the harness's own control — *does
+ * `-Xwasm` actually switch the target?* — can hand it the **Kotlin/JS** klib without mutating a
+ * global. The first spelling of that control called `System.setProperty`, which is correct read
+ * top-to-bottom and silently wrong the day this suite runs its tests in parallel.
+ */
+@OptIn(ExperimentalCompilerApi::class)
+internal fun compileWasmWithKlib(klib: String, source: String): JsCompilationResult =
+    compileNonJvm(source, "kotlin.stdlib.wasm", listOf("-Xwasm"), klibOverride = klib)
 
 /** Asserts [source] compiles on Kotlin/JS and on Kotlin/Wasm, printing the diagnostics if not. */
 @OptIn(ExperimentalCompilerApi::class)

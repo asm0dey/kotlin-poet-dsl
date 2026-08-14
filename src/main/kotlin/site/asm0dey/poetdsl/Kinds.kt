@@ -12,7 +12,7 @@ import com.squareup.kotlinpoet.KModifier
 // `` `class` ``/`` `interface` `` with nothing asking that question anywhere.
 //
 // The enumeration this file is derived from is the **matrix**: thirteen classifier kinds this DSL
-// can express × fifteen body members, at four container positions (file level, in a class, in an
+// can express × sixteen body members, at four container positions (file level, in a class, in an
 // object, in an interface) — 832 cells, each rendered through the DSL and each judged on `kotlinc`,
 // `kotlinc-js` and `kotlinc-wasm` 2.4.10. It is recorded in full as **D41**. What it found:
 //
@@ -233,7 +233,7 @@ internal val Scope.isExternalContainer: Boolean
  * A function whose return type is declared and whose body is empty renders `{ }` — and
  * *missing return statement* is what all three frontends say about it, in **every** container. The
  * one rule the matrix found that is not keyed on the classifier's kind at all: it fired in 13 of the
- * 13 kinds at all four positions, 50 cells, which is what made it look like a kind rule until the
+ * 13 kinds at all four positions, 47 cells, which is what made it look like a kind rule until the
  * rows were laid side by side.
  *
  * The exempt set is exactly the shapes whose body KotlinPoet **omits**, so that what renders is a
@@ -320,15 +320,46 @@ internal val Scope.abstractMemberAllowed: Boolean
             )
         )
 
-/** See [abstractMemberAllowed]. */
-internal fun Scope.abstractNeedsAnAbstractContainer(construct: String, name: String): Nothing =
+/**
+ * See [abstractMemberAllowed].
+ *
+ * A file is not a non-abstract class and the frontends do not call it one, so the quoted sentence is
+ * read off the container rather than hard-coded. Measured, kotlinc 2.4.10, one file per row:
+ *
+ *     abstract fun f(): Int                   modifier 'abstract' is not applicable to 'top level
+ *                                             function'.
+ *     fun g() { abstract fun h(): Int }       …to 'local function'.
+ *     object O { abstract fun f(): Int }      abstract function 'f' in non-abstract class 'O'.
+ *
+ * In this project the quoted sentence is the currency; a message that quotes one no frontend prints
+ * sends the reader looking for it.
+ */
+internal fun Scope.abstractNeedsAnAbstractContainer(construct: String, name: String): Nothing {
+    val notApplicableTo = when (this) {
+        is FileScope -> "top level function"
+        is BlockScope -> "local function"
+        is TypeScope -> null
+    }
     kindRefusal(
         construct,
-        "'$name' is ABSTRACT and is declared in ${containerLabel()}, which is not abstract, so " +
-            "nothing can ever override it",
-        "abstract function '$name' in non-abstract class",
-        "Declare the container ABSTRACT or SEALED, make it an interface, or give '$name' a body.",
+        "'$name' is ABSTRACT and is declared in ${containerLabel()}, which " +
+            if (notApplicableTo == null) {
+                "is not abstract, so nothing can ever override it"
+            } else {
+                "holds no member for anything to override"
+            },
+        notApplicableTo?.let { "modifier 'abstract' is not applicable to '$it'" }
+            ?: "abstract function '$name' in non-abstract class",
+        // A file cannot be declared ABSTRACT, so the remedy that names the container is only
+        // printed where there is a container to declare. Naming a shape the caller cannot write is
+        // the defect the previous round recorded twice.
+        if (notApplicableTo == null) {
+            "Declare the container ABSTRACT or SEALED, make it an interface, or give '$name' a body."
+        } else {
+            "Give '$name' a body, or move it into an interface or an ABSTRACT, SEALED or ENUM class."
+        },
     )
+}
 
 /**
  * A `data class`'s primary constructor is the whole declaration: it must exist, and every parameter

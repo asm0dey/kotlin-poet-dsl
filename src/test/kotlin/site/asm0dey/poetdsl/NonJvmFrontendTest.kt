@@ -32,23 +32,21 @@ class NonJvmFrontendTest {
      */
     @Test
     fun `the wasm harness really targets wasm`() {
-        val jsKlib = System.getProperty("kotlin.stdlib.js")!!
+        val jsKlib = System.getProperty("kotlin.stdlib.js")!!.split(java.io.File.pathSeparator).first()
         val wasmKlib = System.getProperty("kotlin.stdlib.wasm")!!
-        assertTrue(jsKlib != wasmKlib, "the two klibs are the same file: $jsKlib")
-        val crossed = compileWasm("package com.example\n\nclass A\n").let { it }
+        assertTrue(jsKlib !in wasmKlib, "the two klibs are the same file: $jsKlib")
         // Sanity: the correct klib compiles.
-        assertEquals(KotlinCompilation.ExitCode.OK, crossed.exitCode, crossed.messages)
-        val wrong = System.setProperty("kotlin.stdlib.wasm", jsKlib)
-        try {
-            val result = compileWasm("package com.example\n\nclass A\n")
-            assertTrue(
-                "failed platform-specific check" in result.messages,
-                "a Wasm compilation accepted the Kotlin/JS klib, so -Xwasm is not switching the " +
-                    "target:\n${result.messages}",
-            )
-        } finally {
-            System.setProperty("kotlin.stdlib.wasm", wrong ?: wasmKlib)
-        }
+        val correct = compileWasm("package com.example\n\nclass A\n")
+        assertEquals(KotlinCompilation.ExitCode.OK, correct.exitCode, correct.messages)
+        // …and the same compilation, handed the *JS* klib, must reject the library. Passed as an
+        // argument rather than through `System.setProperty`, which mutates state every other test
+        // in this JVM reads.
+        val crossed = compileWasmWithKlib(jsKlib, "package com.example\n\nclass A\n")
+        assertTrue(
+            "failed platform-specific check" in crossed.messages,
+            "a Wasm compilation accepted the Kotlin/JS klib, so -Xwasm is not switching the " +
+                "target:\n${crossed.messages}",
+        )
     }
 
     /**
@@ -119,7 +117,7 @@ class NonJvmFrontendTest {
                 "value class cannot have properties with backing fields",
             "data class D(a: Int)" to "primary constructor of data class must only have property",
             "object O { inner class N }" to "modifier 'inner' is not applicable inside",
-            "class O { inner class M { class N } }" to "is prohibited here",
+            "class O { inner class M { class N } }" to "'class' is prohibited here",
             "class C { abstract fun f(): Int }" to "abstract function 'f' in non-abstract class",
             "sealed class S { public constructor(q: Int) }" to
                 "constructor must be private or protected in sealed class",

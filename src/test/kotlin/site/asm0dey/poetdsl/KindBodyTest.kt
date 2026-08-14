@@ -244,7 +244,6 @@ class KindBodyTest {
             "companion object" to {
                 `class`("C") { companionObject { `fun`(ABSTRACT, "f", returns = INT) { } } }
             },
-            "file" to { `fun`(ABSTRACT, "f", returns = INT) { } },
             "expect class" to {
                 `class`(EXPECT, "E") { `fun`(ABSTRACT, "f", returns = INT) { } }
             },
@@ -253,6 +252,19 @@ class KindBodyTest {
             val m = message(body)
             assertTrue("abstract function 'f' in non-abstract class" in m, "$label: $m")
         }
+    }
+
+    /**
+     * **A file is not a non-abstract class, and the frontends do not call it one.** Measured on
+     * kotlinc 2.4.10: `abstract fun f(): Int` at file level is *modifier 'abstract' is not
+     * applicable to 'top level function'*, and a local one is *…to 'local function'*. In this
+     * project the quoted sentence is the currency, so the message quotes the one that is printed.
+     */
+    @Test
+    fun `an abstract function at file level quotes the sentence a file gets`() {
+        val m = message { `fun`(ABSTRACT, "f", returns = INT) { } }
+        assertTrue("modifier 'abstract' is not applicable to 'top level function'" in m, m)
+        assertFalse("non-abstract class" in m, m)
     }
 
     /** The control rows: the four containers that do hold an abstract member. */
@@ -531,10 +543,5 @@ class KindBodyTest {
                 `class`(ABSTRACT, "A") { `constructor`(param("q", INT)) { } }
             },
         )
-    }
-
-    private companion object {
-        @Suppress("unused")
-        val unusedRefs: List<Any> = emptyList()
     }
 }
