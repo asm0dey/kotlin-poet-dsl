@@ -24,14 +24,24 @@ class DocumentationTest {
         val rendered = file("com.example", "A", fileComment = text) {
             `class`("C", kdoc = text) {
                 `val`("p", INT, init = 1.lit, kdoc = text)
-                `fun`("f", param("x", INT, kdoc = text), returns = INT, kdoc = text, returnsKdoc = text) { _ ->
-                    ret(1.lit)
-                }
+                `fun`(
+                    "f",
+                    param("x", INT, kdoc = text),
+                    returns = INT,
+                    receiver = STRING,
+                    kdoc = text,
+                    receiverKdoc = text,
+                    returnsKdoc = text,
+                ) { _ -> ret(1.lit) }
             }
         }.toString()
-        // Six occurrences: the file comment, the class, the property, the function, its parameter
-        // and its return. Every one of them the caller's text, character for character.
-        assertEquals(6, rendered.windowed(text.length).count { it == text })
+        // Seven occurrences — one for every route a caller's string has into KotlinPoet's
+        // documentation API, and all seven of them: the file comment, the class, the property, the
+        // function, its parameter, its receiver and its return. Every one the caller's text,
+        // character for character. `receiverKdoc` was the route this assertion missed; it was
+        // exercised only by "it compiles", which would not notice a `%S` silently eating an
+        // argument.
+        assertEquals(7, rendered.windowed(text.length).count { it == text })
     }
 
     @Test
