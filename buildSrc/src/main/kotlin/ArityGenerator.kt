@@ -635,6 +635,16 @@ private val SUPERTYPES: List<Overload> = listOf(
  * the six-variant matrix: an `init` block takes no annotations or modifiers in Kotlin at all, and a
  * companion object takes none in practice, so the companion's name is the only axis either has.
  *
+ * The companion object takes E2b's [KDOC_PARAM] and the `init` block does not, which is not an
+ * oversight in either direction: a companion object is a declaration and KotlinPoet's `TypeSpec`
+ * documents one, while `TypeSpec.Builder.addInitializerBlock` takes a bare `CodeBlock` with nowhere
+ * to put documentation — and Kotlin has no KDoc syntax for an initializer block anyway.
+ *
+ * The named overload's `name: String` and the anonymous one's `kdoc: String? = null` occupy the same
+ * position, which is exactly the shape that can rebind silently. Measured rather than reasoned:
+ * `companionObject("Factory") { }` still renders `companion object Factory` at head, because Kotlin
+ * picks the more specific `String` over `String?`. See D35.
+ *
  * `init` is a *soft* keyword — a keyword only in a class body's declaration position — so the
  * function is declared without backticks and calls read as `` `init` { } `` or `init { }`
  * interchangeably. The bodies are a single call into `TypeBody.kt`, which keeps the guards.
@@ -673,9 +683,9 @@ private val TYPE_BODY: List<Overload> = listOf(
         """.trimMargin(),
         context = "context(t: TypeScope)",
         name = "companionObject",
-        params = listOf("body: TypeScope.() -> Unit"),
+        params = KDOC_PARAM + listOf("body: TypeScope.() -> Unit"),
         returns = null,
-        body = "t.addCompanionObject(null, body)",
+        body = "t.addCompanionObject(null, kdoc, body)",
         shadow = "companionObject is only valid inside a class or interface body. Written in a " +
             "block it would silently attach a companion object to the enclosing type.",
     ),
@@ -690,9 +700,9 @@ private val TYPE_BODY: List<Overload> = listOf(
         """.trimMargin(),
         context = "context(t: TypeScope)",
         name = "companionObject",
-        params = listOf("name: String", "body: TypeScope.() -> Unit"),
+        params = listOf("name: String") + KDOC_PARAM + listOf("body: TypeScope.() -> Unit"),
         returns = null,
-        body = "t.addCompanionObject(name, body)",
+        body = "t.addCompanionObject(name, kdoc, body)",
         shadow = "companionObject is only valid inside a class or interface body. Written in a " +
             "block it would silently attach a companion object to the enclosing type.",
     ),

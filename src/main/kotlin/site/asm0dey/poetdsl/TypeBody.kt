@@ -95,7 +95,7 @@ internal fun TypeScope.addInitializerBlock(body: BlockScope.() -> Unit) {
  * `` `constructor` `` inside one says so, and a companion object inside a companion object is
  * refused by the kind check below rather than rendered.
  */
-internal fun TypeScope.addCompanionObject(name: String?, body: TypeScope.() -> Unit) {
+internal fun TypeScope.addCompanionObject(name: String?, kdoc: String?, body: TypeScope.() -> Unit) {
     check(kindName == "class" || kindName == "interface") {
         "companionObject: a $kindName cannot declare a companion object; only a class or an " +
             "interface can."
@@ -112,7 +112,7 @@ internal fun TypeScope.addCompanionObject(name: String?, body: TypeScope.() -> U
     hasCompanionObject = true
     declaredTypeNames += declaredName
     val scope = TypeScope(
-        TypeSpec.companionObjectBuilder(name),
+        TypeSpec.companionObjectBuilder(name).apply { kdoc?.let { addKdoc(docBlock(it)) } },
         NameScope(null),
         fileId.child("companion object"),
         "companion object",

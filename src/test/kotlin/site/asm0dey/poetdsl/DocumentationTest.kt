@@ -215,6 +215,40 @@ class DocumentationTest {
         )
     }
 
+    /**
+     * The named and the anonymous overload put `name: String` and `kdoc: String? = null` in the same
+     * position, which is the one shape that can rebind *silently* rather than failing at the
+     * caller's compile. It does not: Kotlin picks the more specific `String`. Measured at base and
+     * at head — see D35 — and pinned here so a later reordering cannot quietly change it.
+     */
+    @Test
+    fun `a companion object takes kdoc, and naming one still names it`() {
+        assertEquals(
+            """
+            package com.example
+
+            public class C {
+              /**
+               * The factory.
+               */
+              public companion object Factory
+            }
+
+            public class D {
+              /**
+               * The anonymous one.
+               */
+              public companion object
+            }
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `class`("C") { companionObject("Factory", kdoc = "The factory.") { } }
+                `class`("D") { companionObject(kdoc = "The anonymous one.") { } }
+            }.toString(),
+        )
+    }
+
     @Test
     fun `a receiver kdoc with no receiver is rejected`() {
         val e = assertFailsWith<IllegalStateException> {
