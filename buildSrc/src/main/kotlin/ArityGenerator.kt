@@ -517,9 +517,18 @@ private fun ctorParamOverloads(): List<Overload> = CTOR_PARAM_NAMES.flatMap { nm
             context = "context(t: TypeScope)",
             name = nm.value,
             params = listOf(if (v.annotated) "kind: ParamKind?" else "kind: ParamKind? = null") +
-                v.params() + listOf("name: String", "type: TypeName"),
+                v.params() + listOf(
+                    "name: String",
+                    "type: TypeName",
+                    // E2b's slots, appended after the ones that were already here so that no
+                    // positional argument which resolved before this moves. `modifiers` is a single
+                    // `KModifier?` rather than a `Modifiers` set because no two parameter modifiers
+                    // combine in Kotlin — see `PARAMETER_MODIFIERS` in `Declarations.kt`.
+                    "default: Expr? = null",
+                    "modifiers: KModifier? = null",
+                ),
             returns = "Expr",
-            body = "t.addConstructorParam(kind, ${v.annotationsArg}, name, type)",
+            body = "t.addConstructorParam(kind, ${v.annotationsArg}, name, type, default, modifiers)",
             shadow = "${nm.value} is only valid inside a class or object body.",
         )
     }

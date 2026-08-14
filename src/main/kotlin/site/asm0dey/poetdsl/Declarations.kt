@@ -178,9 +178,11 @@ internal fun TypeScope.addConstructorParam(
     annotations: Annotations?,
     name: String,
     type: TypeName,
+    default: Expr?,
+    modifiers: KModifier?,
 ): Expr = addConstructorParam(
     kind,
-    ParameterSpec.builder(name, type).apply { annotations?.list?.forEach { addAnnotation(it) } }.build(),
+    buildParam(name, type, default, modifiers) { annotations?.list?.forEach { addAnnotation(it) } },
 )
 
 /**
@@ -192,6 +194,19 @@ internal fun TypeScope.addConstructorParam(
 internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec): Expr {
     val name = spec.name
     val type = spec.type
+    // E2b's parameter modifiers and defaults, judged against the parameters this primary constructor
+    // already has: the vararg count is the one rule that spans a whole parameter list, and a primary
+    // constructor is assembled one call at a time, so the running list is where it has to be read.
+    // `inline` is not a thing a constructor can be, so `noinline`/`crossinline` are refused outright
+    // here rather than conditionally.
+    checkParams(
+        owner = "the primary constructor",
+        inlineRemedy = "A constructor is never `inline`, so drop the parameter modifier.",
+        isInline = false,
+        isOverride = false,
+        earlier = ctor.parameters,
+        params = listOf(spec),
+    )
     // A second constructor parameter named `name` is a compile error in Kotlin with no valid
     // output to preserve, so it is rejected outright rather than renamed to `name2` (ADR 0009,
     // amended by D21) — the same treatment `propertyOf` gives a duplicate property, and for the
@@ -306,7 +321,121 @@ public fun typeSpec(
  * scope is uniquified when the function is built, exactly as a lambda parameter is (ADR 0009). The
  * handle the body receives always carries the name actually rendered.
  */
-public fun param(name: String, type: TypeName): ParameterSpec = ParameterSpec.builder(name, type).build()
+public fun param(
+    name: String,
+    type: TypeName,
+    default: Expr? = null,
+    modifiers: KModifier? = null,
+): ParameterSpec = buildParam(name, type, default, modifiers) {}
+
+/**
+ * The three parameter modifiers Kotlin has, and the whole of them: `vararg` on a value parameter,
+ * `noinline` and `crossinline` on a function-typed parameter of an `inline` function. Every other
+ * [KModifier] renders (KotlinPoet's `addModifiers` takes any) and none of them compiles in this
+ * position.
+ *
+ * A *primary-constructor* parameter looks like a fourth case — `class C(private val x: Int)`,
+ * `class C(override val id: Long)` — but it is not: those modifiers belong to the **property** the
+ * parameter declares, which this DSL builds as a separate [PropertySpec] in [addConstructorParam],
+ * not to the [ParameterSpec]. Putting them here would render them on the parameter, which is not
+ * where Kotlin accepts them.
+ */
+private val PARAMETER_MODIFIERS: Set<KModifier> =
+    setOf(KModifier.VARARG, KModifier.NOINLINE, KModifier.CROSSINLINE)
+
+/**
+ * The one place a [ParameterSpec] is built from [param]'s and [constructorParam]'s slots, so the
+ * three of them cannot drift.
+ *
+ * [modifiers] is a **single** [KModifier] rather than this DSL's usual [Modifiers] set, because no
+ * two parameter modifiers combine: `vararg noinline g: () -> Unit` in an `inline` function is
+ * `Modifier is only allowed for function parameters of an inline function` (measured — a vararg
+ * parameter's type is `Array<out …>`, not a function type), and `noinline`/`crossinline` are
+ * alternatives to each other. The slot's type therefore says what the language says. The set-valued
+ * check in [checkParams] is still needed, because a caller can hand-build a [ParameterSpec] in raw
+ * KotlinPoet and pass it into any of this DSL's parameter slots.
+ */
+private fun buildParam(
+    name: String,
+    type: TypeName,
+    default: Expr?,
+    modifiers: KModifier?,
+    extras: ParameterSpec.Builder.() -> Unit,
+): ParameterSpec = ParameterSpec.builder(name, type)
+    .apply {
+        modifiers?.let {
+            // Ahead of `addModifiers`, which raises an `IllegalArgumentException` naming neither
+            // this construct nor the parameter (Global Constraint 26 wants an IllegalStateException
+            // that names both). KotlinPoet's own list and [PARAMETER_MODIFIERS] agree exactly; this
+            // check exists for the exception type and the message, not for a rule KotlinPoet misses.
+            check(it in PARAMETER_MODIFIERS) {
+                "param: '$name' cannot be $it. Kotlin allows only VARARG, NOINLINE and CROSSINLINE " +
+                    "on a parameter, and never two at once. A `private`/`override` primary-" +
+                    "constructor property is not expressible here — that modifier belongs to the " +
+                    "property, not to the parameter."
+            }
+            addModifiers(it)
+        }
+        default?.let { defaultValue("%L", it.code) }
+        extras()
+    }
+    .build()
+
+/**
+ * Everything E2b's [param] slots make expressible that is not valid Kotlin, rejected before
+ * KotlinPoet sees it (Global Constraint 26). KotlinPoet checks none of it: `addModifiers` takes any
+ * [KModifier] and `defaultValue` takes any [CodeBlock].
+ *
+ * Called with the parameters a declaration is about to take and, for a primary constructor, the ones
+ * it already has — [earlier] — because the vararg rule is the one that spans a whole parameter list
+ * and a primary constructor is assembled one [constructorParam] call at a time.
+ *
+ * **What is deliberately not checked:** *where* the `vararg` sits. Kotlin allows a parameter after
+ * one — `fun f(vararg xs: Int, y: Int)` compiles, and callers pass `y` by name — so a
+ * "vararg must be last" rule would refuse valid generator code, which is the expensive direction.
+ * Nor is the parameter's *type* checked against `noinline`/`crossinline`: those are legal only on a
+ * function-typed parameter, but a `typealias` for a function type arrives here as a plain
+ * [ClassName] and there would be no way to tell it from a mistake.
+ *
+ * The *set* of legal modifiers is not checked here either, and could not usefully be:
+ * `ParameterSpec.Builder.addModifiers` already refuses anything outside [PARAMETER_MODIFIERS], so a
+ * [ParameterSpec] carrying one cannot exist — not even hand-built in raw KotlinPoet, since that is
+ * the only route to a [ParameterSpec] there is. What it refuses with is an `IllegalArgumentException`
+ * naming neither this DSL's construct nor the parameter, so [buildParam] says it first (Global
+ * Constraint 26) and by the time a spec reaches here the question is already settled.
+ */
+private fun checkParams(
+    owner: String,
+    inlineRemedy: String,
+    isInline: Boolean,
+    isOverride: Boolean,
+    earlier: List<ParameterSpec>,
+    params: List<ParameterSpec>,
+) {
+    var hasVararg = earlier.any { KModifier.VARARG in it.modifiers }
+    params.forEach { p ->
+        if (KModifier.VARARG in p.modifiers) {
+            check(!hasVararg) {
+                "param: \"${p.name}\" is the second `vararg` parameter of $owner, and Kotlin allows " +
+                    "one per function (\"Multiple vararg parameters are prohibited.\"). Drop the " +
+                    "modifier, or fold the two into one."
+            }
+            hasVararg = true
+        }
+        (p.modifiers - KModifier.VARARG).forEach { m ->
+            check(isInline) {
+                "param: \"${p.name}\" is `${m.name.lowercase()}`, which Kotlin allows only on a " +
+                    "parameter of an `inline` function (\"Modifier is only allowed for function " +
+                    "parameters of an inline function.\"). $inlineRemedy"
+            }
+        }
+        check(!isOverride || p.defaultValue == null) {
+            "param: \"${p.name}\" carries a default value and $owner is `override`, which Kotlin " +
+                "does not allow (\"An overriding function is not allowed to specify default values " +
+                "for its parameters.\"). Drop the default, or declare the value in the base function."
+        }
+    }
+}
 
 /**
  * A primary-constructor parameter for D23's signature form: `` `class`("User", param(VAL, "id", LONG)) ``.
@@ -323,8 +452,13 @@ public fun param(name: String, type: TypeName): ParameterSpec = ParameterSpec.bu
  * choice rides along as a KotlinPoet tag, which is what tags are for; nothing else reads it, and
  * [buildFun] rejects a tagged parameter wherever `val`/`var` would not be valid Kotlin.
  */
-public fun param(kind: ParamKind?, name: String, type: TypeName): ParameterSpec =
-    ParameterSpec.builder(name, type).apply { if (kind != null) tag(ParamKind::class, kind) }.build()
+public fun param(
+    kind: ParamKind?,
+    name: String,
+    type: TypeName,
+    default: Expr? = null,
+    modifiers: KModifier? = null,
+): ParameterSpec = buildParam(name, type, default, modifiers) { if (kind != null) tag(ParamKind::class, kind) }
 
 /**
  * What [buildFun] is building. Four shapes share one implementation because they share everything
@@ -453,6 +587,23 @@ internal fun buildFun(
                 "\"${p.name}\", …)) or constructorParam, or drop the kind here."
         }
     }
+
+    // E2b's parameter modifiers and defaults, checked against the names the *caller* wrote — before
+    // the uniquifier below can move any of them — and against the declaration's own modifiers, which
+    // is what makes `noinline` and an `override` default decidable here rather than guessed at.
+    // A constructor is never `inline`, so it gets the flat remedy the primary constructor gets.
+    checkParams(
+        owner = if (kind == FunKind.CONSTRUCTOR) "this constructor" else "'$name'",
+        inlineRemedy = if (kind == FunKind.CONSTRUCTOR) {
+            "A constructor is never `inline`, so drop the parameter modifier."
+        } else {
+            "Declare '$name' with the INLINE modifier, or drop the parameter modifier."
+        },
+        isInline = KModifier.INLINE in modifiers.toList(),
+        isOverride = KModifier.OVERRIDE in modifiers.toList(),
+        earlier = emptyList(),
+        params = params,
+    )
 
     val declared = params.map { p ->
         val unique = names.unique(p.name)
