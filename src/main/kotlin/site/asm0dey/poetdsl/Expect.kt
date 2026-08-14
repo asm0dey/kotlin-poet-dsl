@@ -172,8 +172,74 @@ internal fun expectRefusal(construct: String, what: String, diagnostic: String, 
  * Read off the **immediate** builder's own modifiers, never inherited: this is a fact about what
  * *this* declaration renders, the same reading `PropertyContainer.expectAllowed` and
  * `externalAllowed` make, and it is what keeps [annotationOrValueRenderGap] reachable.
+ *
+ * **One fact, read for two questions**, which is why the set is not split the way
+ * `PropertyContainer`'s six fields are: *Kotlin requires the primary-constructor parameters of these
+ * two kinds to be `val`* answers both "what is exempt from the `expect` property-parameter rule"
+ * (here) and "what must a parameter of these kinds always be" ([propertyParamMustBeVal]). The second
+ * reader is not an `expect` rule at all and fires in every container. Before it existed, the
+ * exemption keyed on "has one of these kinds" rather than on `val`, so `expect class E { annotation
+ * class N(var x: Int) }` rendered — *an annotation parameter cannot be 'var'* on all three
+ * frontends. That is the control row the exemption was written without.
  */
 internal val PROPERTY_PARAM_KINDS: Set<KModifier> = setOf(KModifier.ANNOTATION, KModifier.VALUE)
+
+/**
+ * A primary-constructor parameter of an `annotation class` or a `value class` **must be `val`** —
+ * the language rule that makes [PROPERTY_PARAM_KINDS] an `expect` exemption in the first place, read
+ * here for its own sake.
+ *
+ * Deliberately **not** an [expectRefusal]: this holds in every container, `expect` or not, so the
+ * family's invariant middle clause would be claiming a rule that has nothing to do with it. It lives
+ * beside the set because it is the same measured fact read from the other side, and separating them
+ * is how the exemption came to be written with only its `val` half measured.
+ *
+ * Measured on `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10, one file per row, all three
+ * identical — inside an `expect` container and outside it alike, and at every depth:
+ *
+ *     annotation class N(var x: Int)                       an annotation parameter cannot be 'var'.
+ *     expect class E { annotation class N(var x: Int) }
+ *     expect class E { class M { annotation class N(var x: Int) } }
+ *     expect annotation class A(var x: Int)
+ *     annotation class N(x: Int)                           'val' keyword is missing in annotation
+ *     expect class E { annotation class N(x: Int) }         parameter.
+ *     value class V(var y: Int)                            value class primary constructor must only
+ *     expect class E { value class V(var y: Int) }          have final read-only ('val') property
+ *     expect value class W(var y: Int)                      parameters.
+ *     expect class E { value class V(y: Int) }
+ *
+ * And the control rows, clean on all three (the JVM adds *value classes without '@JvmInline'
+ * annotation are not yet supported* to the two bare `value class` rows, which is the caller's
+ * annotation to add and not this DSL's business — D37's platform rule):
+ *
+ *     annotation class N(val x: Int)                    expect class E { annotation class N(val x: Int) }
+ *     value class V(val y: Int)                         expect class E { value class V(val y: Int) }
+ *     annotation class N                                expect class E { annotation class N }
+ *     expect class E { annotation class N(vararg val x: Int) }
+ *
+ * Two of the refused rows **rendered** before this check: `var` in an `annotation class` in any
+ * container, and a plain parameter in an `annotation class` in any container. The other two reached
+ * KotlinPoet's own `IllegalStateException: value/inline classes must have a single read-only (val)
+ * property parameter` / `…must have at least 1 property` — the right exception type with a message
+ * that names KotlinPoet's model rather than the caller's construct, and for the plain-parameter row
+ * a message about a *count* rather than about the missing keyword.
+ */
+internal fun propertyParamMustBeVal(name: String, kind: ParamKind?, kindModifier: KModifier): Nothing {
+    val classifier = kindModifier.name.lowercase()
+    val what = if (kind == ParamKind.VAR) "is declared `var`" else "declares no property"
+    val diagnostic = when {
+        kindModifier == KModifier.ANNOTATION && kind == ParamKind.VAR -> "an annotation parameter cannot be 'var'"
+        kindModifier == KModifier.ANNOTATION -> "'val' keyword is missing in annotation parameter"
+        else -> "value class primary constructor must only have final read-only ('val') property parameters"
+    }
+    error(
+        "constructorParam: '$name' $what on the primary constructor of ${article(classifier)} " +
+            "`$classifier class`, and Kotlin requires every primary-constructor parameter of " +
+            "${article(classifier)} `$classifier class` to be `val` — so this is \"$diagnostic\" on " +
+            "the JVM, on Kotlin/JS and on Kotlin/Wasm alike. Declare it with " +
+            "constructorParam(VAL, \"$name\", …) or param(VAL, \"$name\", …).",
+    )
+}
 
 /**
  * The other side of [PROPERTY_PARAM_KINDS], and the one place in this family where the refusal is a
@@ -194,15 +260,22 @@ internal val PROPERTY_PARAM_KINDS: Set<KModifier> = setOf(KModifier.ANNOTATION, 
  *
  * The escape hatch the message names is measured, not assumed — a spec built without `EXPECT` passes
  * `addProperty`, and `toBuilder().addModifiers(EXPECT)` never runs that `require` again.
+ *
+ * **`val` is the only keyword this can be about**, so it is spelled here rather than passed in.
+ * [propertyParamMustBeVal] refuses a `var` (and a plain) parameter of either kind before this is
+ * reached, in every container — and it has to, because `expect annotation class A(var x: Int)` is
+ * *an annotation parameter cannot be 'var'* on all three frontends, which would make this message's
+ * "The Kotlin is valid on all three frontends" a false claim. It was one, at `0a9f6d1`, pinned by a
+ * test.
  */
-internal fun annotationOrValueRenderGap(name: String, keyword: String, kindModifier: KModifier): String {
+internal fun annotationOrValueRenderGap(name: String, kindModifier: KModifier): String {
     val kind = kindModifier.name.lowercase()
-    return "constructorParam: '$name' declares a `$keyword` property on the primary constructor of " +
+    return "constructorParam: '$name' declares a `val` property on the primary constructor of " +
         "an `expect $kind class`, and KotlinPoet 2.3.0 renders no such thing: a `val`/`var` " +
         "primary-constructor parameter is a property with a `%N` initializer, and " +
         "`TypeSpec.Builder.addProperty` rejects every property carrying an initializer when the " +
         "builder's own modifiers contain EXPECT. The Kotlin is valid on all three frontends — " +
-        "${if (kindModifier == KModifier.ANNOTATION) "an" else "a"} $kind class parameter must be " +
+        "${article(kind)} $kind class parameter must be " +
         "`val`, so the rule against a property parameter in an `expect` class does not reach it — " +
         "which makes this a backend gap and not a language rule. Build the type with " +
         "typeSpec(${kindModifier.name}.toModifiers(), …) and add the modifier afterwards with " +

@@ -677,8 +677,11 @@ class TypeScopeTest {
         )) {
             val thrown = kotlin.runCatching { build() }.exceptionOrNull()
             assertTrue(thrown is IllegalStateException, "$kind: $thrown")
+            // `an interface`, not `a interface`: the article comes from [article], which
+            // [annotationOrValueRenderGap] two files away had been getting right on its own.
+            val a = if (kind == "interface") "an" else "a"
             assertEquals(
-                "constructorParam: a $kind has no primary constructor; only a class can declare " +
+                "constructorParam: $a $kind has no primary constructor; only a class can declare " +
                     "one. Declare it as a property in the body instead.",
                 thrown.message,
             )

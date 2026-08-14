@@ -85,8 +85,8 @@ class ExpectFamilyTest {
      * [refusal]'s "this is …on the JVM, on Kotlin/JS and on Kotlin/Wasm alike" clause would be a
      * false claim. A separate sentence, deliberately.
      */
-    private fun renderGapMessage(name: String, keyword: String, kind: String) =
-        "constructorParam: '$name' declares a `$keyword` property on the primary constructor of an " +
+    private fun renderGapMessage(name: String, kind: String) =
+        "constructorParam: '$name' declares a `val` property on the primary constructor of an " +
             "`expect $kind class`, and KotlinPoet 2.3.0 renders no such thing: a `val`/`var` " +
             "primary-constructor parameter is a property with a `%N` initializer, and " +
             "`TypeSpec.Builder.addProperty` rejects every property carrying an initializer when the " +
@@ -98,6 +98,26 @@ class ExpectFamilyTest {
             "modifier afterwards with .toBuilder().addModifiers(EXPECT).build(), or declare it " +
             "inside the `expect` type, where Kotlin makes the keyword implicit and this DSL renders " +
             "the parameter."
+
+    /**
+     * The language rule under the exemption, which is **not** a member of the family either — it
+     * holds in every container, so [refusal]'s middle clause about `expect` would be beside the
+     * point. Spelled here so a drift is a failure.
+     */
+    private fun mustBeValMessage(name: String, kind: ParamKind?, classifier: String): String {
+        val a = if (classifier == "annotation") "an" else "a"
+        val what = if (kind == ParamKind.VAR) "is declared `var`" else "declares no property"
+        val diagnostic = when {
+            classifier == "annotation" && kind == ParamKind.VAR -> "an annotation parameter cannot be 'var'"
+            classifier == "annotation" -> "'val' keyword is missing in annotation parameter"
+            else -> "value class primary constructor must only have final read-only ('val') property parameters"
+        }
+        return "constructorParam: '$name' $what on the primary constructor of $a `$classifier " +
+            "class`, and Kotlin requires every primary-constructor parameter of $a `$classifier " +
+            "class` to be `val` — so this is \"$diagnostic\" on the JVM, on Kotlin/JS and on " +
+            "Kotlin/Wasm alike. Declare it with constructorParam(VAL, \"$name\", …) or " +
+            "param(VAL, \"$name\", …)."
+    }
 
     private fun bodyMessage(name: String) = refusal(
         "`fun`",
@@ -275,6 +295,111 @@ class ExpectFamilyTest {
     }
 
     /**
+     * **The control row the exemption above was written without**, and the whole grid this time:
+     * `val` and `var`, `annotation` and `value`, at both depths and outside `expect` altogether.
+     *
+     * The exemption fired on "the immediate builder has one of these kinds" and was measured only
+     * with `val`, although its own justification — *the two kinds whose parameters Kotlin requires
+     * to be `val`* — names `var` as the neighbour to test. So `0a9f6d1` turned a refusal into a
+     * render of Kotlin no frontend accepts, at the guard it narrowed. Measured, one file per row,
+     * `kotlinc` / `kotlinc-js` / `kotlinc-wasm` 2.4.10, all three identical:
+     *
+     * ```
+     * annotation class N(var x: Int)                       an annotation parameter cannot be 'var'.
+     * expect class E { annotation class N(var x: Int) }
+     * expect class E { class M { annotation class N(var x: Int) } }
+     * expect annotation class A(var x: Int)
+     * annotation class N(x: Int)                           'val' keyword is missing in annotation
+     * expect class E { annotation class N(x: Int) }         parameter.
+     * value class V(var y: Int)                            value class primary constructor must only
+     * expect class E { value class V(var y: Int) }          have final read-only ('val') property
+     * expect value class W(var y: Int)                      parameters.
+     * expect class E { value class V(y: Int) }
+     * ```
+     *
+     * Two of those **rendered** at `0a9f6d1` — `var` and a plain parameter in an `annotation class`,
+     * in *any* container, `expect` or not. The two `value class` rows reached KotlinPoet's own
+     * `IllegalStateException`, the right type with a message about its model rather than the
+     * caller's construct.
+     *
+     * The controls are the test above ([`an expect container keeps a nested annotation or value
+     * class's property parameter`]) plus the `val` rows outside `expect` asserted here.
+     */
+    @Test
+    fun `a parameter of an annotation or value class must be val in every container`() {
+        // Inside an `expect` container, at both depths and in the companion object.
+        refused(mustBeValMessage("x", ParamKind.VAR, "annotation")) {
+            `class`(EXPECT, "E") { `class`(ANNOTATION, "N") { constructorParam(ParamKind.VAR, "x", INT) } }
+        }
+        refused(mustBeValMessage("y", ParamKind.VAR, "value")) {
+            `class`(EXPECT, "E") { `class`(VALUE, "V") { constructorParam(ParamKind.VAR, "y", INT) } }
+        }
+        refused(mustBeValMessage("x", ParamKind.VAR, "annotation")) {
+            `class`(EXPECT, "E") {
+                `class`("M") { `class`(ANNOTATION, "N") { constructorParam(ParamKind.VAR, "x", INT) } }
+            }
+        }
+        refused(mustBeValMessage("w", ParamKind.VAR, "value")) {
+            `class`(EXPECT, "E") {
+                companionObject { `class`(VALUE, "W") { constructorParam(ParamKind.VAR, "w", INT) } }
+            }
+        }
+        // …and outside one, where no round had looked at all and both `annotation` rows rendered.
+        refused(mustBeValMessage("x", ParamKind.VAR, "annotation")) {
+            `class`(ANNOTATION, "N") { constructorParam(ParamKind.VAR, "x", INT) }
+        }
+        refused(mustBeValMessage("y", ParamKind.VAR, "value")) {
+            `class`(VALUE, "V") { constructorParam(ParamKind.VAR, "y", INT) }
+        }
+        // A plain parameter is the same rule's other half: `annotation class N(x: Int)` is *'val'
+        // keyword is missing in annotation parameter* and rendered in every container, and
+        // `value class V(y: Int)` reached `value/inline classes must have at least 1 property` —
+        // a message about a count, for a missing keyword.
+        refused(mustBeValMessage("x", null, "annotation")) {
+            `class`(ANNOTATION, "N") { constructorParam(null, "x", INT) }
+        }
+        refused(mustBeValMessage("y", null, "value")) {
+            `class`(VALUE, "V") { constructorParam(null, "y", INT) }
+        }
+        refused(mustBeValMessage("x", null, "annotation")) {
+            `class`(EXPECT, "E") { `class`(ANNOTATION, "N") { constructorParam(null, "x", INT) } }
+        }
+        // The D23 signature form takes the same path, so it gets the same refusal.
+        refused(mustBeValMessage("x", ParamKind.VAR, "annotation")) {
+            `class`(ANNOTATION, "N", param(ParamKind.VAR, "x", INT)) { }
+        }
+        // The controls: `val` renders, in both kinds, inside an `expect` container and outside it,
+        // and a `vararg val` does too. The `value class` rows need `@JvmInline` on the JVM, which is
+        // the caller's annotation and not this DSL's business (D37's platform rule) — they are clean
+        // on `kotlinc-js` and `kotlinc-wasm` as written.
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+
+            public annotation class N(
+              public val x: Int,
+            )
+
+            public value class V(
+              public val y: Int,
+            )
+
+            public annotation class Varargs(
+              public vararg val z: Int,
+            )
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `class`(ANNOTATION, "N") { constructorParam(ParamKind.VAL, "x", INT) }
+                `class`(VALUE, "V") { constructorParam(ParamKind.VAL, "y", INT) }
+                `class`(ANNOTATION, "Varargs") { constructorParam(ParamKind.VAL, "z", INT, modifiers = KModifier.VARARG) }
+            }.toString(),
+        )
+    }
+
+    /**
      * The other side of that boundary, and the reason the exemption reads the **immediate** builder
      * rather than the nest. `expect annotation class A(val x: Int)` and `expect value class V(val
      * y: Int)` are clean on all three frontends too — and KotlinPoet 2.3.0 cannot render either by
@@ -296,14 +421,24 @@ class ExpectFamilyTest {
      */
     @Test
     fun `an expect annotation or value class cannot carry a property parameter KotlinPoet can render`() {
-        refused(renderGapMessage("x", "val", "annotation")) {
+        refused(renderGapMessage("x", "annotation")) {
             `class`(EXPECT + ANNOTATION, "A") { constructorParam(ParamKind.VAL, "x", INT) }
         }
-        refused(renderGapMessage("y", "val", "value")) {
+        refused(renderGapMessage("y", "value")) {
             `class`(EXPECT + VALUE, "V") { constructorParam(ParamKind.VAL, "y", INT) }
         }
         assertEquals(
-            renderGapMessage("x", "var", "annotation"),
+            renderGapMessage("x", "annotation"),
+            assertFailsWith<IllegalStateException> {
+                typeSpec((EXPECT + ANNOTATION), name = "A") { constructorParam(ParamKind.VAL, "x", INT) }
+            }.message,
+        )
+        // The `var` form does **not** reach this message, and must not: `expect annotation class
+        // A(var x: Int)` is *an annotation parameter cannot be 'var'* on all three frontends, so
+        // "The Kotlin is valid on all three frontends" would be a false claim. At `0a9f6d1` it was
+        // one, and this assertion pinned it.
+        assertEquals(
+            mustBeValMessage("x", ParamKind.VAR, "annotation"),
             assertFailsWith<IllegalStateException> {
                 typeSpec((EXPECT + ANNOTATION), name = "A") { constructorParam(ParamKind.VAR, "x", INT) }
             }.message,

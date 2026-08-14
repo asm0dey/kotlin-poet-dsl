@@ -183,6 +183,17 @@ private fun localClassIsUnrenderable(): Nothing = error(
 )
 
 /**
+ * The indefinite article for a noun a message is about to name, spelled once.
+ *
+ * Every noun that reaches this is a [TypeScope.kindName] (`"class"`, `"named object"`,
+ * `"companion object"`, `"interface"`) or a classifier keyword (`"annotation"`, `"value"`), so the
+ * first letter decides it and no irregular case can arise. It exists because two files were
+ * deciding it independently — [annotationOrValueRenderGap] got it right and
+ * [addConstructorParam]'s container-kind message printed *a interface*.
+ */
+internal fun article(noun: String): String = if (noun.first() in "aeiou") "an" else "a"
+
+/**
  * Whether a constructor parameter also declares a property, and if so whether it is mutable.
  * `null` in [constructorParam]'s `kind` slot means a plain parameter with no property.
  *
@@ -234,8 +245,8 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     // parameter on a primary constructor that cannot exist either way. An `enum class` is a `class`
     // here and keeps its primary constructor.
     check(kindName == "class") {
-        "constructorParam: a $kindName has no primary constructor; only a class can declare one. " +
-            "Declare it as a property in the body instead."
+        "constructorParam: ${article(kindName)} $kindName has no primary constructor; only a class " +
+            "can declare one. Declare it as a property in the body instead."
     }
     // E2b's parameter modifiers and defaults, judged against the parameters this primary constructor
     // already has: the vararg count is the one rule that spans a whole parameter list, and a primary
@@ -277,9 +288,20 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     // Constraint 26's forbidden type, naming neither construct), and one level down it answers not
     // at all — `expect class E { class N(val x: Int) }` rendered, and all three frontends call it
     // *expected class constructor cannot have a property parameter*. See [Expect].
+    // The language rule underneath the exemption below, read for its own sake and in **every**
+    // container: Kotlin requires the primary-constructor parameters of an `annotation class` and a
+    // `value class` to be `val`, which is exactly why they are exempt from the `expect` rule. The
+    // exemption was written keyed on "has one of these kinds" and measured only with `val`, so
+    // `` `class`(EXPECT, "E") { `class`(ANNOTATION, "N") { constructorParam(VAR, "x", INT) } } ``
+    // rendered `annotation class N(var x: Int)` — *an annotation parameter cannot be 'var'* on all
+    // three frontends — and the identical shape rendered outside `expect` too, where no round had
+    // ever looked. See [propertyParamMustBeVal] for the measured rows and their controls.
+    val propertyParamKind = builder.modifiers.firstOrNull { it in PROPERTY_PARAM_KINDS }
+    if (propertyParamKind != null && kind != ParamKind.VAL) {
+        propertyParamMustBeVal(name, kind, propertyParamKind)
+    }
     if (kind != null && isExpectContainer) {
         val keyword = if (kind == ParamKind.VAR) "var" else "val"
-        val propertyParamKind = builder.modifiers.firstOrNull { it in PROPERTY_PARAM_KINDS }
         when {
             // The **control row**: Kotlin's rule has exactly two exceptions, and they are the two
             // kinds whose primary-constructor parameters Kotlin *requires* to be `val`, so the rule
@@ -324,7 +346,9 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
             // this raised that `require`'s own `IllegalArgumentException`; what changes here is the
             // exception type and a message that names the construct and the gap, rather than
             // quoting a frontend diagnostic no frontend produces.
-            KModifier.EXPECT in builder.modifiers -> error(annotationOrValueRenderGap(name, keyword, propertyParamKind))
+            // Only `val` reaches here — [propertyParamMustBeVal] above refused every other kind for
+            // these two classifiers, in every container.
+            KModifier.EXPECT in builder.modifiers -> error(annotationOrValueRenderGap(name, propertyParamKind))
         }
     }
     declaredConstructorParamNames += name
