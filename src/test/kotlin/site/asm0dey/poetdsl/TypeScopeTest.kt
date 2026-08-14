@@ -5,6 +5,8 @@ import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.DATA
+import com.squareup.kotlinpoet.KModifier.ENUM
+import com.squareup.kotlinpoet.KModifier.EXPECT
 import com.squareup.kotlinpoet.KModifier.INTERNAL
 import com.squareup.kotlinpoet.KModifier.SEALED
 import com.squareup.kotlinpoet.LONG
@@ -648,6 +650,53 @@ class TypeScopeTest {
         assertEquals(
             "A constructor parameter named \"name\" is already declared in this scope.",
             thrown.message,
+        )
+    }
+
+    /**
+     * The sibling of `only a class can declare a constructor` in SupertypesTest, at the one other
+     * construct that puts something on a constructor. `beginSecondaryConstructor` has asked
+     * `kindName == "class"` since Task 19 and `addConstructorParam` asked nothing, so
+     * `` `object`("O") { constructorParam(VAL, "x", INT) } `` reached KotlinPoet's own
+     * `IllegalStateException: OBJECT can't have a primary constructor` — the right exception type
+     * with a message naming neither construct — and the `expect` form reached the `expect` refusal
+     * first, which told the caller to write a *plain* parameter on a primary constructor no object
+     * has. An `enum class` is a `class` here and still takes one; the control below says so.
+     */
+    @Test
+    fun `only a class can declare a primary constructor parameter`() {
+        for ((kind, build) in listOf<Pair<String, () -> Unit>>(
+            "named object" to { file("com.example", "A") { `object`("O") { constructorParam(VAL, "x", INT) } } },
+            "interface" to { file("com.example", "A") { `interface`("I") { constructorParam(VAL, "x", INT) } } },
+            "companion object" to {
+                file("com.example", "A") { `class`("C") { companionObject { constructorParam(VAL, "x", INT) } } }
+            },
+            "named object" to {
+                file("com.example", "A") { `object`(EXPECT, "O") { constructorParam(VAL, "x", INT) } }
+            },
+        )) {
+            val thrown = kotlin.runCatching { build() }.exceptionOrNull()
+            assertTrue(thrown is IllegalStateException, "$kind: $thrown")
+            assertEquals(
+                "constructorParam: a $kind has no primary constructor; only a class can declare " +
+                    "one. Declare it as a property in the body instead.",
+                thrown.message,
+            )
+        }
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+
+            public enum class Color(
+              public val rgb: Int,
+            )
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `class`(ENUM, "Color") { constructorParam(VAL, "rgb", INT) }
+            }.toString(),
         )
     }
 

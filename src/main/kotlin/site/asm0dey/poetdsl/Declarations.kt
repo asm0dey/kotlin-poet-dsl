@@ -224,6 +224,19 @@ internal fun TypeScope.addConstructorParam(
 internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec): Expr {
     val name = spec.name
     val type = spec.type
+    // The same container fact [beginSecondaryConstructor] asks 700 lines below, at the one other
+    // construct that puts something on a constructor — asked here too, because a primary constructor
+    // is exactly as impossible in an `object`, a `companion object` or an `interface` as a secondary
+    // one is. Without it, `` `object`("O") { constructorParam(VAL, "x", INT) } `` reached KotlinPoet's
+    // own `IllegalStateException: OBJECT can't have a primary constructor` from [TypeScope.finish] —
+    // the right exception type with a message naming neither construct — and the `expect` refusal
+    // below fired first for `` `object`(EXPECT, "O") { … } ``, telling the caller to write a *plain*
+    // parameter on a primary constructor that cannot exist either way. An `enum class` is a `class`
+    // here and keeps its primary constructor.
+    check(kindName == "class") {
+        "constructorParam: a $kindName has no primary constructor; only a class can declare one. " +
+            "Declare it as a property in the body instead."
+    }
     // E2b's parameter modifiers and defaults, judged against the parameters this primary constructor
     // already has: the vararg count is the one rule that spans a whole parameter list, and a primary
     // constructor is assembled one call at a time, so the running list is where it has to be read.
