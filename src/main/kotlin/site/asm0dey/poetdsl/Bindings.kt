@@ -119,8 +119,8 @@ private fun Scope.propertyOf(
     checkNotNull(type) {
         "Property '$name' requires an explicit type; KotlinPoet cannot infer it."
     }
-    val keyword = if (mutable) "`var`" else "`val`"
-    checkProperty(keyword, name, mutable, init, by, typeVariables, receiver, setter, getter)
+    val construct = if (mutable) "`var`" else "`val`"
+    checkProperty(construct, name, mutable, init, by, typeVariables, receiver, setter, getter)
     // An extension property is keyed by receiver *and* name: `val String.size` and `val Int.size`
     // are two different declarations and both are legal in one file, while two of the same name on
     // the same receiver is the compile error D21 rejects. A plain property's key is its bare name,
@@ -205,9 +205,13 @@ internal fun PropertySpec.Builder.addAccessors(
  * opaque `expression("field")`. The pair guarded below is the half that *is* decidable; the rest is
  * left to the caller's own compile rather than guessed at, because guessing wrong there refuses
  * valid generator code. See the comment at the check.
+ *
+ * @param construct the DSL spelling to name in the message — `` `val` ``, `` `var` ``, or
+ *   `propertySpec` for the detached builder — matching [checkTypeVariables]'s parameter of the same
+ *   name, which this hands it straight through to.
  */
 internal fun checkProperty(
-    keyword: String,
+    construct: String,
     name: String,
     mutable: Boolean,
     init: Expr?,
@@ -218,12 +222,12 @@ internal fun checkProperty(
     getter: (BlockScope.() -> Unit)?,
 ) {
     check(mutable || setter == null) {
-        "$keyword: '$name' is a `val` and has no setter. Declare it with `var`, or drop the setter."
+        "$construct: '$name' is a `val` and has no setter. Declare it with `var`, or drop the setter."
     }
     // "Delegated property cannot have accessors with non-default implementations" — the delegate
     // *is* the accessor pair.
     check(by == null || (getter == null && setter == null)) {
-        "$keyword: '$name' is delegated with `by`, and a delegated property cannot have accessors. " +
+        "$construct: '$name' is delegated with `by`, and a delegated property cannot have accessors. " +
             "Drop the delegate, or drop the accessors."
     }
     // A `var` that customises exactly one accessor gets the **default** other one, which reads or
@@ -245,36 +249,36 @@ internal fun checkProperty(
         val missing = if (getter == null) "getter" else "setter"
         val present = if (getter == null) "setter" else "getter"
         check((getter == null) == (setter == null)) {
-            "$keyword: '$name' has a $present but no $missing, so Kotlin generates the $missing, " +
+            "$construct: '$name' has a $present but no $missing, so Kotlin generates the $missing, " +
                 "which needs a backing field, which needs an initializer. Add an initializer, or " +
                 "write the $missing as well."
         }
     }
     if (receiver != null) {
         check(init == null) {
-            "$keyword: '$name' is an extension property, which has no backing field, so it cannot " +
+            "$construct: '$name' is an extension property, which has no backing field, so it cannot " +
                 "have an initializer. Move the value into the getter."
         }
         check(getter != null || by != null) {
-            "$keyword: '$name' is an extension property, which has no backing field, so it needs a " +
+            "$construct: '$name' is an extension property, which has no backing field, so it needs a " +
                 "getter (or a delegate)."
         }
         check(!mutable || setter != null || by != null) {
-            "$keyword: '$name' is a mutable extension property, which has no backing field, so it " +
+            "$construct: '$name' is a mutable extension property, which has no backing field, so it " +
                 "needs a setter as well as a getter (or a delegate)."
         }
     }
     // A property's type parameters take no declaration-site variance and no `reified`, for the same
     // reasons a function's do not.
-    checkTypeVariables(keyword, name, typeVariables, varianceAllowed = false, reifiedAllowed = false)
+    checkTypeVariables(construct, name, typeVariables, varianceAllowed = false, reifiedAllowed = false)
     if (typeVariables.isEmpty()) return
     checkNotNull(receiver) {
-        "$keyword: '$name' declares type parameters but has no receiver. Kotlin allows a property's " +
+        "$construct: '$name' declares type parameters but has no receiver. Kotlin allows a property's " +
             "type parameter only where its receiver type uses it."
     }
     typeVariables.forEach { variable ->
         check(receiver.mentions(variable)) {
-            "$keyword: type parameter \"${variable.name}\" of '$name' is not used in the receiver " +
+            "$construct: type parameter \"${variable.name}\" of '$name' is not used in the receiver " +
                 "type. Kotlin allows a property's type parameter only where its receiver type uses it."
         }
     }
