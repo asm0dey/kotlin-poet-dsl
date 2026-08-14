@@ -61,8 +61,14 @@ public val String.literal: Expr get() = Expr(CodeBlock.of("%S", this), STRING)
 public val String.lit: Expr get() = literal
 
 /**
- * `[a, b, c]` — a Kotlin collection literal, joining a **computed** list of expressions into one
- * (deviation D28).
+ * `[a, b, c]` — a Kotlin collection literal, **valid only as an annotation argument**, joining a
+ * **computed** list of expressions into one (deviation D28).
+ *
+ * Kotlin has no collection literal anywhere else: `val xs = [1, 2, 3]` is `e: Array literals
+ * outside of annotations are unsupported` (measured). This builds one wherever it is called —
+ * nothing on an [Expr] records where it may be emitted, and a marker for this one narrow case is
+ * more machinery than the case is worth — so emitting the result as a statement or an initializer
+ * produces Kotlin that does not compile. Use `call("listOf", …)` or `call("arrayOf", …)` there.
  *
  * The shape it exists for is an annotation argument built from a model, where the elements are
  * derived rather than written out:
@@ -78,7 +84,10 @@ public val String.lit: Expr get() = literal
  * default, and shadowing it inside a generator would be a trap in precisely the context this helper
  * is used in. There is no bare comma-joined sibling either — every variadic position in this DSL
  * (`call`, `annotation`, `superclass`, `` `this` ``) takes a `vararg Expr`, so a computed list
- * already reaches them as `*list.toTypedArray()`; the bracketed form is the one with no such route.
+ * already reaches them by spread; the bracketed form is the one with no such route. On the
+ * `annotation` overloads the spread needs the target written out — `annotation(cls, null,
+ * *list.toTypedArray())` — because `target` sits between the annotation type and the vararg, and
+ * Kotlin binds positional arguments by declared order regardless of defaults.
  *
  * The scopes of every element are carried through, exactly as `call` carries its arguments' — so a
  * joined list of literals stays a compile-time constant that an annotation argument accepts, and one

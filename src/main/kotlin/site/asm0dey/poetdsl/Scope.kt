@@ -144,6 +144,20 @@ public class TypeScope internal constructor(
     internal var hasUndelegatedSecondaryCtor: Boolean = false
 
     /**
+     * How many secondary constructors were declared, and how many of those delegate with
+     * `` `this`(…) ``. Together with [hasCtor] they decide the one delegation cycle that is
+     * decidable without tracking which constructor delegates to which: a class whose *only*
+     * constructor is a secondary one delegating with `` `this` `` delegates to itself, and Kotlin
+     * answers `e: There's a cycle in the delegation calls chain.` (measured). Checked in [finish],
+     * not at the call, because a `constructorParam` written later can still give the class a primary
+     * constructor and make the pair valid.
+     */
+    internal var secondaryCtorCount: Int = 0
+
+    /** See [secondaryCtorCount]. */
+    internal var thisDelegatingSecondaryCtorCount: Int = 0
+
+    /**
      * Constructor parameter names declared directly in this type via [addConstructorParam].
      * Same rationale and same "reject, don't rename" treatment as [declaredPropertyNames] — two
      * constructor parameters named `id` is a compile error with no valid output to preserve —
@@ -165,10 +179,18 @@ public class TypeScope internal constructor(
      * constructor nor an undelegated secondary one can be taken back by a later call, so
      * [addConstructorParam] and [addSecondaryConstructor] catch that pair eagerly, at the call that
      * creates it.
+     *
+     * The self-delegation cycle checked second is deferred for the identical reason: a class whose
+     * only constructor delegates with `` `this`(…) `` calls itself, but a `constructorParam` written
+     * further down the body still turns that into a legal call to the primary constructor. See
+     * [secondaryCtorCount].
      */
     internal fun finish(): TypeSpec {
         check(builder.superclassConstructorParameters.isEmpty() || !hasSecondaryCtor || hasCtor) {
             superclassArgsPlusSecondary(kindName)
+        }
+        check(hasCtor || secondaryCtorCount != 1 || thisDelegatingSecondaryCtorCount != 1) {
+            LONE_SECONDARY_DELEGATING_TO_ITSELF
         }
         if (hasCtor) builder.primaryConstructor(ctor.build())
         return builder.build()

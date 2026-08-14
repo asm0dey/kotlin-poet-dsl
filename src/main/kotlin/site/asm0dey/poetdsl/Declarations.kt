@@ -468,6 +468,23 @@ internal const val SECONDARY_MUST_DELEGATE_TO_PRIMARY: String =
         "satisfy it — or fold the parameters into one constructor."
 
 /**
+ * The one delegation cycle that is decidable without following which constructor delegates to which.
+ *
+ * `class A { constructor(q: Int) : this(q) }` — no primary constructor, exactly one secondary, and
+ * it delegates with `` `this` `` — can only be delegating to itself, and Kotlin answers
+ * `e: There's a cycle in the delegation calls chain.` (measured). Cycles through two or more
+ * secondary constructors are out of reach, because `` `this`(…) `` carries arguments rather than a
+ * target: which overload a call resolves to is a typing question this DSL does not answer. Checked
+ * in [TypeScope.finish], since a `constructorParam` written later can still supply the primary
+ * constructor that makes the call legal.
+ */
+internal const val LONE_SECONDARY_DELEGATING_TO_ITSELF: String =
+    "constructor: this class's only constructor delegates with `this`(…), so it delegates to " +
+        "itself — a cycle in the delegation calls chain. Delegate with `super`(…) instead, drop " +
+        "the delegation call, or give the class the constructor this one should delegate to " +
+        "(`class`(…, param(…)) or constructorParam for a primary one)."
+
+/**
  * What every generated `` `constructor` ``/`ctor` overload runs *before* it builds the secondary
  * constructor: the one thing that can be known before the body has run, stated once instead of
  * inlined into ~120 generated bodies.
@@ -507,6 +524,10 @@ internal fun TypeScope.addSecondaryConstructor(spec: FunSpec) {
     val delegatesToPrimary = spec.delegateConstructor == DelegationTarget.THIS.keyword
     check(!hasCtor || delegatesToPrimary) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
     if (!delegatesToPrimary) hasUndelegatedSecondaryCtor = true
+    // Counted for the self-delegation cycle [TypeScope.finish] rejects; see
+    // [LONE_SECONDARY_DELEGATING_TO_ITSELF] for why it cannot be decided here.
+    secondaryCtorCount++
+    if (delegatesToPrimary) thisDelegatingSecondaryCtorCount++
     builder.addFunction(spec)
 }
 

@@ -287,6 +287,86 @@ class DelegationTest {
         }
     }
 
+    /**
+     * The same four wrong locations for `` `super` ``. The message interpolates the keyword, and
+     * only the double-delegation test above ever saw it come out as `super`.
+     */
+    @Test
+    fun `a super delegation call outside a secondary constructor body is rejected`() {
+        val message = "`super`: a constructor delegation call is only valid directly in a secondary " +
+            "`constructor`'s body — not in a function body, a lambda, a nested block or a " +
+            "`stmts { }` fragment."
+        val inFunction = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") { `fun`("f") { `super`(1.lit) } }
+        }
+        val inNestedBlock = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") {
+                `class`("Box") { `constructor` { `if`(1.lit eq 1.lit) { `super`(1.lit) } } }
+            }
+        }
+        val inLambda = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") {
+                `class`("Box") { `constructor` { +lambda { `super`(1.lit) } } }
+            }
+        }
+        val inFragment = assertFailsWith<IllegalStateException> { stmts { `super`(1.lit) } }
+        for (failure in listOf(inFunction, inNestedBlock, inLambda, inFragment)) {
+            assertEquals(message, failure.message)
+        }
+    }
+
+    /**
+     * The one delegation cycle that is decidable: a class with no primary constructor and exactly
+     * one secondary one, delegating with `` `this` ``, delegates to itself.
+     */
+    @Test
+    fun `a lone secondary constructor delegating to itself is rejected`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") {
+                `class`("A") { `constructor`(param("q", INT)) { q -> `this`(q) } }
+            }
+        }
+        assertEquals(LONE_SECONDARY_DELEGATING_TO_ITSELF, failure.message)
+    }
+
+    /** kotlinc's word on the shape that guard refuses to produce. */
+    @OptIn(ExperimentalCompilerApi::class)
+    @Test
+    fun `kotlinc refuses a self-delegating lone constructor`() {
+        val result = compile("class A { constructor(q: Int) : this(q) }")
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+        assertTrue("cycle in the delegation calls chain" in result.messages, result.messages)
+    }
+
+    /**
+     * The guard is deferred to `finish` for the same reason the header-arguments one is: a
+     * `constructorParam` written *after* the constructor still gives the class a primary one, and
+     * then the very same `` `this`(…) `` is the required call to it rather than a cycle.
+     */
+    @Test
+    fun `a constructor parameter written last turns the self-delegation into a primary call`() {
+        val out = file("com.example", "A") {
+            `class`("A") {
+                `constructor`(param("q", INT), param("r", INT)) { q, _ -> `this`(q) }
+                constructorParam(VAL, "n", INT)
+            }
+        }.toString()
+        assertTrue("public constructor(q: Int, r: Int) : this(q)" in out, out)
+        assertCompiles(out)
+    }
+
+    /** Two secondary constructors are outside the decidable case, and are left to kotlinc. */
+    @Test
+    fun `two this-delegating secondary constructors are left alone`() {
+        val out = file("com.example", "Chain") {
+            `class`("Chain") {
+                `constructor`(param("a", INT)) { a -> `this`(a, 1.lit) }
+                `constructor`(param("a", INT), param("b", INT)) { a, _ -> `super`(a) }
+            }
+        }.toString()
+        assertTrue("public constructor(a: Int) : this(a, 1)" in out, out)
+    }
+
     /** ADR 0008 applies to a delegation call's arguments exactly as it does to a statement's. */
     @Test
     fun `a foreign handle in a delegation call is rejected`() {

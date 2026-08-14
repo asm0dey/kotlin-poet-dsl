@@ -200,12 +200,50 @@ class LiteralsTest {
      * The separator is KotlinPoet's non-breaking `·`, not a plain space: a joined list far past the
      * 100-column wrap limit still renders on one line, where a breakable space would have been torn
      * apart mid-literal.
+     *
+     * Rendered into an annotation argument, which is the only position Kotlin has a collection
+     * literal in — `val xs = [1, 2, 3]` is `e: Array literals outside of annotations are
+     * unsupported`, pinned below. `@Suppress(names = […])` is a real vararg-of-`String` annotation,
+     * so the output compiles as well as renders.
      */
     @Test
     fun `the array literal separator does not wrap`() {
         val long = arrayLiteral((1..20).map { "element$it".lit })
-        val out = file("com.example", "Api") { `fun`("f") { +long } }.toString()
+        val out = file("com.example", "Api") {
+            `fun`(annotation<Suppress>("names" to long), "f") { }
+        }.toString()
         assertTrue(out.lines().any { """["element1",""" in it && """"element20"]""" in it }, out)
+        assertCompiles(out)
+    }
+
+    /**
+     * Why the KDoc's first line says "valid only as an annotation argument": the DSL will build the
+     * literal anywhere, and anywhere else is not Kotlin. Guarding it would need a marker on every
+     * [Expr] for one narrow case, so the restriction is documented rather than enforced — and this
+     * is kotlinc's word on what is being documented.
+     */
+    @Test
+    fun `kotlinc rejects a collection literal outside an annotation`() {
+        val result = compile("val xs = [1, 2, 3]")
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+        assertTrue("rray literals outside of annotations are unsupported" in result.messages, result.messages)
+    }
+
+    /**
+     * The spread route the D28 KDoc names, exactly as it has to be written: `target` sits between
+     * the annotation type and the vararg, and Kotlin binds positional arguments by declared order
+     * regardless of defaults, so `annotation(cls, *args)` does not compile and the `null` target is
+     * not optional. That route is the stated reason for shipping one bracketed helper instead of a
+     * comma-joined sibling, so it is pinned here.
+     */
+    @Test
+    fun `a computed list reaches a positional annotation argument by spread`() {
+        val cls = ClassName("com.example", "Tags")
+        val args = listOf("a".lit, "b".lit)
+        assertEquals(
+            """@com.example.Tags("a", "b")""",
+            annotation(cls, null, *args.toTypedArray()).list.single().toString(),
+        )
     }
 
     /** `%T`/`%M` in the elements survive the join, so imports still resolve at render time. */
