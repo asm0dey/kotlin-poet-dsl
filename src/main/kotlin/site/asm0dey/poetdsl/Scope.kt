@@ -255,7 +255,16 @@ public class TypeScope internal constructor(
         // The classifier-kind family's one deferred question, here for the same reason the three
         // below are: a `constructorParam` written at the end of the body still supplies the
         // parameter, so asking eagerly would answer on writing order alone. See [Kinds].
-        if (KModifier.DATA in builder.modifiers && !hasCtor) dataClassNeedsAParameter(kindName)
+        // …and `kindName == "class"`, because a **`data object`** has no primary constructor to
+        // give it and is valid Kotlin (1.9 and later): `data object O` is clean on all three
+        // frontends, and this rule refused it in every container. D42's one false rejection. A
+        // `data interface` never reaches here — the modifier family refuses it in `declareType`,
+        // with the sentence the frontends print (*modifier 'data' is not applicable to
+        // 'interface'*) rather than this one, which was about a constructor an interface has no
+        // notion of.
+        if (KModifier.DATA in builder.modifiers && kindName == "class" && !hasCtor) {
+            dataClassNeedsAParameter(kindName)
+        }
         val secondaryCtors = builder.funSpecs.filter { it.isConstructor }
         check(builder.superclassConstructorParameters.isEmpty() || secondaryCtors.isEmpty() || hasCtor) {
             superclassArgsPlusSecondary(kindName)

@@ -424,6 +424,28 @@ class KindBodyTest {
         )
     }
 
+    /**
+     * **`data object` is valid Kotlin and this DSL refused it.** The no-parameter half of the data
+     * rule fired on the modifier alone, and a `data object` has no primary constructor to give it —
+     * `data object O` is clean on `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10 (measured, one
+     * file per frontend). D42's one false rejection.
+     */
+    @Test
+    fun `a data object renders and compiles`() {
+        val source = render {
+            `object`(DATA, "O") { }
+            `class`("C") { `object`(DATA, "N") { } }
+            `class`("D") { `class`("Inner") { `object`(DATA, "M") { } } }
+        }
+        assertTrue("public data object O" in source, source)
+        assertCompiles(source)
+        assertCompilesEverywhereButJvm(source)
+        // …and the rule it was caught by still fires for a class, which is what it was written for.
+        assertTrue(
+            "at least one primary constructor parameter" in message { `class`(DATA, "D") { } },
+        )
+    }
+
     // --- a `value class` holds no property with a backing field --------------------------------
 
     @Test
