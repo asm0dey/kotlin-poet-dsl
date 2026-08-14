@@ -13,11 +13,14 @@ import com.squareup.kotlinpoet.MUTABLE_LIST
 import com.squareup.kotlinpoet.NUMBER
 import com.squareup.kotlinpoet.STAR
 import com.squareup.kotlinpoet.STRING
+import com.squareup.kotlinpoet.TypeName
+import com.squareup.kotlinpoet.TypeVariableName
 import com.squareup.kotlinpoet.UNIT
 import com.tschuchort.compiletesting.KotlinCompilation
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import site.asm0dey.poetdsl.ParamKind.VAL
 
@@ -141,47 +144,77 @@ class TypesCompileTest {
     }
 
     /**
-     * Why `` `val` ``/`` `var` `` got no `typeVariables` slot in E1, asserted about *this DSL* — the
-     * same shape as the `` `object` `` test above, and for the same reason: a test that compiles
-     * `val <T> stray: T get() = TODO()` and asserts `kotlinc` rejects it pins a fact about the Kotlin
-     * language, not about the surface here, so it would go on passing after E2 adds the slot —
-     * exactly when a canary is supposed to fire.
+     * E1 left `` `val` ``/`` `var` `` without a `typeVariables` slot and planted a canary here saying
+     * so, because the compiler's rule is `Type parameter of a property must be used in its receiver
+     * type or context parameters`: E2's extension receivers or E3's context parameters would unlock
+     * it, and whichever landed first was to replace this test. E2a landed the receiver, so this is
+     * now the positive half — the slot exists, and the property it renders is Kotlin the compiler
+     * accepts.
      *
-     * A property's type parameter has to be used in its receiver type **or its context parameters**
-     * (`Type parameter of a property must be used in its receiver type or context parameters`, the
-     * compiler's own wording): extension receivers are E2's and context parameters are E3's, so
-     * either batch can unlock this slot. Whichever gets there first makes the call below resolve, and
-     * this test fails.
+     * The negative half moved with it, and got stronger. The slot alone would let a caller write
+     * `val <T> stray: Int`, which renders and does not compile; the DSL rejects it at build time
+     * instead, so what is asserted here is that both mistakes are caught — a type parameter with no
+     * receiver at all, and one the receiver does not use.
      */
     @Test
-    fun `a property has no type parameter slot`() {
-        for (construct in listOf("`val`", "`var`")) {
-            val result = compileDsl(
-                """
-                fun build() = file("com.example", "A") {
-                    $construct("stray", INT, typeVariables = listOf(typeVariable("T")))
-                }
-                """.trimIndent(),
-                extraImports = listOf("com.squareup.kotlinpoet.INT"),
-            )
-            assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
-            assertTrue("None of the following candidates is applicable" in result.messages, result.messages)
-            // The `object` test asserts `"typeVariables" !in messages`; that shape does not transfer
-            // here. `val`'s first parameter is the name, so the compiler gets far enough to also
-            // report `No parameter with name 'typeVariables' found` — which says the same thing more
-            // directly, and is asserted rather than merely tolerated. When the slot lands, the
-            // snippet compiles and both this and the exit-code assertion above fail.
-            assertTrue("No parameter with name 'typeVariables' found" in result.messages, result.messages)
-        }
-
-        val control = compileDsl(
-            """
-            fun build() = file("com.example", "A") {
-                `val`("stray", INT, init = 1.lit)
+    fun `a property's type parameter must be used in its receiver`() {
+        val t = typeVariable("T")
+        val spec = file("com.example", "Props") {
+            `val`("second", t, receiver = LIST.of(t), typeVariables = listOf(t)) {
+                ret(expression("this").call("get", 1.lit))
             }
-            """.trimIndent(),
-            extraImports = listOf("com.squareup.kotlinpoet.INT"),
-        )
-        assertEquals(KotlinCompilation.ExitCode.OK, control.exitCode, control.messages)
+            `var`(
+                "firstOrBlank",
+                STRING,
+                receiver = MUTABLE_LIST.of(STRING),
+                setter = { v -> +expression("this").call("set", 0.lit, v) },
+            ) {
+                ret(expression("this").call("first"))
+            }
+        }
+        assertCompiles(spec.toString())
+
+        for (construct in listOf("`val`", "`var`")) {
+            assertEquals(
+                "$construct: 'stray' declares type parameters but has no receiver. Kotlin allows a " +
+                    "property's type parameter only where its receiver type uses it.",
+                assertFailsWith<IllegalStateException> {
+                    file("com.example", "A") {
+                        bindFor(construct, "stray", INT, typeVariables = listOf(t)) { ret(0.lit) }
+                    }
+                }.message,
+            )
+            assertEquals(
+                "$construct: type parameter \"T\" of 'stray' is not used in the receiver type. Kotlin " +
+                    "allows a property's type parameter only where its receiver type uses it.",
+                assertFailsWith<IllegalStateException> {
+                    file("com.example", "A") {
+                        bindFor(construct, "stray", INT, receiver = STRING, typeVariables = listOf(t)) { ret(0.lit) }
+                    }
+                }.message,
+            )
+        }
     }
+}
+
+/** Runs the same call against `` `val` `` and `` `var` ``, so the loop above states each rule once. */
+context(s: Scope)
+private fun bindFor(
+    construct: String,
+    name: String,
+    type: TypeName,
+    receiver: TypeName? = null,
+    typeVariables: List<TypeVariableName> = emptyList(),
+    getter: BlockScope.() -> Unit,
+): Expr = if (construct == "`val`") {
+    `val`(name, type, receiver = receiver, typeVariables = typeVariables, getter = getter)
+} else {
+    `var`(
+        name,
+        type,
+        receiver = receiver,
+        typeVariables = typeVariables,
+        setter = { },
+        getter = getter,
+    )
 }

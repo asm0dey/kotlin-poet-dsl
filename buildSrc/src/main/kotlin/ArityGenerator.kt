@@ -274,9 +274,31 @@ private fun BindConstruct.overloads(): List<Overload> = names.flatMap { nm ->
                 "type: TypeName? = null",
                 "init: Expr? = null",
                 "by: Expr? = null",
+                // E2a's four slots, all *after* the ones that were already here, so no positional
+                // argument that compiled before this shifts into a different parameter. Two lambdas
+                // cannot both be trailing: the getter is the common one and takes the trailing
+                // position, so the setter is written as a named argument ahead of it.
+                "typeVariables: List<TypeVariableName> = emptyList()",
+                "receiver: TypeName? = null",
+                "setterParam: String = \"value\"",
+                "setter: (BlockScope.(Expr) -> Unit)? = null",
+                "getter: (BlockScope.() -> Unit)? = null",
             ),
             returns = "Expr",
-            body = "s.bind($mutable, ${v.annotationsArg}, ${v.modifiersArg}, name, type, init, by)",
+            body = "s.bind(\n" +
+                "    $mutable,\n" +
+                "    ${v.annotationsArg},\n" +
+                "    ${v.modifiersArg},\n" +
+                "    name,\n" +
+                "    type,\n" +
+                "    init,\n" +
+                "    by,\n" +
+                "    typeVariables,\n" +
+                "    receiver,\n" +
+                "    setterParam,\n" +
+                "    setter,\n" +
+                "    getter,\n" +
+                ")",
         )
     }
 }
@@ -357,18 +379,29 @@ private fun funOverloads(): List<Overload> = FUN_NAMES.flatMap { nm ->
                 context = "context(s: Scope)",
                 name = nm.value,
                 params = v.params() + listOf("name: String") + arityParams(arity) +
-                    typeVariablesParam(true) + listOf("returns: TypeName? = null", "body: ${bodyType(arity)}"),
+                    typeVariablesParam(true) + listOf(
+                        "returns: TypeName? = null",
+                        // E2a's extension receiver, deliberately *after* `returns` rather than
+                        // before it. Both slots are `TypeName?`, so a slot inserted ahead of
+                        // `returns` would silently rebind the one positional spelling that still
+                        // resolves — `` `fun`("f", listOf(t), STRING) { } `` — from a return type
+                        // to a receiver type, rendering `fun String.f()` for code that asked for
+                        // `fun f(): String`. D32's breaks were loud; that one would not be. See D33.
+                        "receiver: TypeName? = null",
+                        "body: ${bodyType(arity)}",
+                    ),
                 returns = null,
                 body = """
                     |s.declareFun(
                     |    buildFun(
                     |        name,
-                    |        false,
+                    |        FunKind.FUNCTION,
                     |        ${v.annotationsArg},
                     |        ${v.modifiersArg},
                     |        ${paramList(arity)},
                     |        typeVariables,
                     |        returns,
+                    |        receiver,
                     |        s,
                     |        ${forwarder(arity)},
                     |    ),
@@ -405,11 +438,12 @@ private fun ctorOverloads(): List<Overload> = CTOR_NAMES.flatMap { nm ->
                     |t.addSecondaryConstructor(
                     |    buildFun(
                     |        "<init>",
-                    |        true,
+                    |        FunKind.CONSTRUCTOR,
                     |        ${v.annotationsArg},
                     |        ${v.modifiersArg},
                     |        ${paramList(arity)},
                     |        emptyList(),
+                    |        null,
                     |        null,
                     |        t,
                     |        ${forwarder(arity)},

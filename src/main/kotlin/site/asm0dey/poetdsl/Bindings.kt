@@ -1,8 +1,12 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.CodeBlock
+import com.squareup.kotlinpoet.LambdaTypeName
+import com.squareup.kotlinpoet.ParameterizedTypeName
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeName
+import com.squareup.kotlinpoet.TypeVariableName
+import com.squareup.kotlinpoet.WildcardTypeName
 
 // `val`, `var` and the `property` alias are generated into `DeclarationVariants.kt` by
 // `buildSrc/src/main/kotlin/ArityGenerator.kt`, in ADR 0004's six variants — which is what makes
@@ -75,25 +79,148 @@ private fun Scope.propertyOf(
     type: TypeName?,
     init: Expr?,
     by: Expr?,
+    typeVariables: List<TypeVariableName>,
+    receiver: TypeName?,
+    setterParam: String,
+    setter: (BlockScope.(Expr) -> Unit)?,
+    getter: (BlockScope.() -> Unit)?,
 ): PropertySpec {
     checkNotNull(type) {
         "Property '$name' requires an explicit type; KotlinPoet cannot infer it."
     }
-    check(name !in declaredPropertyNames) {
-        "A property named \"$name\" is already declared in this scope."
+    val keyword = if (mutable) "`var`" else "`val`"
+    checkProperty(keyword, name, mutable, init, by, typeVariables, receiver, setter, getter)
+    // An extension property is keyed by receiver *and* name: `val String.size` and `val Int.size`
+    // are two different declarations and both are legal in one file, while two of the same name on
+    // the same receiver is the compile error D21 rejects. A plain property's key is its bare name,
+    // exactly as before.
+    val key = receiver?.let { "$it." }.orEmpty() + name
+    check(key !in declaredPropertyNames) {
+        "A property named \"$key\" is already declared in this scope."
     }
-    declaredPropertyNames += name
+    declaredPropertyNames += key
     // `uniqueMemberName`, not `names.unique`: a property is visible in every member body, so it is
     // declared at the member level — but its own initializer is evaluated where a plain primary
     // constructor parameter is also in scope, so it still has to step over one (D30).
-    return PropertySpec.builder(uniqueMemberName(name), type, modifiers.toList())
+    //
+    // An *extension* property is exempt, and has to be: its name is only ever reached through a
+    // receiver, so it shadows nothing and nothing shadows it. Uniquifying it renamed `val Int.size`
+    // to `size2` merely because `val String.size` had been declared above it (measured) — two
+    // declarations Kotlin keeps apart by receiver, and a rename here would invent a public API name
+    // for a collision that does not exist.
+    val declaredName = if (receiver == null) uniqueMemberName(name) else name
+    return PropertySpec.builder(declaredName, type, modifiers.toList())
         .mutable(mutable)
         .apply {
+            addTypeVariables(typeVariables)
+            receiver?.let { receiver(it) }
             init?.let { initializer("%L", it.code) }
             by?.let { delegate("%L", it.code) }
             annotations?.list?.forEach { addAnnotation(it) }
+            // Both accessor bodies are built by `buildFun` against *this* scope as their parent, so
+            // an accessor is a nested block exactly like a member function's body: its names chain
+            // from the member level and its `ScopeId` is a child of it, which is what makes ADR
+            // 0008 judge a handle used inside one — in either direction — with no change to
+            // `checkOwned`. The accessor is passed the property's name rather than `get()`/`set()`:
+            // `FunSpec.getterBuilder()` names itself, and the name is what the rejection message
+            // needs to be able to say which property's accessor the handle turned up in.
+            getter?.let { body ->
+                getter(
+                    buildFun(
+                        name, FunKind.GETTER, null, null, emptyList(), emptyList(), null, null,
+                        this@propertyOf,
+                    ) { body() },
+                )
+            }
+            setter?.let { body ->
+                setter(
+                    buildFun(
+                        name, FunKind.SETTER, null, null, listOf(param(setterParam, type)), emptyList(), null, null,
+                        this@propertyOf,
+                    ) { (value) -> body(value) },
+                )
+            }
         }
         .build()
+}
+
+/**
+ * Everything E2a's slots make expressible that is not valid Kotlin, rejected before KotlinPoet sees
+ * it (Global Constraint 26). KotlinPoet catches exactly one of these itself — `PropertySpec`'s
+ * `require(mutable || setter == null)` — and as an `IllegalArgumentException` whose message names
+ * neither the property nor the construct.
+ *
+ * The `field` keyword deliberately gets no construct of its own: `expression("field")` already
+ * renders it, and a `field` construct would be valid only inside an accessor body, so it would need
+ * a `BlockScope` shadow it could not have — the accessor body *is* a `BlockScope` — reopening ADR
+ * 0002 for two words.
+ */
+private fun checkProperty(
+    keyword: String,
+    name: String,
+    mutable: Boolean,
+    init: Expr?,
+    by: Expr?,
+    typeVariables: List<TypeVariableName>,
+    receiver: TypeName?,
+    setter: (BlockScope.(Expr) -> Unit)?,
+    getter: (BlockScope.() -> Unit)?,
+) {
+    check(mutable || setter == null) {
+        "$keyword: '$name' is a `val` and has no setter. Declare it with `var`, or drop the setter."
+    }
+    // "Delegated property cannot have accessors with non-default implementations" — the delegate
+    // *is* the accessor pair.
+    check(by == null || (getter == null && setter == null)) {
+        "$keyword: '$name' is delegated with `by`, and a delegated property cannot have accessors. " +
+            "Drop the delegate, or drop the accessors."
+    }
+    if (receiver != null) {
+        check(init == null) {
+            "$keyword: '$name' is an extension property, which has no backing field, so it cannot " +
+                "have an initializer. Move the value into the getter."
+        }
+        check(getter != null || by != null) {
+            "$keyword: '$name' is an extension property, which has no backing field, so it needs a " +
+                "getter (or a delegate)."
+        }
+        check(!mutable || setter != null || by != null) {
+            "$keyword: '$name' is a mutable extension property, which has no backing field, so it " +
+                "needs a setter as well as a getter (or a delegate)."
+        }
+    }
+    // A property's type parameters take no declaration-site variance and no `reified`, for the same
+    // reasons a function's do not.
+    checkTypeVariables(keyword, name, typeVariables, varianceAllowed = false, reifiedAllowed = false)
+    if (typeVariables.isEmpty()) return
+    checkNotNull(receiver) {
+        "$keyword: '$name' declares type parameters but has no receiver. Kotlin allows a property's " +
+            "type parameter only where its receiver type uses it."
+    }
+    typeVariables.forEach { variable ->
+        check(receiver.mentions(variable)) {
+            "$keyword: type parameter \"${variable.name}\" of '$name' is not used in the receiver " +
+                "type. Kotlin allows a property's type parameter only where its receiver type uses it."
+        }
+    }
+}
+
+/**
+ * Whether [variable] occurs anywhere in this type — `T` itself, `List<T>`, `out T`, `(T) -> Unit`.
+ *
+ * Compared by name rather than by value: the [TypeVariableName] written into the receiver may carry
+ * different bounds from the one in the `typeVariables` list, and Kotlin resolves it by name.
+ */
+private fun TypeName.mentions(variable: TypeVariableName): Boolean = when (this) {
+    is TypeVariableName -> name == variable.name || bounds.any { it.mentions(variable) }
+    is ParameterizedTypeName -> typeArguments.any { it.mentions(variable) }
+    is WildcardTypeName -> (inTypes + outTypes).any { it.mentions(variable) }
+    is LambdaTypeName ->
+        this.receiver?.mentions(variable) == true ||
+            parameters.any { it.type.mentions(variable) } ||
+            returnType.mentions(variable)
+
+    else -> false
 }
 
 /**
@@ -111,6 +238,11 @@ internal fun Scope.bind(
     type: TypeName?,
     init: Expr?,
     by: Expr?,
+    typeVariables: List<TypeVariableName> = emptyList(),
+    receiver: TypeName? = null,
+    setterParam: String = "value",
+    setter: (BlockScope.(Expr) -> Unit)? = null,
+    getter: (BlockScope.() -> Unit)? = null,
 ): Expr {
     check(init == null || by == null) {
         "Binding '$name' cannot have both an initializer and a delegate."
@@ -120,17 +252,31 @@ internal fun Scope.bind(
             check(annotations == null && modifiers == null) {
                 "A local binding ('$name') cannot carry annotations or modifiers."
             }
+            // A local variable has no accessors ("Local variable with getter/setter"), no receiver
+            // and no type parameters — all three are property-only in Kotlin, and all three would
+            // otherwise be silently dropped here, since `bindLocal` builds a `CodeBlock` and has
+            // nowhere to put them.
+            check(typeVariables.isEmpty() && receiver == null && setter == null && getter == null) {
+                "A local binding ('$name') cannot have accessors, an extension receiver or type " +
+                    "parameters; only a property can."
+            }
             bindLocal(mutable, name, type, init, by)
         }
 
         is FileScope -> {
-            val spec = propertyOf(mutable, annotations, modifiers, name, type, init, by)
+            val spec = propertyOf(
+                mutable, annotations, modifiers, name, type, init, by,
+                typeVariables, receiver, setterParam, setter, getter,
+            )
             builder.addProperty(spec)
             handle(spec.name, type, mutable)
         }
 
         is TypeScope -> {
-            val spec = propertyOf(mutable, annotations, modifiers, name, type, init, by)
+            val spec = propertyOf(
+                mutable, annotations, modifiers, name, type, init, by,
+                typeVariables, receiver, setterParam, setter, getter,
+            )
             builder.addProperty(spec)
             handle(spec.name, type, mutable)
         }

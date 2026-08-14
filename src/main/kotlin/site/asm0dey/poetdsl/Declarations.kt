@@ -327,6 +327,33 @@ public fun param(kind: ParamKind?, name: String, type: TypeName): ParameterSpec 
     ParameterSpec.builder(name, type).apply { if (kind != null) tag(ParamKind::class, kind) }.build()
 
 /**
+ * What [buildFun] is building. Four shapes share one implementation because they share everything
+ * that is hard — parameter uniquifying, the body's [NameScope]/[ScopeId] chaining, ADR 0008's
+ * ownership check — and differ only in which builder they start from and what they do with the
+ * types the body's `return`s recorded.
+ *
+ * The two accessors are E2a's. KotlinPoet models them as ordinary [FunSpec]s named `get()`/`set()`
+ * (`FunSpec.Companion.isAccessor`), so nothing new is needed to *build* one — but
+ * `FunSpec.Builder.returns` carries `check(!name.isAccessor)` and throws, so an accessor must never
+ * reach [inferReturnType]'s output. A getter's return type is the property's declared type, which
+ * is explicit, so ADR 0007's "explicit wins" already answers it: the accessor infers nothing, and a
+ * `ret(x)` inside one is a plain `return` rather than a type claim.
+ */
+internal enum class FunKind {
+    FUNCTION,
+    CONSTRUCTOR,
+
+    /** `get() { … }` on a property: no parameters, and `ret(x)` is how a multi-statement body ends. */
+    GETTER,
+
+    /** `set(value) { … }`: exactly one parameter, and only the valueless `ret()` is legal in it. */
+    SETTER,
+    ;
+
+    internal val isAccessor: Boolean get() = this == GETTER || this == SETTER
+}
+
+/**
  * The single implementation behind every function overload, including the detached builders.
  *
  * Names live in a *child* [NameScope] of the parent's, so a parameter that would shadow an
@@ -348,37 +375,51 @@ public fun param(kind: ParamKind?, name: String, type: TypeName): ParameterSpec 
  *
  * [typeVariables] is D31's slot and is always empty for a constructor: Kotlin gives a constructor no
  * type parameters of its own — it uses the class's — so `` `constructor` ``'s generated overloads
- * carry no slot to pass one through, and the check below would reject one anyway.
+ * carry no slot to pass one through, and the check below would reject one anyway. It is empty for
+ * an accessor too, for the same reason: `val <T> T.first: T` declares `T` on the *property*, and
+ * [propertyOf] is what carries it.
+ *
+ * [receiver] is E2a's extension-receiver slot: `fun String.shout()`. The body gets no handle for
+ * `this` — see [FunKind] and the accessor KDoc on `` `val` `` for the `expression("this")` spelling.
  */
 internal fun buildFun(
     name: String,
-    isConstructor: Boolean,
+    kind: FunKind,
     annotations: Annotations?,
     modifiers: Modifiers?,
     params: List<ParameterSpec>,
     typeVariables: List<TypeVariableName>,
     returns: TypeName?,
+    receiver: TypeName?,
     parent: Scope?,
     body: BlockScope.(List<Expr>) -> Unit,
 ): FunSpec {
+    // What ADR 0008's rejection message calls this body. An accessor is passed the *property's*
+    // name — `FunSpec.getterBuilder()` names itself `get()`, so the name is never rendered — which
+    // is what lets the message say which property's getter a smuggled handle turned up in.
+    val label = when (kind) {
+        FunKind.GETTER -> "get() of '$name'"
+        FunKind.SETTER -> "set() of '$name'"
+        FunKind.FUNCTION, FunKind.CONSTRUCTOR -> "fun($name)"
+    }
     // Before anything is built: a function's type parameters take no declaration-site variance, and
     // take `reified` only when the function is `inline`. Both render happily in KotlinPoet and
     // neither compiles. A constructor names itself `<init>` here, so it says `constructor` instead.
     checkTypeVariables(
-        if (isConstructor) "`constructor`" else "`fun`",
+        if (kind == FunKind.CONSTRUCTOR) "`constructor`" else "`fun`",
         name,
         typeVariables,
         varianceAllowed = false,
         reifiedAllowed = KModifier.INLINE in modifiers.toList(),
     )
     val names = (parent?.names ?: NameScope(null)).child()
-    val id = (parent?.id ?: ScopeId(null, "root")).child("fun($name)")
+    val id = (parent?.id ?: ScopeId(null, "root")).child(label)
     val recorded = mutableListOf<TypeName?>()
     // The slot D25's `` `this` ``/`` `super` `` write into, and the only one ever created: a
     // delegation call is part of a constructor's header, so nothing else in the DSL may accept one.
     // `BlockScope.child` does not propagate it, which is what rejects a delegation call written
     // inside a lambda or a nested block — Kotlin allows one in neither.
-    val delegation = if (isConstructor) ConstructorDelegation() else null
+    val delegation = if (kind == FunKind.CONSTRUCTOR) ConstructorDelegation() else null
     val scope = BlockScope(
         builder = CodeBlock.builder(),
         names = names,
@@ -433,19 +474,38 @@ internal fun buildFun(
     // `return` ran, since the valueless `ret()` records nothing and is legal here. Reachable
     // through a spliced fragment too (`ctor { +stmts { ret(1.lit) } }`), which replays its
     // recorded types into this list at the splice.
-    check(!isConstructor || recorded.isEmpty()) {
+    check(kind != FunKind.CONSTRUCTOR || recorded.isEmpty()) {
         "constructor: a constructor cannot return a value. Remove the returned expression, or " +
             "move the code to a function."
     }
 
-    val builder = if (isConstructor) FunSpec.constructorBuilder() else FunSpec.builder(name)
+    // A setter returns `Unit`, so `return value` in one is `e: Return type mismatch` — while the
+    // valueless `ret()` is a legal early exit and records nothing. The getter is the asymmetric
+    // half: its `ret(x)` is the whole point of an accessor body that does more than one thing, and
+    // the type it recorded is deliberately dropped rather than checked against the property's
+    // declared type, because that type is explicit and ADR 0007 gives explicit the win.
+    check(kind != FunKind.SETTER || recorded.isEmpty()) {
+        "$label: a setter cannot return a value; it returns Unit. Use the valueless ret() to " +
+            "leave early, or assign to `field` — expression(\"field\") — instead."
+    }
+
+    val builder = when (kind) {
+        FunKind.CONSTRUCTOR -> FunSpec.constructorBuilder()
+        FunKind.GETTER -> FunSpec.getterBuilder()
+        FunKind.SETTER -> FunSpec.setterBuilder()
+        FunKind.FUNCTION -> FunSpec.builder(name)
+    }
     return builder
         .apply {
             annotations?.list?.forEach { addAnnotation(it) }
             addModifiers(modifiers.toList())
             addTypeVariables(typeVariables)
+            receiver?.let { receiver(it) }
             declared.forEach { addParameter(it) }
-            inferReturnType(name, isConstructor, returns, recorded)?.let { returns(it) }
+            // Never for an accessor: `FunSpec.Builder.returns` is `check(!name.isAccessor)` and
+            // throws, and there is nothing to say anyway — a getter returns the property's declared
+            // type and a setter returns `Unit`.
+            if (!kind.isAccessor) inferReturnType(name, kind, returns, recorded)?.let { returns(it) }
             // Before the body: the delegation call is the constructor's header, and KotlinPoet
             // renders it there whatever order the builder is fed in. Written through
             // `callThisConstructor`/`callSuperConstructor` rather than emitted, per D25.
@@ -471,11 +531,11 @@ internal fun buildFun(
  */
 private fun inferReturnType(
     name: String,
-    isConstructor: Boolean,
+    kind: FunKind,
     returns: TypeName?,
     recorded: List<TypeName?>,
 ): TypeName? = when {
-    isConstructor -> null
+    kind == FunKind.CONSTRUCTOR -> null
     returns != null -> returns
     recorded.isEmpty() -> null
     else -> {
@@ -623,8 +683,10 @@ public fun funSpec(
     name: String,
     typeVariables: List<TypeVariableName> = emptyList(),
     returns: TypeName? = null,
+    receiver: TypeName? = null,
     body: BlockScope.() -> Unit,
-): FunSpec = buildFun(name, false, null, modifiers, emptyList(), typeVariables, returns, null) { body() }
+): FunSpec =
+    buildFun(name, FunKind.FUNCTION, null, modifiers, emptyList(), typeVariables, returns, receiver, null) { body() }
 
 /** [funSpec] with one parameter; the body receives its handle. */
 public fun funSpec(
@@ -633,8 +695,12 @@ public fun funSpec(
     p1: ParameterSpec,
     typeVariables: List<TypeVariableName> = emptyList(),
     returns: TypeName? = null,
+    receiver: TypeName? = null,
     body: BlockScope.(Expr) -> Unit,
-): FunSpec = buildFun(name, false, null, modifiers, listOf(p1), typeVariables, returns, null) { (a) -> body(a) }
+): FunSpec =
+    buildFun(name, FunKind.FUNCTION, null, modifiers, listOf(p1), typeVariables, returns, receiver, null) { (a) ->
+        body(a)
+    }
 
 /**
  * Detached property builder. The type is mandatory for the same reason it is on a `` `val` ``
