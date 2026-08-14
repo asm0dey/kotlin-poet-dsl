@@ -2,10 +2,12 @@ package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.ParameterSpec
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeName
 import com.squareup.kotlinpoet.TypeSpec
+import com.squareup.kotlinpoet.TypeVariableName
 
 // The public entry points of every construct in this file — `class`/`klass`, `object`,
 // `interface`, `constructorParam`/`ctorParam`, `fun`/`func` and `constructor`/`ctor` — are
@@ -54,6 +56,11 @@ import com.squareup.kotlinpoet.TypeSpec
  * `ScopeId(null, "type")` cost a type nested two or more levels deep its file-level handle access,
  * an accepted narrower gap. [TypeScope.fileId] closed it; the gap no longer applies, in this
  * construct or in [addCompanionObject], which had the same hole at *every* depth.
+ *
+ * [typeVariables] are D31's: the declaration's own `<T>`, added before the body runs so that a
+ * member declared inside it renders against the same [TypeVariableName] values the signature does.
+ * Only a class and an interface reach this with a non-empty list — an `object` has no type parameters
+ * in Kotlin, so its generated overloads carry no slot to pass one through.
  */
 internal fun Scope.declareType(
     builder: TypeSpec.Builder,
@@ -63,6 +70,7 @@ internal fun Scope.declareType(
     annotations: Annotations?,
     modifiers: Modifiers?,
     params: List<ParameterSpec>,
+    typeVariables: List<TypeVariableName>,
     body: TypeScope.(List<Expr>) -> Unit,
 ) {
     if (this is BlockScope) {
@@ -76,6 +84,9 @@ internal fun Scope.declareType(
         "A $kindName named \"$name\" is already declared in this scope."
     }
     declaredTypeNames += name
+    // Declaration-site variance is exactly what a class or an interface is allowed; `reified` is
+    // exactly what it is not, being an inline function's business.
+    checkTypeVariables("`$kindName`", name, typeVariables, varianceAllowed = true, reifiedAllowed = false)
 
     // The file this type belongs to, threaded on unchanged: a nested type inherits the enclosing
     // type's `fileId`, a top-level one takes the file's own `id`. (A `BlockScope` has no file above
@@ -83,7 +94,7 @@ internal fun Scope.declareType(
     // scope a local type would nest under if KotlinPoet could render one.)
     val enclosingFileId = if (this is TypeScope) fileId else id
     val scope = TypeScope(
-        builder.addModifiers(modifiers.toList()),
+        builder.addModifiers(modifiers.toList()).addTypeVariables(typeVariables),
         NameScope(null),
         enclosingFileId.child("type"),
         kindName,
@@ -243,9 +254,15 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
  * fix that would take the KotlinPoet type out of the return position, which is the whole feature.
  * See ADR 0008's Task 21 amendment.
  */
-public fun typeSpec(modifiers: Modifiers? = null, name: String, body: TypeScope.() -> Unit): TypeSpec {
+public fun typeSpec(
+    modifiers: Modifiers? = null,
+    name: String,
+    typeVariables: List<TypeVariableName> = emptyList(),
+    body: TypeScope.() -> Unit,
+): TypeSpec {
+    checkTypeVariables("typeSpec", name, typeVariables, varianceAllowed = true, reifiedAllowed = false)
     val scope = TypeScope(
-        TypeSpec.classBuilder(name).addModifiers(modifiers.toList()),
+        TypeSpec.classBuilder(name).addModifiers(modifiers.toList()).addTypeVariables(typeVariables),
         NameScope(null),
         ScopeId(null, "type"),
     )
@@ -256,7 +273,18 @@ public fun typeSpec(modifiers: Modifiers? = null, name: String, body: TypeScope.
 // --- functions --------------------------------------------------------------------------------
 
 /**
- * A function parameter. Type-position annotations come free: `param("x", INT.annotated<Positive>())`.
+ * A function parameter. Type-position annotations come free, through KotlinPoet's own
+ * `TypeName.annotated` and this DSL's [annotation]/[ann]:
+ *
+ *     param("x", INT.annotated(*ann<Positive>().list.toTypedArray()))   // x: @Positive Int
+ *     param("x", INT.annotated(Positive::class))                        // the same, with no arguments
+ *
+ * The example this KDoc carried until D31 — `param("x", INT.annotated<Positive>())` — matched no
+ * overload and never compiled: `TypeName.annotated` takes `vararg AnnotationSpec`,
+ * `List<AnnotationSpec>`, `vararg ClassName` or `vararg KClass<out Annotation>`, and KotlinPoet 2.3.0
+ * has no reified form. No reified helper was added for it either, deliberately: [annotation] already
+ * builds the [com.squareup.kotlinpoet.AnnotationSpec] — arguments and all — and the `KClass` overload
+ * covers the bare case in fewer characters than a wrapper would.
  *
  * [name] is a *request*, not a guarantee: a parameter that would shadow a binding of the enclosing
  * scope is uniquified when the function is built, exactly as a lambda parameter is (ADR 0009). The
@@ -301,6 +329,10 @@ public fun param(kind: ParamKind?, name: String, type: TypeName): ParameterSpec 
  *
  * Return-type inference follows ADR 0007 and is done here because this is the only place that sees
  * both the explicit [returns] and the types the body recorded.
+ *
+ * [typeVariables] is D31's slot and is always empty for a constructor: Kotlin gives a constructor no
+ * type parameters of its own — it uses the class's — so `` `constructor` ``'s generated overloads
+ * carry no slot to pass one through, and the check below would reject one anyway.
  */
 internal fun buildFun(
     name: String,
@@ -308,10 +340,21 @@ internal fun buildFun(
     annotations: Annotations?,
     modifiers: Modifiers?,
     params: List<ParameterSpec>,
+    typeVariables: List<TypeVariableName>,
     returns: TypeName?,
     parent: Scope?,
     body: BlockScope.(List<Expr>) -> Unit,
 ): FunSpec {
+    // Before anything is built: a function's type parameters take no declaration-site variance, and
+    // take `reified` only when the function is `inline`. Both render happily in KotlinPoet and
+    // neither compiles. A constructor names itself `<init>` here, so it says `constructor` instead.
+    checkTypeVariables(
+        if (isConstructor) "`constructor`" else "`fun`",
+        name,
+        typeVariables,
+        varianceAllowed = false,
+        reifiedAllowed = KModifier.INLINE in modifiers.toList(),
+    )
     val names = (parent?.names ?: NameScope(null)).child()
     val id = (parent?.id ?: ScopeId(null, "root")).child("fun($name)")
     val recorded = mutableListOf<TypeName?>()
@@ -384,6 +427,7 @@ internal fun buildFun(
         .apply {
             annotations?.list?.forEach { addAnnotation(it) }
             addModifiers(modifiers.toList())
+            addTypeVariables(typeVariables)
             declared.forEach { addParameter(it) }
             inferReturnType(name, isConstructor, returns, recorded)?.let { returns(it) }
             // Before the body: the delegation call is the constructor's header, and KotlinPoet
@@ -561,18 +605,20 @@ internal fun TypeScope.addSecondaryConstructor(spec: FunSpec) {
 public fun funSpec(
     modifiers: Modifiers? = null,
     name: String,
+    typeVariables: List<TypeVariableName> = emptyList(),
     returns: TypeName? = null,
     body: BlockScope.() -> Unit,
-): FunSpec = buildFun(name, false, null, modifiers, emptyList(), returns, null) { body() }
+): FunSpec = buildFun(name, false, null, modifiers, emptyList(), typeVariables, returns, null) { body() }
 
 /** [funSpec] with one parameter; the body receives its handle. */
 public fun funSpec(
     modifiers: Modifiers? = null,
     name: String,
     p1: ParameterSpec,
+    typeVariables: List<TypeVariableName> = emptyList(),
     returns: TypeName? = null,
     body: BlockScope.(Expr) -> Unit,
-): FunSpec = buildFun(name, false, null, modifiers, listOf(p1), returns, null) { (a) -> body(a) }
+): FunSpec = buildFun(name, false, null, modifiers, listOf(p1), typeVariables, returns, null) { (a) -> body(a) }
 
 /**
  * Detached property builder. The type is mandatory for the same reason it is on a `` `val` ``

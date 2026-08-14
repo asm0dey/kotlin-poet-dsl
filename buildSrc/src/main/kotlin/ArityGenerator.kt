@@ -160,6 +160,12 @@ private data class TypeConstruct(
      * single no-parameter shape they have always had.
      */
     val primaryParams: Boolean,
+    /**
+     * Whether the declaration takes type parameters (D31). A class and an interface do; an `object`
+     * does not — `object O<T>` is not Kotlin — so it gets no slot at all rather than a runtime
+     * check, which is the strongest form the guard can take.
+     */
+    val typeParams: Boolean,
 )
 
 private val TYPES: List<TypeConstruct> = listOf(
@@ -175,6 +181,7 @@ private val TYPES: List<TypeConstruct> = listOf(
         // into the locked public API, and `fun` has the identical defect and no shadow either.
         shadow = null,
         primaryParams = true,
+        typeParams = true,
     ),
     TypeConstruct(
         names = listOf(Spelling("`object`")),
@@ -184,6 +191,7 @@ private val TYPES: List<TypeConstruct> = listOf(
         shadow = "A named object cannot be local in Kotlin. Declare it at file or type level, " +
             "or use an anonymous object.",
         primaryParams = false,
+        typeParams = false,
     ),
     TypeConstruct(
         names = listOf(Spelling("`interface`")),
@@ -192,6 +200,7 @@ private val TYPES: List<TypeConstruct> = listOf(
         localAllowed = false,
         shadow = "An interface cannot be local in Kotlin. Declare it at file or type level.",
         primaryParams = false,
+        typeParams = true,
     ),
 )
 
@@ -211,7 +220,7 @@ private fun TypeConstruct.overloads(): List<Overload> = names.flatMap { nm ->
                 context = "context(s: Scope)",
                 name = nm.value,
                 params = v.params() + listOf("name: String") + arityParams(arity) +
-                    listOf("body: ${bodyType(arity, "TypeScope")}"),
+                    typeVariablesParam(typeParams) + listOf("body: ${bodyType(arity, "TypeScope")}"),
                 returns = null,
                 body = """
                     |s.declareType(
@@ -222,6 +231,7 @@ private fun TypeConstruct.overloads(): List<Overload> = names.flatMap { nm ->
                     |    ${v.annotationsArg},
                     |    ${v.modifiersArg},
                     |    ${paramList(arity)},
+                    |    ${typeVariablesArg(typeParams)},
                     |    ${forwarder(arity)},
                     |)
                 """.trimMargin(),
@@ -305,6 +315,24 @@ private fun forwarder(arity: Int?): String = when {
     else -> "{ args -> body(${(0 until arity).joinToString(", ") { "args[$it]" }}) }"
 }
 
+/**
+ * D31's type-parameter slot, as a parameter list fragment.
+ *
+ * A **defaulted** parameter on every existing overload, not a new axis of the table: it adds one
+ * `typeVariables: List<TypeVariableName> = emptyList()` to each declaration and **zero** new
+ * declarations, which is the whole reason this shape was chosen over anything presence-distinguished
+ * (see the E1 report). `returns` on `` `fun` `` is the same shape and the same cost.
+ *
+ * It sits *after* the arity parameters because it has to — a defaulted parameter cannot precede the
+ * non-defaulted `p1: ParameterSpec` list — and *before* `returns`, which is as close to Kotlin's own
+ * `fun <T> name(…): R` order as that constraint allows.
+ */
+private fun typeVariablesParam(present: Boolean): List<String> =
+    if (present) listOf("typeVariables: List<TypeVariableName> = emptyList()") else emptyList()
+
+/** The matching argument: the slot's value where there is one, an empty list where there is not. */
+private fun typeVariablesArg(present: Boolean): String = if (present) "typeVariables" else "emptyList()"
+
 private fun paramList(arity: Int?): String = when {
     arity == null -> "params"
     arity == 0 -> "emptyList()"
@@ -329,7 +357,7 @@ private fun funOverloads(): List<Overload> = FUN_NAMES.flatMap { nm ->
                 context = "context(s: Scope)",
                 name = nm.value,
                 params = v.params() + listOf("name: String") + arityParams(arity) +
-                    listOf("returns: TypeName? = null", "body: ${bodyType(arity)}"),
+                    typeVariablesParam(true) + listOf("returns: TypeName? = null", "body: ${bodyType(arity)}"),
                 returns = null,
                 body = """
                     |s.declareFun(
@@ -339,6 +367,7 @@ private fun funOverloads(): List<Overload> = FUN_NAMES.flatMap { nm ->
                     |        ${v.annotationsArg},
                     |        ${v.modifiersArg},
                     |        ${paramList(arity)},
+                    |        typeVariables,
                     |        returns,
                     |        s,
                     |        ${forwarder(arity)},
@@ -380,6 +409,7 @@ private fun ctorOverloads(): List<Overload> = CTOR_NAMES.flatMap { nm ->
                     |        ${v.annotationsArg},
                     |        ${v.modifiersArg},
                     |        ${paramList(arity)},
+                    |        emptyList(),
                     |        null,
                     |        t,
                     |        ${forwarder(arity)},
@@ -556,6 +586,7 @@ private val IMPORTS = listOf(
     "com.squareup.kotlinpoet.ParameterSpec",
     "com.squareup.kotlinpoet.TypeName",
     "com.squareup.kotlinpoet.TypeSpec",
+    "com.squareup.kotlinpoet.TypeVariableName",
 )
 
 /** Wraps rendered declarations in a package header, importing exactly what the text mentions. */
