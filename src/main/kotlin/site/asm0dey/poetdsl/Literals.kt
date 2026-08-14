@@ -12,6 +12,7 @@ import com.squareup.kotlinpoet.MemberName
 import com.squareup.kotlinpoet.STRING
 import com.squareup.kotlinpoet.TypeName
 import com.squareup.kotlinpoet.asClassName
+import kotlin.reflect.typeOf
 
 public val Int.literal: Expr get() = Expr(CodeBlock.of("%L", this), INT)
 public val Int.lit: Expr get() = literal
@@ -109,8 +110,33 @@ public val nul: Expr get() = nullLiteral
 /** Sugar for `copy(nullable = true)`. */
 public val TypeName.nullable: TypeName get() = copy(nullable = true)
 
-/** A type reference: works in type position and as a `%T` argument; the import resolves. */
-public inline fun <reified T> reference(): ClassName = T::class.asClassName()
+/**
+ * A type reference: works in type position and as a `%T` argument; the import resolves.
+ *
+ * Returns [ClassName] by ADR 0010, which is what `member(enclosing, …)`, `annotation(cls, …)` and
+ * `superclass(…)` want and what [parameterizedBy] applies type arguments to.
+ *
+ * **Type arguments are rejected, not erased** (D31). `T::class` is the runtime class, so
+ * `reference<List<String>>()` could only ever have produced bare `kotlin.collections.List` — silently
+ * dropping the `<String>` the caller wrote, which is a generated public API changed behind their
+ * back. The reified [typeOf] the compiler fills in at the call site can see the difference, so this
+ * says so instead of guessing. A **star** projection is accepted, because `List<*>` really does name
+ * the raw class and there is nothing to lose: `reference<List<*>>()` is `kotlin.collections.List`.
+ *
+ * Use [typeReference] for the full type, or compose it with [parameterizedBy].
+ */
+public inline fun <reified T> reference(): ClassName {
+    val arguments = typeOf<T>().arguments
+    check(arguments.all { it.type == null }) {
+        "reference: ${typeOf<T>()} has type arguments, and reference<T>() names the erased class " +
+            "only — it would silently drop them. Use typeReference<T>() for the whole type, " +
+            "reference<${T::class.simpleName}<*>>() if the raw class is what you meant, or compose it " +
+            "with parameterizedBy."
+    }
+    return T::class.asClassName()
+}
+
+/** Alias of [reference]. */
 public inline fun <reified T> ref(): ClassName = reference<T>()
 
 /** A top-level or enclosed member reference; `%M` resolves the import. */
