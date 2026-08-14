@@ -1,8 +1,10 @@
 package site.asm0dey.poetdsl
 
+import com.squareup.kotlinpoet.ANY
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.ABSTRACT
+import com.squareup.kotlinpoet.KModifier.EXPECT
 import com.squareup.kotlinpoet.KModifier.OVERRIDE
 import com.squareup.kotlinpoet.LONG
 import site.asm0dey.poetdsl.ParamKind.VAL
@@ -101,6 +103,54 @@ class SupertypesTest {
         assertEquals(
             "superclass: an interface has no superclass. Use superinterface to extend another interface.",
             (thrown as IllegalStateException).message,
+        )
+    }
+
+    /**
+     * `TypeSpec.emit` filters `ANY` out of the supertype list at `TypeSpec.kt:235`, *before* it
+     * decides anything about parentheses — so `superclass(ANY, 1.lit)` rendered `public class N` and
+     * the argument reached no output at all, in every container. Silent partial output, which Global
+     * Constraint 26 forbids as loudly as invalid output, and the same defect D40 row 9 recorded for
+     * an `expect` type's superclass arguments, one filter earlier and with no `expect` involved.
+     *
+     * `class N : Any()` is clean on `kotlinc`, `kotlinc-js` and `kotlinc-wasm` alike (measured), so
+     * this is a render gap. It is also the cheapest one in the project: the remedy costs nothing,
+     * because `class N : Any()` and `class N` are the same class.
+     */
+    @Test
+    fun `kotlin Any takes no superclass arguments`() {
+        val message =
+            "superclass: kotlin.Any is given constructor arguments, and KotlinPoet 2.3.0 renders " +
+                "neither — `TypeSpec.emit` filters `ANY` out of the supertype list at " +
+                "`TypeSpec.kt:235`, before it decides anything about parentheses, so the arguments " +
+                "reach no output at all. `class N : Any()` is valid on the JVM, on Kotlin/JS and on " +
+                "Kotlin/Wasm alike, which makes this a backend gap and not a language rule. Drop " +
+                "the arguments: a class with no declared supertype already extends `Any`, so " +
+                "`: Any()` and nothing at all are the same class."
+        for (build in listOf<() -> Unit>(
+            { file("com.example", "A") { `class`("N") { superclass(ANY, 1.lit) } } },
+            { file("com.example", "A") { `object`("O") { superclass(ANY, 1.lit) } } },
+            { file("com.example", "A") { `class`(EXPECT, "E") { `class`("N") { superclass(ANY, 1.lit) } } } },
+        )) {
+            assertEquals(message, (kotlin.runCatching { build() }.exceptionOrNull() as IllegalStateException).message)
+        }
+        // The control: the bare `superclass(ANY)` drops nothing — `Any` is every class's supertype
+        // already — and still renders, inside an `expect` container and outside it.
+        assertEquals(
+            """
+            package com.example
+
+            public class N
+
+            public expect class E {
+              public class M
+            }
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `class`("N") { superclass(ANY) }
+                `class`(EXPECT, "E") { `class`("M") { superclass(ANY) } }
+            }.toString(),
         )
     }
 

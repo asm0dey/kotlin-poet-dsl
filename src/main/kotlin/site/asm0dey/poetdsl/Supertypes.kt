@@ -1,5 +1,6 @@
 package site.asm0dey.poetdsl
 
+import com.squareup.kotlinpoet.ANY
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.TypeName
 
@@ -57,6 +58,26 @@ internal fun TypeScope.applySuperclass(type: TypeName, args: Array<out Expr>) {
     }
     check(superclassType == null) {
         "superclass: a $kindName can only extend one class, and this one already does."
+    }
+    // The other thing `TypeSpec.kt:235`'s `filter { it != ANY }` does, found while giving
+    // [TypeScope.finish] the term that filter demands. `ANY` never reaches the supertype list at
+    // all, so `superclass(ANY, 1.lit)` renders `public class N` and the argument reaches **no
+    // output** — silently, in every container. That is the same partial output Global Constraint 26
+    // forbids and the same defect D40 row 9 recorded for an `expect` type's superclass arguments,
+    // one filter earlier and with no `expect` involved.
+    //
+    // `class N : Any()` is clean on `kotlinc`, `kotlinc-js` and `kotlinc-wasm` alike, so this is a
+    // render gap and not a language rule — and the cheapest one in the project, because
+    // `class N : Any()` and `class N` are the same class. The bare `superclass(ANY)` stays: it drops
+    // nothing, since `Any` is already every class's supertype.
+    check(type != ANY || args.isEmpty()) {
+        "superclass: kotlin.Any is given constructor arguments, and KotlinPoet 2.3.0 renders " +
+            "neither — `TypeSpec.emit` filters `ANY` out of the supertype list at `TypeSpec.kt:235`, " +
+            "before it decides anything about parentheses, so the arguments reach no output at all. " +
+            "`class N : Any()` is valid on the JVM, on Kotlin/JS and on Kotlin/Wasm alike, which " +
+            "makes this a backend gap and not a language rule. Drop the arguments: a class with no " +
+            "declared supertype already extends `Any`, so `: Any()` and nothing at all are the same " +
+            "class."
     }
     // The member of the `expect` family nothing had filed, and the only one whose failure was
     // *silent*: `TypeSpec.emit` drops the superclass constructor arguments when the type carries
