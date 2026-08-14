@@ -67,6 +67,17 @@ class UninitializedPropertyCompileTest {
             // The nearest miss: an interface's *companion* object is not the interface body, and
             // does not inherit its exemption.
             "public interface I {\n  public companion object {\n    public val x: Int\n  }\n}",
+            // The two renders the old remedy sentence recommended, both of which the DSL produced
+            // without complaint until this round: `lateinit` on a `val`, and `abstract` in a
+            // container that cannot hold it (file level, a plain class, an object, a companion).
+            "public lateinit val x: String",
+            "public abstract val x: Int",
+            "public class C {\n  public abstract val x: Int\n}",
+            "public object O {\n  public abstract val x: Int\n}",
+            "public class C {\n  public companion object {\n    public abstract val x: Int\n  }\n}",
+            // And the one the primitive-type rule still lets through — named in the remedy, not
+            // guarded. Recorded here so the gap is a measurement rather than an oversight.
+            "public lateinit var x: Int",
         ).forEach { source ->
             assertEquals(
                 KotlinCompilation.ExitCode.COMPILATION_ERROR,

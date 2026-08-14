@@ -936,12 +936,17 @@ public fun funSpec(
  * nothing about a detached property is read-only, and a `var` built here is the same declaration
  * `` `var`(…) `` builds in a file or type body.
  *
- * The one thing this builder cannot check is the one thing it cannot see: whether the property will
- * be spliced into an interface. So it does not run the missing-value check `` `val` ``/`` `var` ``
- * run — see [checkProperty]'s `needsValue` — and `propertySpec(name = "x", type = INT)` still yields
- * `public val x: Int`, which compiles only in an interface body. Pass `modifiers = ABSTRACT` for the
- * declaration that says so in every container (measured: `public abstract val a: Int` compiles in an
- * interface and in an abstract class alike).
+ * The one thing this builder cannot check is the one thing it cannot see: **where the property will
+ * be spliced.** So it runs none of the container-dependent rules the attached `` `val` ``/`` `var` ``
+ * run — see [PropertyContainer.UNKNOWN] — and `propertySpec(name = "x", type = INT)` still yields
+ * `public val x: Int`, which compiles only in an interface body or an `expect` type's body.
+ * `modifiers = ABSTRACT` is the spelling for a declaration with no value, but it is **not** correct
+ * in every container: `abstract val a: Int` compiles in an interface, an `abstract class`, a
+ * `sealed class` and an `enum class`, and nowhere else — at file level it is *modifier 'abstract' is
+ * not applicable to 'top level property without backing field or delegate'*, and in a plain class,
+ * an object or a companion object it is *abstract property 'a' in non-abstract class 'C'* (all
+ * measured, kotlinc 2.4.10). Splicing this builder's output into one of those is the caller's own
+ * compile to answer for.
  */
 public fun propertySpec(
     modifiers: Modifiers? = null,
@@ -962,14 +967,14 @@ public fun propertySpec(
     }
     // "propertySpec", not `` `val` ``: Global Constraint 26 wants the construct the caller actually
     // wrote, and the caller wrote this one — the init/by check just above says so too.
-    // `containerNeedsValue = false`: this builder returns a bare [PropertySpec] and has no idea
-    // where it will be spliced. An interface body is a legitimate destination, and there a property
-    // with no initializer, delegate or getter is exactly right — so the check the attached
-    // `` `val` ``/`` `var` `` runs would refuse valid output here. See this function's KDoc for the
-    // `modifiers = ABSTRACT` spelling that is correct in every container.
+    // [PropertyContainer.UNKNOWN]: this builder returns a bare [PropertySpec] and has no idea where
+    // it will be spliced. An interface body is a legitimate destination, and there a property with
+    // no initializer, delegate or getter — or an ABSTRACT one — is exactly right, so every
+    // container-dependent check the attached `` `val` ``/`` `var` `` runs would refuse valid output
+    // here. See this function's KDoc for what `modifiers = ABSTRACT` does and does not buy.
     checkProperty(
         "propertySpec", name, mutable, init, by, typeVariables, receiver, setter, getter,
-        modifiers, containerNeedsValue = false,
+        modifiers, PropertyContainer.UNKNOWN,
     )
     val spec = PropertySpec.builder(name, type, modifiers.toList())
     spec.mutable(mutable)

@@ -133,15 +133,9 @@ private fun Scope.propertyOf(
         "Property '$name' requires an explicit type; KotlinPoet cannot infer it."
     }
     val construct = if (mutable) "`var`" else "`val`"
-    // The container fact, read off the scope rather than inferred: an interface body is the one
-    // place a property needs no value, and an `expect` type's members are the multiplatform case
-    // the same rule reaches. A `FileScope` — and a companion object, an object, an enum, a nested
-    // type, all of which are `TypeScope`s with some other `kindName` — always needs one.
-    val containerNeedsValue =
-        !(this is TypeScope && (kindName == "interface" || KModifier.EXPECT in builder.modifiers))
     checkProperty(
         construct, name, mutable, init, by, typeVariables, receiver, setter, getter,
-        modifiers, containerNeedsValue,
+        modifiers, propertyContainer(),
     )
     // An extension property is keyed by receiver *and* name: `val String.size` and `val Int.size`
     // are two different declarations and both are legal in one file, while two of the same name on
@@ -217,6 +211,65 @@ internal fun PropertySpec.Builder.addAccessors(
 }
 
 /**
+ * The facts about a property's **container** that the property itself cannot carry, read off the
+ * scope in one place so that [checkProperty] never has to infer a container from what the property
+ * holds. Every row below is one kotlinc 2.4.10 run; `expect` needs `-Xmulti-platform`.
+ *
+ * | container | no value | `abstract` | `expect` on the property |
+ * |---|---|---|---|
+ * | file | *Property must be initialized.* | *modifier 'abstract' is not applicable to 'top level property without backing field or delegate'* | OK |
+ * | `class` | *…or be abstract.* | *abstract property 'a' in non-abstract class 'C'* | *modifier 'expect' is not applicable to 'member property without backing field or delegate'* |
+ * | `abstract`/`sealed`/`enum class` | *…or be abstract.* | OK | as above |
+ * | `interface` | OK | OK (rendered without the keyword — it is implicit) | as above |
+ * | `object`, `companion object` | *…or be abstract.* | *abstract property 'a' in non-abstract class 'O'* | as above |
+ * | `expect class` body | OK | *abstract property 'a' in non-abstract class 'E'* | as above |
+ *
+ * [abstractAllowed] is also what keeps KotlinPoet's own
+ * `IllegalArgumentException: non-abstract type C cannot declare abstract property x` — thrown from
+ * `TypeSpec.build` whenever `ABSTRACT` is on a property of a type that is not an interface and
+ * carries none of `ABSTRACT`/`SEALED`/`ENUM`, and reading `non-abstract type **null**` for an
+ * anonymous companion object — out of this DSL's output. Global Constraint 26 forbids that exception
+ * type, and its message names neither construct.
+ */
+internal class PropertyContainer(
+    val needsValue: Boolean,
+    val abstractAllowed: Boolean,
+    val expectAllowed: Boolean,
+) {
+    internal companion object {
+        /**
+         * [propertySpec]'s detached builder, which has no container and cannot be given one: it
+         * returns a bare `PropertySpec` and an interface body is a legitimate destination. Every
+         * container-dependent rule is therefore off here, which is the same answer
+         * `containerNeedsValue = false` gave before this class existed.
+         */
+        val UNKNOWN: PropertyContainer =
+            PropertyContainer(needsValue = false, abstractAllowed = true, expectAllowed = true)
+    }
+}
+
+/** See [PropertyContainer]. A [BlockScope] never reaches here — [bindLocal] takes that branch. */
+private fun Scope.propertyContainer(): PropertyContainer {
+    if (this !is TypeScope) {
+        return PropertyContainer(needsValue = true, abstractAllowed = false, expectAllowed = true)
+    }
+    val typeModifiers = builder.modifiers
+    return PropertyContainer(
+        needsValue = !(kindName == "interface" || KModifier.EXPECT in typeModifiers),
+        // Exactly Kotlin's list, which is narrower than KotlinPoet's on one row: KotlinPoet accepts
+        // an abstract property in an `abstract object`, and Kotlin has no such thing. `kindName`
+        // separates the three builders this DSL uses — `classBuilder`, `objectBuilder`,
+        // `interfaceBuilder` — plus the companion object's, which is `"companion object"`.
+        abstractAllowed = kindName == "interface" || (
+            kindName == "class" && typeModifiers.any {
+                it == KModifier.ABSTRACT || it == KModifier.SEALED || it == KModifier.ENUM
+            }
+            ),
+        expectAllowed = false,
+    )
+}
+
+/**
  * Everything E2a's slots make expressible that is not valid Kotlin, rejected before KotlinPoet sees
  * it (Global Constraint 26). KotlinPoet catches exactly one of these itself — `PropertySpec`'s
  * `require(mutable || setter == null)` — and as an `IllegalArgumentException` whose message names
@@ -238,6 +291,9 @@ internal fun PropertySpec.Builder.addAccessors(
  * @param construct the DSL spelling to name in the message — `` `val` ``, `` `var` ``, or
  *   `propertySpec` for the detached builder — matching [checkTypeVariables]'s parameter of the same
  *   name, which this hands it straight through to.
+ * @param container what the *scope* knows and the property does not; see [PropertyContainer]. Two of
+ *   the rules below read it, and the remedy sentence of the third is built from it, so that no
+ *   message ever recommends a modifier that does not compile where it is offered.
  */
 internal fun checkProperty(
     construct: String,
@@ -250,8 +306,23 @@ internal fun checkProperty(
     setter: (BlockScope.(Expr) -> Unit)?,
     getter: (BlockScope.() -> Unit)?,
     modifiers: Modifiers?,
-    containerNeedsValue: Boolean,
+    container: PropertyContainer,
 ) {
+    val declared = modifiers.toList()
+    check(mutable || KModifier.LATEINIT !in declared) {
+        "$construct: '$name' is a `val` and cannot be LATEINIT; Kotlin allows the modifier only on " +
+            "a mutable property (\"'lateinit' modifier is allowed only on mutable properties.\"). " +
+            "Declare it with `var`, or drop LATEINIT."
+    }
+    // Not folded into the missing-value check below, because KotlinPoet's `require` is not either:
+    // it reads the modifier alone, so `abstract val x: Int = 1` in a non-abstract class raises the
+    // same `IllegalArgumentException` an uninitialized one does. See [PropertyContainer].
+    check(container.abstractAllowed || KModifier.ABSTRACT !in declared) {
+        "$construct: '$name' is ABSTRACT, which Kotlin allows only in an interface or in an " +
+            "ABSTRACT, SEALED or ENUM class — not at file level, not in an object or a companion " +
+            "object, and not in a class that is none of those. Declare the container ABSTRACT, or " +
+            "give '$name' a value."
+    }
     check(mutable || setter == null) {
         "$construct: '$name' is a `val` and has no setter. Declare it with `var`, or drop the setter."
     }
@@ -310,8 +381,8 @@ internal fun checkProperty(
     //
     // - **container**: an interface body, where `val x: Int` and `var y: Int` are both OK. That is
     //   the only container that exempts — a companion object inside an interface does not, nor does
-    //   an enum or a sealed class. [containerNeedsValue] carries the answer down from the scope
-    //   rather than being inferred from anything visible here.
+    //   an enum or a sealed class. [PropertyContainer.needsValue] carries the answer down from the
+    //   scope rather than being inferred from anything visible here.
     // - **modifier**: ABSTRACT, LATEINIT and EXPECT.
     //
     // The brief's list also named `external`, and that is **wrong**: `external val a: Int` is
@@ -328,14 +399,31 @@ internal fun checkProperty(
     // property with no getter is refused there with a message that says why it can have no backing
     // field, which is more useful than this one. By the time control reaches here a `receiver`
     // implies a getter or a delegate, so the condition needs no term for it.
-    if (containerNeedsValue && init == null && by == null && getter == null) {
+    if (container.needsValue && init == null && by == null && getter == null) {
         val exempt = listOf(KModifier.ABSTRACT, KModifier.LATEINIT, KModifier.EXPECT)
-        check(modifiers.toList().any { it in exempt }) {
+        // The remedy list is built from what is legal *in this container*, not from the exempt list.
+        // The two are not the same set, and a remedy that does not compile where it is offered is
+        // worse than none: `abstract val a: Int` at file level is `modifier 'abstract' is not
+        // applicable to 'top level property without backing field or delegate'`, `expect val` inside
+        // a class is the same sentence for `'member property …'`, and `lateinit val` is `'lateinit'
+        // modifier is allowed only on mutable properties` — which the LATEINIT check at the top of
+        // this function now refuses outright. (LATEINIT's *other* two preconditions are not checked
+        // here: `lateinit var a: Int` is `'lateinit' modifier is not allowed on properties of
+        // primitive types` and `lateinit var a: String?` is `… of a type with nullable upper bound`,
+        // both measured. Naming the preconditions in the remedy is deliberate; guarding them is a
+        // separate refusal and out of this round's scope.)
+        val remedies = buildList {
+            if (container.abstractAllowed) add("ABSTRACT")
+            if (mutable) add("LATEINIT")
+            if (container.expectAllowed) add("EXPECT")
+        }
+        check(declared.any { it in exempt }) {
             "$construct: '$name' has no initializer, no delegate and no getter, so it renders " +
                 "`${if (mutable) "var" else "val"} $name: T` — \"Property must be initialized.\" " +
-                "Pass init = …, by = … or a getter, or declare it ABSTRACT, LATEINIT or EXPECT. " +
-                "A property in an interface body needs none of these, and this check does not fire " +
-                "there."
+                "Pass init = …, by = … or a getter" +
+                (if (remedies.isEmpty()) "" else ", or declare it ${remedies.joinToOr()}") +
+                ". A property in an interface body needs none of these, and this check does not " +
+                "fire there."
         }
     }
     // A property's type parameters take no declaration-site variance and no `reified`, for the same
@@ -353,6 +441,10 @@ internal fun checkProperty(
         }
     }
 }
+
+/** `"A"`, `"A or B"`, `"A, B or C"` — the remedy list, spelled the way the rest of a message is. */
+private fun List<String>.joinToOr(): String =
+    if (size == 1) single() else dropLast(1).joinToString(", ") + " or " + last()
 
 /**
  * Whether [variable] occurs anywhere in this type — `T` itself, `List<T>`, `out T`, `(T) -> Unit`.
