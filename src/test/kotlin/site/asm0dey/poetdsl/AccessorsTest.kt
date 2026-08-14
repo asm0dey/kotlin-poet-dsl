@@ -1,6 +1,7 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.INT
+import com.squareup.kotlinpoet.KModifier.EXPECT
 import com.squareup.kotlinpoet.LIST
 import com.squareup.kotlinpoet.STRING
 import kotlin.test.Test
@@ -408,6 +409,60 @@ class AccessorsTest {
         )
     }
 
+    /**
+     * The two rules above are the **file level's** answer, and they were being applied everywhere.
+     * "Does this container need a value?" is `PropertyContainer.needsValue`, and it was consulted at
+     * exactly one site — the missing-value check — while these two ask the same question of an
+     * extension property and answered it for themselves. In an interface body and in an `expect`
+     * body an extension property is abstract and needs no accessor at all, and the DSL refused it:
+     *
+     * ```
+     * interface I    { val String.a: Int }   jvm OK   js OK   wasm OK
+     * interface I    { var String.a: Int }   jvm OK   js OK   wasm OK
+     * expect class E { val String.a: Int }   only the missing-`actual` complaint, all three
+     * ```
+     *
+     * The controls that keep the refusal where it belongs are the two tests above plus the `object`
+     * row here: `val String.a: Int` at file level and in an object is *extension property must have
+     * accessors or be abstract* on all three frontends.
+     */
+    @Test
+    fun `an extension property needs no accessors where the container needs no value`() {
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+            import kotlin.String
+
+            public interface I {
+              public val String.initial: Int
+
+              public var String.head: Int
+            }
+
+            public expect class E {
+              public val String.tail: Int
+            }
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `interface`("I") {
+                    `val`("initial", INT, receiver = STRING)
+                    `var`("head", INT, receiver = STRING)
+                }
+                `class`(EXPECT, "E") { `val`("tail", INT, receiver = STRING) }
+            }.toString(),
+        )
+        assertEquals(
+            "`val`: 'initial' is an extension property, which has no backing field, so it needs a " +
+                "getter (or a delegate).",
+            assertFailsWith<IllegalStateException> {
+                file("com.example", "A") { `object`("O") { `val`("initial", INT, receiver = STRING) } }
+            }.message,
+        )
+    }
+
     @Test
     fun `a delegated property takes no accessors`() {
         val failure = assertFailsWith<IllegalStateException> {
@@ -562,14 +617,26 @@ class AccessorsTest {
                 typeVariables = listOf(t),
             ) { ret(expression("this").call("get", 1.lit)) }.toString(),
         )
+        // The accessor *requirement* is gone from here, and had to go: it asks whether this
+        // container needs a value, and a detached builder has no container
+        // ([PropertyContainer.UNKNOWN]). An interface body is a legitimate destination and
+        // `val String.stray: Int` is right there, so refusing it was refusing valid output — the
+        // same false rejection `an extension property needs no accessors where the container needs
+        // no value` removes from the attached form.
+        assertEquals(
+            "val kotlin.String.stray: kotlin.Int\n",
+            propertySpec(name = "stray", type = INT, receiver = STRING).toString(),
+        )
         // Global Constraint 26: the message names the construct the caller wrote. `propertySpec`
         // used to hand `` `val` `` to the shared guard, so its own init/by check said
-        // `propertySpec: …` while every guard one line below it said `` `val`: … ``.
+        // `propertySpec: …` while every guard one line below it said `` `val`: … ``. The
+        // extension-property rule that is *not* container-dependent — no backing field, so no
+        // initializer, anywhere — still carries the name.
         assertEquals(
             "propertySpec: 'stray' is an extension property, which has no backing field, so it " +
-                "needs a getter (or a delegate).",
+                "cannot have an initializer. Move the value into the getter.",
             assertFailsWith<IllegalStateException> {
-                propertySpec(name = "stray", type = INT, receiver = STRING)
+                propertySpec(name = "stray", type = INT, receiver = STRING, init = 1.lit) { ret(1.lit) }
             }.message,
         )
         assertEquals(

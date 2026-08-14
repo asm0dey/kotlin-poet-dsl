@@ -490,13 +490,30 @@ internal fun checkProperty(
             "$construct: '$name' is an extension property, which has no backing field, so it cannot " +
                 "have an initializer. Move the value into the getter."
         }
-        check(getter != null || by != null) {
-            "$construct: '$name' is an extension property, which has no backing field, so it needs a " +
-                "getter (or a delegate)."
-        }
-        check(!mutable || setter != null || by != null) {
-            "$construct: '$name' is a mutable extension property, which has no backing field, so it " +
-                "needs a setter as well as a getter (or a delegate)."
+        // …but the two accessor requirements are the same question the missing-value check asks —
+        // "does this container need a value?" — and they were answering it for themselves, which is
+        // the reason [PropertyContainer.needsValue] is read here as well and not only below. An
+        // extension property in an interface body or an `expect` body is *abstract*, and needs no
+        // accessor at all. Measured, all three frontends:
+        //
+        //     interface I    { val String.a: Int }   OK  OK  OK
+        //     interface I    { var String.a: Int }   OK  OK  OK
+        //     expect class E { val String.a: Int }   nothing but the missing-`actual` complaint
+        //     object O       { val String.a: Int }   extension property must have accessors or be
+        //     val String.a: Int                      abstract.   (the two controls)
+        //
+        // The refusal below was therefore a *false rejection* in exactly the two containers whose
+        // whole point is that a property may be a signature there. It is the same fact, read at the
+        // second site that needs it.
+        if (container.needsValue) {
+            check(getter != null || by != null) {
+                "$construct: '$name' is an extension property, which has no backing field, so it " +
+                    "needs a getter (or a delegate)."
+            }
+            check(!mutable || setter != null || by != null) {
+                "$construct: '$name' is a mutable extension property, which has no backing field, " +
+                    "so it needs a setter as well as a getter (or a delegate)."
+            }
         }
     }
     // The dual of [PropertyContainer.needsValue], and the reason it is a second field rather than a
