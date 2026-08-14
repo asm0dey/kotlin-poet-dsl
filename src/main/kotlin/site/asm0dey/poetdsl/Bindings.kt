@@ -166,6 +166,14 @@ internal fun PropertySpec.Builder.addAccessors(
  * renders it, and a `field` construct would be valid only inside an accessor body, so it would need
  * a `BlockScope` shadow it could not have — the accessor body *is* a `BlockScope` — reopening ADR
  * 0002 for two words.
+ *
+ * One rejection here is deliberately **narrower than the language rule it comes from**: a `var` with
+ * exactly one custom accessor and no initializer or delegate. Kotlin's actual rule is that any
+ * property whose accessors reach the backing field needs an initializer, and that is not decidable
+ * from this signature — a custom setter writing `field` reaches it too, and `field` arrives as an
+ * opaque `expression("field")`. The pair guarded below is the half that *is* decidable; the rest is
+ * left to the caller's own compile rather than guessed at, because guessing wrong there refuses
+ * valid generator code. See the comment at the check.
  */
 internal fun checkProperty(
     keyword: String,
@@ -186,6 +194,30 @@ internal fun checkProperty(
     check(by == null || (getter == null && setter == null)) {
         "$keyword: '$name' is delegated with `by`, and a delegated property cannot have accessors. " +
             "Drop the delegate, or drop the accessors."
+    }
+    // A `var` that customises exactly one accessor gets the **default** other one, which reads or
+    // writes the backing field — and a property that has a backing field and no initializer does not
+    // compile anywhere: `Property must be initialized.` at file level, in a class, an object, a
+    // companion object and an anonymous object; `Property in interface cannot have a backing field.`
+    // in an interface; `Property with getter implementation cannot be abstract.` under `abstract`;
+    // `'lateinit' modifier is not allowed on properties with a custom getter or setter.` under
+    // `lateinit`; and the same under `external`/`expect`. All measured with kctfork, which is why
+    // this needs no modifier or container awareness to be sound.
+    //
+    // **This is the decidable pair only, and deliberately stops there.** The general rule —
+    // "a property whose accessors touch the backing field needs an initializer" — is undecidable
+    // here: a *custom* setter that writes `field` forces an initializer too, and `field` is spelled
+    // `expression("field")`, an opaque `CodeBlock` this DSL cannot look inside. Completing the rule
+    // would start refusing valid generator code, which is the expensive direction. Do not "finish"
+    // this check.
+    if (mutable && receiver == null && init == null && by == null) {
+        val missing = if (getter == null) "getter" else "setter"
+        val present = if (getter == null) "setter" else "getter"
+        check((getter == null) == (setter == null)) {
+            "$keyword: '$name' has a $present but no $missing, so Kotlin generates the $missing, " +
+                "which needs a backing field, which needs an initializer. Add an initializer, or " +
+                "write the $missing as well."
+        }
     }
     if (receiver != null) {
         check(init == null) {

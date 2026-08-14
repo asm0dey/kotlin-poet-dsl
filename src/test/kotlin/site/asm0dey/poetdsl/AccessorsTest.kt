@@ -193,6 +193,87 @@ class AccessorsTest {
         )
     }
 
+    /**
+     * A `var` that customises exactly one accessor gets the *default* other one, which reads or
+     * writes the backing field — and a property with a backing field and no initializer does not
+     * compile. E2a made this shape expressible in both directions and rendered it happily.
+     *
+     * Measured with kctfork before the guard existed: `var x: Int get() = 1` and
+     * `var y: Int set(value) {}` are `Property must be initialized.` at file level, in a class
+     * body, in an object, in a companion object and in an anonymous object; `Property in interface
+     * cannot have a backing field.` in an interface; `Property with getter implementation cannot be
+     * abstract.` under `abstract`; and `'lateinit' modifier is not allowed on properties with a
+     * custom getter or setter.` under `lateinit`. `override` on an interface or abstract base
+     * behaves like the plain class case. So no valid generator code is refused.
+     */
+    @Test
+    fun `a var with exactly one custom accessor is rejected`() {
+        val getterOnly = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") { `var`("x", INT) { ret(1.lit) } }
+        }
+        assertEquals(
+            "`var`: 'x' has a getter but no setter, so Kotlin generates the setter, which needs a " +
+                "backing field, which needs an initializer. Add an initializer, or write the " +
+                "setter as well.",
+            getterOnly.message,
+        )
+
+        val setterOnly = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") { `var`("y", INT, setter = { }) }
+        }
+        assertEquals(
+            "`var`: 'y' has a setter but no getter, so Kotlin generates the getter, which needs a " +
+                "backing field, which needs an initializer. Add an initializer, or write the " +
+                "getter as well.",
+            setterOnly.message,
+        )
+    }
+
+    /**
+     * The boundary the rejection above must not cross, asserted through the DSL rather than as raw
+     * Kotlin: a guard that is too wide refuses valid generator code, and a compile test on
+     * hand-written snippets cannot see that.
+     *
+     * Both accessors, one accessor plus an initializer (either accessor), a `val` with only a
+     * getter, and a plain `var` with an initializer and no accessor at all — all still render.
+     */
+    @Test
+    fun `the shapes on the other side of that boundary still render`() {
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+
+            public var both: Int
+              get() = 1
+              set(`value`) {
+              }
+
+            public var getterAndInit: Int = 0
+              get() = field
+
+            public var setterAndInit: Int = 0
+              set(`value`) {
+                field = `value`
+              }
+
+            public val getterOnlyVal: Int
+              get() = 1
+
+            public var plain: Int = 0
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `var`("both", INT, setter = { }) { ret(1.lit) }
+                `var`("getterAndInit", INT, init = 0.lit) { ret(expression("field")) }
+                `var`("setterAndInit", INT, init = 0.lit, setter = { v -> expression("field") assign v })
+                `val`("getterOnlyVal", INT) { ret(1.lit) }
+                `var`("plain", INT, init = 0.lit)
+            }.toString(),
+        )
+    }
+
     @Test
     fun `an extension property renders its receiver`() {
         assertEquals(

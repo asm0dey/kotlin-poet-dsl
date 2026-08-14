@@ -55,6 +55,11 @@ class AccessorsCompileTest {
                 },
             )
 
+            // var proxied: Int with *both* accessors and no initializer — the shape one accessor
+            // short of the pair the DSL now rejects, and the reason that rejection cannot simply be
+            // "a var with a custom accessor needs an initializer".
+            `var`("proxied", INT, setter = { fresh -> +call("check", fresh gt 0.lit) }) { ret(42.lit) }
+
             // val String.initial: Int
             `val`("initial", INT, receiver = STRING) { ret(expression("this").prop("length")) }
 
@@ -110,6 +115,8 @@ class AccessorsCompileTest {
             "a property type parameter the receiver does not use" to "val <T> String.x: Int\n  get() = 1",
             "a delegated property with a getter" to
                 "val x: Int by lazy { 1 }\n  get() = 2",
+            "a var with only a getter" to "var x: Int\n  get() = 1",
+            "a var with only a setter" to "var x: Int\n  set(value) {}",
         )
         for ((what, source) in invalid) {
             val result = compile("package com.example\n\n$source\n")
@@ -131,6 +138,13 @@ class AccessorsCompileTest {
 
             val y: Int = 1
               get() = field + 1
+
+            var z: Int
+              get() = 1
+              set(`value`) {}
+
+            var w: Int = 0
+              set(`value`) { field = `value` }
             """.trimIndent() + "\n",
         )
     }
