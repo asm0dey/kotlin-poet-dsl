@@ -17,9 +17,40 @@ import com.squareup.kotlinpoet.WildcardTypeName
 /**
  * The handle a binding hands back: the (possibly uniquified) name it was actually declared
  * under, tagged with the scope that declared it so ADR 0008 can judge it at every later use.
+ *
+ * [owner] defaults to the declaring scope and is overridden for exactly one binding — an extension
+ * property, see [extensionPropertyId].
  */
-private fun Scope.handle(unique: String, type: TypeName?, mutable: Boolean? = null): Expr =
-    Expr(CodeBlock.of("%L", unique), type, Prec.ATOM, unique, id, mutable = mutable)
+private fun Scope.handle(unique: String, type: TypeName?, mutable: Boolean? = null, owner: ScopeId = id): Expr =
+    Expr(CodeBlock.of("%L", unique), type, Prec.ATOM, unique, owner, mutable = mutable)
+
+/**
+ * The owning [ScopeId] of an **extension property's** handle: a child of the declaring scope that
+ * nothing is ever nested inside, so [checkOwned] — untouched — refuses the handle in every position.
+ *
+ * The handle renders as a bare name, and a bare name is not how an extension property is reached:
+ * `` `val`("size", INT, receiver = STRING) { … } `` followed by `` `fun`("f") { +size } `` rendered
+ * `size` inside `f`, which is `Unresolved reference 'size'`. That is the same shape D30 met with a
+ * plain primary-constructor parameter — a handle legal in some positions and unspellable in others —
+ * and it gets D30's answer: an owner scope that encloses only the legal positions, with the remedy
+ * folded into the label, since [checkOwned] interpolates `owner.label` and takes no message of its
+ * own.
+ *
+ * Here the *reachable* legal set is empty. Kotlin does resolve the bare name inside another
+ * extension declaration on the same receiver (measured: `fun String.f(): Int = size` compiles), but
+ * that position is not something ownership can recognise — an extension function's body is built as
+ * a child of the file or type scope, not of any property — and deciding it would mean comparing
+ * receiver *types*, a second mechanism ADR 0008 does not have. So the label names both spellings
+ * instead: `h.prop("size")` through a receiver handle, and `expression("size")` inside an extension
+ * on the same receiver, which is the only position where the bare name is legal.
+ */
+private fun Scope.ownerOf(name: String, receiver: TypeName?): ScopeId =
+    if (receiver == null) id else extensionPropertyId(name, receiver)
+
+private fun Scope.extensionPropertyId(name: String, receiver: TypeName): ScopeId = id.child(
+    "the extension property '$name' on $receiver (reach it through a receiver handle — " +
+        "h.prop(\"$name\") — or, inside an extension on $receiver, as expression(\"$name\"))",
+)
 
 /**
  * `val name: T = init` / `var name by delegate` as a local statement.
@@ -313,7 +344,7 @@ internal fun Scope.bind(
                 typeVariables, receiver, setterParam, setter, getter,
             )
             builder.addProperty(spec)
-            handle(spec.name, type, mutable)
+            handle(spec.name, type, mutable, ownerOf(spec.name, receiver))
         }
 
         is TypeScope -> {
@@ -322,7 +353,7 @@ internal fun Scope.bind(
                 typeVariables, receiver, setterParam, setter, getter,
             )
             builder.addProperty(spec)
-            handle(spec.name, type, mutable)
+            handle(spec.name, type, mutable, ownerOf(spec.name, receiver))
         }
     }
 }

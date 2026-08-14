@@ -293,6 +293,83 @@ class AccessorsTest {
         )
     }
 
+    /**
+     * An extension property's handle renders as a bare name, and a bare name resolves nowhere the
+     * receiver is not already in scope — `` `fun`("f") { +size } `` rendered `size`, which is
+     * `Unresolved reference 'size'`. D30 answered exactly this shape (a handle legal in some
+     * positions, unspellable in others) by giving it an owning [ScopeId] that encloses only the
+     * legal positions, with the remedy folded into the label, and this follows that precedent:
+     * nothing is ever nested inside this owner, so [checkOwned] — unchanged — refuses the handle
+     * everywhere.
+     *
+     * The remedy is the second half of the test: reach the property through a receiver handle.
+     */
+    @Test
+    fun `an extension property's handle is refused as a bare name`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") {
+                val size = `val`("size", INT, receiver = STRING) { ret(0.lit) }
+                `fun`("f") { +size }
+            }
+        }
+        assertEquals(
+            "Handle from scope 'the extension property 'size' on kotlin.String (reach it through a " +
+                "receiver handle — h.prop(\"size\") — or, inside an extension on kotlin.String, as " +
+                "expression(\"size\"))' does not enclose the current scope 'fun(f)'.",
+            failure.message,
+        )
+
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+            import kotlin.String
+
+            public val String.size: Int
+              get() = 0
+
+            public val plain: Int
+              get() = 1
+
+            public fun f(s: String): Int = s.size + plain
+
+            public fun String.g(): Int = size
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `val`("size", INT, receiver = STRING) { ret(0.lit) }
+                val plain = `val`("plain", INT) { ret(1.lit) }
+                `fun`("f", param("s", STRING), returns = INT) { s -> ret(s.prop("size") + plain) }
+                `fun`("g", returns = INT, receiver = STRING) { ret(expression("size")) }
+            }.toString(),
+        )
+    }
+
+    /** The same refusal for an extension property declared in a type body, and for a `var`. */
+    @Test
+    fun `an extension property's handle is refused inside a type body too`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") {
+                `class`("A") {
+                    val head = `var`(
+                        "head",
+                        INT,
+                        receiver = STRING,
+                        setter = { },
+                    ) { ret(0.lit) }
+                    `fun`("f") { +head }
+                }
+            }
+        }
+        assertEquals(
+            "Handle from scope 'the extension property 'head' on kotlin.String (reach it through a " +
+                "receiver handle — h.prop(\"head\") — or, inside an extension on kotlin.String, as " +
+                "expression(\"head\"))' does not enclose the current scope 'fun(f)'.",
+            failure.message,
+        )
+    }
+
     @Test
     fun `an extension property rejects an initializer`() {
         val failure = assertFailsWith<IllegalStateException> {

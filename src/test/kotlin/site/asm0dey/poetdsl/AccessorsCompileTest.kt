@@ -63,6 +63,15 @@ class AccessorsCompileTest {
             // val String.initial: Int
             `val`("initial", INT, receiver = STRING) { ret(expression("this").prop("length")) }
 
+            // Both spellings the extension property's ownership label offers instead of its
+            // (refused) bare handle, compiled rather than argued: `.prop(…)` through a receiver
+            // from anywhere, and the bare name inside another extension on the same receiver —
+            // which is the one position where Kotlin does resolve it.
+            `fun`("initialOf", param("s", STRING), returns = INT) { s -> ret(s.prop("initial")) }
+            `fun`("initialTwice", returns = INT, receiver = STRING) {
+                ret(expression("initial") + expression("initial"))
+            }
+
             // val <T> List<T>.second: T — the slot E1 deferred until a receiver existed to use it.
             `val`("second", t, receiver = LIST.of(t), typeVariables = listOf(t)) {
                 ret(expression("this").call("get", 1.lit))
