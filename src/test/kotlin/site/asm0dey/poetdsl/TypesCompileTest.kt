@@ -135,14 +135,47 @@ class TypesCompileTest {
     }
 
     /**
-     * Why `` `val` ``/`` `var` `` got no `typeVariables` slot in E1, as a canary rather than a claim:
-     * a property's type parameter has to be used in its *receiver* type, and extension receivers are
-     * E2's. If this ever starts compiling, the slot becomes expressible and E2's note is stale.
+     * Why `` `val` ``/`` `var` `` got no `typeVariables` slot in E1, asserted about *this DSL* — the
+     * same shape as the `` `object` `` test above, and for the same reason: a test that compiles
+     * `val <T> stray: T get() = TODO()` and asserts `kotlinc` rejects it pins a fact about the Kotlin
+     * language, not about the surface here, so it would go on passing after E2 adds the slot —
+     * exactly when a canary is supposed to fire.
+     *
+     * A property's type parameter has to be used in its receiver type **or its context parameters**
+     * (`Type parameter of a property must be used in its receiver type or context parameters`, the
+     * compiler's own wording): extension receivers are E2's and context parameters are E3's, so
+     * either batch can unlock this slot. Whichever gets there first makes the call below resolve, and
+     * this test fails.
      */
     @Test
-    fun `a property type parameter without a receiver is still not Kotlin`() {
-        val result = compile("val <T> stray: T get() = TODO()\n")
-        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
-        assertTrue("receiver" in result.messages, result.messages)
+    fun `a property has no type parameter slot`() {
+        for (construct in listOf("`val`", "`var`")) {
+            val result = compileDsl(
+                """
+                fun build() = file("com.example", "A") {
+                    $construct("stray", INT, typeVariables = listOf(typeVariable("T")))
+                }
+                """.trimIndent(),
+                extraImports = listOf("com.squareup.kotlinpoet.INT"),
+            )
+            assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+            assertTrue("None of the following candidates is applicable" in result.messages, result.messages)
+            // The `object` test asserts `"typeVariables" !in messages`; that shape does not transfer
+            // here. `val`'s first parameter is the name, so the compiler gets far enough to also
+            // report `No parameter with name 'typeVariables' found` — which says the same thing more
+            // directly, and is asserted rather than merely tolerated. When the slot lands, the
+            // snippet compiles and both this and the exit-code assertion above fail.
+            assertTrue("No parameter with name 'typeVariables' found" in result.messages, result.messages)
+        }
+
+        val control = compileDsl(
+            """
+            fun build() = file("com.example", "A") {
+                `val`("stray", INT, init = 1.lit)
+            }
+            """.trimIndent(),
+            extraImports = listOf("com.squareup.kotlinpoet.INT"),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, control.exitCode, control.messages)
     }
 }
