@@ -1,5 +1,6 @@
 package site.asm0dey.poetdsl
 
+import com.squareup.kotlinpoet.ANY
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier
@@ -512,6 +513,8 @@ class ExpectFamilyTest {
               public class R : Base {
                 public constructor(p: Int)
               }
+
+              public class S
             }
 
             public class Outer {
@@ -532,6 +535,13 @@ class ExpectFamilyTest {
                         superclass(base)
                         `constructor`(param("p", INT)) { }
                     }
+                    // `ANY` is filtered out of the supertype list at `TypeSpec.kt:235`, above the
+                    // parenthesis decision, so this renders `public class S` with no supertype
+                    // clause at all and `expect class E { class N }` is clean on all three
+                    // frontends. It rendered at `68df28f` and was refused at `0a9f6d1` with a
+                    // message claiming a `: kotlin.Any()` KotlinPoet never writes — the control row
+                    // the term that refused it never had.
+                    `class`("S") { superclass(ANY) }
                 }
                 `class`("Outer") { `class`("N") { superclass(base) } }
             }.toString(),

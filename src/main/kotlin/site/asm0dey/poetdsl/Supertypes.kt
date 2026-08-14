@@ -125,6 +125,13 @@ internal fun TypeScope.applySuperclass(type: TypeName, args: Array<out Expr>) {
  *     expect class E { class N : Base { constructor(p: Int) } }  the `:238` fallback, reachable
  *     expect class E : Base                                      the direct case
  *     class Outer { class N : Base() }                           outside `expect`
+ *     expect class E { class N }                                 what `superclass(ANY)` renders
+ *
+ * The last row is the term [TypeScope.finish] carries and this snippet does not show: `TypeSpec.emit`
+ * filters `ANY` out of the supertype list at `TypeSpec.kt:235`, one line *above* the `:238` decision,
+ * so `superclass(ANY)` emits no supertype clause in any container and this refusal has nothing to
+ * refuse. Firing on it refused a shape that renders valid Kotlin, with a message asserting a
+ * `: kotlin.Any()` KotlinPoet never writes.
  *
  * So this is half language rule and half **render gap**, and the message says both: the Kotlin the
  * DSL would emit is refused everywhere, *and* the Kotlin the author wanted is unreachable through

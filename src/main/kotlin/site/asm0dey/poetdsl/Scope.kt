@@ -1,5 +1,6 @@
 package site.asm0dey.poetdsl
 
+import com.squareup.kotlinpoet.ANY
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.FileSpec
@@ -255,14 +256,25 @@ public class TypeScope internal constructor(
         // shape it would protect is refused on other grounds by every frontend —
         // `expect class E { external class N : Base }` is *expected declaration cannot be external*
         // on all three, plus *external type extends non-external type 'Base'* and *non-top-level
-        // 'external' declaration* on JS and Wasm (measured). So no target accepts it either way, and
-        // a term nothing can falsify is a term nothing is maintaining. The one imprecision that
-        // leaves is in the message, which says KotlinPoet renders `: Base()` where for that shape it
-        // renders `: Base`; the row below pins the refusal so the trade is recorded rather than
-        // discovered.
+        // 'external' declaration* on JS and Wasm (measured; `expect class E { external class O {
+        // class N : Base } }`, the propagated form, answers identically because `isNestedExternal`
+        // is threaded down at `TypeSpec.kt:360`). So no target accepts it either way, and a term
+        // nothing can falsify is a term nothing is maintaining. The one imprecision that leaves is
+        // in the message, which says KotlinPoet renders `: Base()` where for an `external` type —
+        // its own or an enclosing one's — it renders `: Base`; the rows below pin both refusals so
+        // the trade is recorded rather than discovered.
+        //
+        // **`ANY` is not a supertype KotlinPoet renders at all.** `TypeSpec.emit` filters it out
+        // one line *above* the parenthesis decision — `listOf(superclass).filter { it != ANY }`
+        // (`TypeSpec.kt:235`) — so `superclass(ANY)` produces no supertype clause in any container,
+        // `expect` or not, and there is nothing here to refuse: `` `class`(EXPECT, "E") {
+        // `class`("N") { superclass(ANY) } } `` renders `public class N` and
+        // `expect class E { class N }` is clean on all three frontends. Without this term the check
+        // refused a shape that rendered valid Kotlin at `68df28f`, with a message asserting a render
+        // (`: kotlin.Any()`) that KotlinPoet never produces for this type.
         val parenthesized = hasCtor || secondaryCtors.isEmpty()
         if (isExpect && parenthesized && KModifier.EXPECT !in builder.modifiers) {
-            superclassType?.let { nestedSupertypeRenderGap(kindName, it) }
+            superclassType?.takeIf { it != ANY }?.let { nestedSupertypeRenderGap(kindName, it) }
         }
         if (hasCtor) builder.primaryConstructor(ctor.build())
         return builder.build()
