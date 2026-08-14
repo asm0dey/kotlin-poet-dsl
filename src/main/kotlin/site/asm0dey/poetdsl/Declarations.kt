@@ -280,18 +280,14 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     // "explicit delegation call for constructor of expected class is prohibited" (measured). Without
     // the exemption the two halves of this rule would make the shape unspellable. See [Expect].
     check(!hasUndelegatedSecondaryCtor || isExpectContainer) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
-    // A `val`/`var` parameter *is* a property — the [PropertySpec] built below, with a `%N`
-    // initializer — so it is the same member the `expect` rule already refuses, reached through the
-    // one property-construction site that never goes near [checkProperty]. Refused here, before
-    // anything is added to either builder: KotlinPoet's `addProperty` answers the *direct* case with
-    // `IllegalArgumentException: properties in expect classes can't have initializers` (Global
-    // Constraint 26's forbidden type, naming neither construct), and one level down it answers not
-    // at all — `expect class E { class N(val x: Int) }` rendered, and all three frontends call it
-    // *expected class constructor cannot have a property parameter*. See [Expect].
-    // The language rule underneath the exemption below, read for its own sake and in **every**
-    // container: Kotlin requires the primary-constructor parameters of an `annotation class` and a
-    // `value class` to be `val`, which is exactly why they are exempt from the `expect` rule. The
-    // exemption was written keyed on "has one of these kinds" and measured only with `val`, so
+    // Two refusals that are about the **classifier's own kind**, not about its container, and that
+    // therefore come first — the caller who wrote `annotation class N(var x: Int)` needs to hear
+    // about the `var`, whatever container they wrote it in.
+    //
+    // The first is the language rule underneath the `expect` exemption below, read for its own sake:
+    // Kotlin requires the primary-constructor parameters of an `annotation class` and a `value
+    // class` to be `val`, which is exactly why those two kinds are exempt from the `expect` rule.
+    // The exemption was written keyed on "has one of these kinds" and measured only with `val`, so
     // `` `class`(EXPECT, "E") { `class`(ANNOTATION, "N") { constructorParam(VAR, "x", INT) } } ``
     // rendered `annotation class N(var x: Int)` — *an annotation parameter cannot be 'var'* on all
     // three frontends — and the identical shape rendered outside `expect` too, where no round had
@@ -300,13 +296,21 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     if (propertyParamKind != null && kind != ParamKind.VAL) {
         propertyParamMustBeVal(name, kind, propertyParamKind)
     }
-    // The other kind whose answer does not depend on `kind` at all. An `expect` `enum class` has no
+    // The second does depend on the container, but not on `kind`: an `expect` `enum class` has no
     // primary constructor of any sort — *expected enum class cannot have a constructor* on all three
-    // frontends, with or without `val`, and with an empty parameter list too — so the family's
-    // generic remedy ("declare it as a plain parameter") named a shape this DSL rendered and no
-    // frontend accepts. Refused before the property-parameter rule so that the message the caller
-    // gets is the one they can act on. See [expectEnumConstructor].
+    // frontends, with `val`, with a plain parameter and with an empty parameter list alike. So the
+    // family's generic remedy below ("declare it as a plain parameter") named a shape this DSL
+    // rendered and no frontend accepts, which is why this refusal comes before it rather than after.
+    // See [expectEnumConstructor].
     if (isExpectContainer && KModifier.ENUM in builder.modifiers) expectEnumConstructor(name)
+    // A `val`/`var` parameter *is* a property — the [PropertySpec] built below, with a `%N`
+    // initializer — so it is the same member the `expect` rule already refuses, reached through the
+    // one property-construction site that never goes near [checkProperty]. Refused here, before
+    // anything is added to either builder: KotlinPoet's `addProperty` answers the *direct* case with
+    // `IllegalArgumentException: properties in expect classes can't have initializers` (Global
+    // Constraint 26's forbidden type, naming neither construct), and one level down it answers not
+    // at all — `expect class E { class N(val x: Int) }` rendered, and all three frontends call it
+    // *expected class constructor cannot have a property parameter*. See [Expect].
     if (kind != null && isExpectContainer) {
         val keyword = if (kind == ParamKind.VAR) "var" else "val"
         when {
