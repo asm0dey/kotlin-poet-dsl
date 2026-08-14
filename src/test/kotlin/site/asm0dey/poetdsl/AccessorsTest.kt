@@ -1,7 +1,10 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.INT
+import com.squareup.kotlinpoet.KModifier.ABSTRACT
 import com.squareup.kotlinpoet.KModifier.EXPECT
+import com.squareup.kotlinpoet.KModifier.EXTERNAL
+import com.squareup.kotlinpoet.KModifier.LATEINIT
 import com.squareup.kotlinpoet.LIST
 import com.squareup.kotlinpoet.STRING
 import kotlin.test.Test
@@ -461,6 +464,81 @@ class AccessorsTest {
                 file("com.example", "A") { `object`("O") { `val`("initial", INT, receiver = STRING) } }
             }.message,
         )
+    }
+
+    /**
+     * The **other half of the same sentence**, and the last false rejection of this family. Kotlin's
+     * diagnostic is *extension property must have accessors **or be abstract***; the rule above
+     * implements the container half of "or be abstract" — an interface body, an `expect` body — and
+     * the declaration's own modifier is the rest of it. Both shapes were refused from every side:
+     *
+     * ```
+     * abstract class C { abstract val String.a: Int }   jvm OK   js OK   wasm OK
+     * abstract class C { abstract var String.a: Int }   jvm OK   js OK   wasm OK
+     * expect val String.a: Int                          jvm OK   js OK   wasm OK
+     * expect var String.a: Int                          jvm OK   js OK   wasm OK
+     * ```
+     *
+     * The `expect` pair was unreachable by any spelling: without a getter this rule fired, and with
+     * one the `expect`-signature rule fired instead (*expected declaration cannot have a body*).
+     *
+     * The exempt set is **measured, not copied** from the missing-value check's, which also carries
+     * `LATEINIT` and `EXTERNAL`. Neither is legal on an extension property, on any frontend:
+     *
+     * ```
+     * lateinit var String.a: String   all three: 'lateinit' modifier is not allowed on extension
+     *                                 properties.
+     * external val String.a: Int      jvm: modifier 'external' is not applicable to 'property'.
+     *                                 js/wasm: declaration of such kind (extension property) cannot
+     *                                 be external.
+     * ```
+     */
+    @Test
+    fun `an extension property needs no accessors where it is abstract or expect`() {
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+            import kotlin.String
+
+            public abstract class C {
+              public abstract val String.initial: Int
+
+              public abstract var String.head: Int
+            }
+
+            public expect val String.tail: Int
+
+            public expect var String.brim: Int
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `class`(ABSTRACT, "C") {
+                    `val`(ABSTRACT, "initial", INT, receiver = STRING)
+                    `var`(ABSTRACT, "head", INT, receiver = STRING)
+                }
+                `val`(EXPECT, "tail", INT, receiver = STRING)
+                `var`(EXPECT, "brim", INT, receiver = STRING)
+            }.toString(),
+        )
+        // The two modifiers that are *not* exempt, and the plain file-level control beside them.
+        listOf<Pair<String, FileScope.() -> Unit>>(
+            "`var`: 'head' is an extension property, which has no backing field, so it needs a " +
+                "getter (or a delegate)." to { `var`(LATEINIT, "head", STRING, receiver = STRING) },
+            "`val`: 'initial' is an extension property, which has no backing field, so it needs a " +
+                "getter (or a delegate)." to { `val`(EXTERNAL, "initial", INT, receiver = STRING) },
+            "`val`: 'initial' is an extension property, which has no backing field, so it needs a " +
+                "getter (or a delegate)." to { `val`("initial", INT, receiver = STRING) },
+        ).forEachIndexed { index, (message, body) ->
+            assertEquals(
+                message,
+                assertFailsWith<IllegalStateException>("position $index") {
+                    file("com.example", "A", body = body)
+                }.message,
+                "position $index",
+            )
+        }
     }
 
     @Test

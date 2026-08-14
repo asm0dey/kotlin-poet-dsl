@@ -510,7 +510,28 @@ internal fun checkProperty(
         // The refusal below was therefore a *false rejection* in exactly the two containers whose
         // whole point is that a property may be a signature there. It is the same fact, read at the
         // second site that needs it.
-        if (container.needsValue) {
+        //
+        // …and the container was only half of it. Kotlin's own sentence is *extension property must
+        // have accessors **or be abstract***, and the clause above implements the first half of it
+        // for one of the two ways a property can be abstract. The other is the declaration's own
+        // modifier, and without it both of these were refused — the second from **both** sides, so
+        // that the shape had no spelling at all: with no getter this rule fired, and with one the
+        // `expect`-signature rule above did. Measured, all three frontends:
+        //
+        //     abstract class C { abstract val String.a: Int }   OK  OK  OK
+        //     abstract class C { abstract var String.a: Int }   OK  OK  OK
+        //     expect val String.a: Int                          OK  OK  OK
+        //     expect var String.a: Int                          OK  OK  OK
+        //
+        // The exempt set is **measured rather than copied** from the missing-value check's below,
+        // which also carries LATEINIT and EXTERNAL. Neither is legal on an extension property
+        // anywhere: `lateinit var String.a: String` is *'lateinit' modifier is not allowed on
+        // extension properties* on all three, and `external val String.a: Int` is *modifier
+        // 'external' is not applicable to 'property'* on the JVM and *declaration of such kind
+        // (extension property) cannot be external* on Kotlin/JS and Kotlin/Wasm. Copying the list
+        // would have traded one false rejection for two renders no frontend accepts.
+        val signature = KModifier.ABSTRACT in declared || KModifier.EXPECT in declared
+        if (container.needsValue && !signature) {
             check(getter != null || by != null) {
                 "$construct: '$name' is an extension property, which has no backing field, so it " +
                     "needs a getter (or a delegate)."
