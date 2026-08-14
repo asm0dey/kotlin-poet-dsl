@@ -93,6 +93,11 @@ class TypesCompileTest {
                 ) { rows, _, _, _, _, _ -> ret(rows) }
             }
 
+            // annotation class Ann<T> — valid Kotlin, which is why `class` guards `enum class E<T>`
+            // and not this one. Only kotlinc can settle that, so it is asserted here rather than
+            // assumed from the shape.
+            `class`(com.squareup.kotlinpoet.KModifier.ANNOTATION, "Ann", typeVariables = listOf(t)) { }
+
             // inline fun <reified T> filterOnly(xs: List<Any>): List<T>
             `fun`(
                 INLINE,

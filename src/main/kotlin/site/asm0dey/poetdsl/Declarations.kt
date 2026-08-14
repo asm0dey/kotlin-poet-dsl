@@ -85,8 +85,16 @@ internal fun Scope.declareType(
     }
     declaredTypeNames += name
     // Declaration-site variance is exactly what a class or an interface is allowed; `reified` is
-    // exactly what it is not, being an inline function's business.
-    checkTypeVariables("`$kindName`", name, typeVariables, varianceAllowed = true, reifiedAllowed = false)
+    // exactly what it is not, being an inline function's business. An `enum class` takes no type
+    // parameters at all, and the modifiers that say so are right here.
+    checkTypeVariables(
+        "`$kindName`",
+        name,
+        typeVariables,
+        varianceAllowed = true,
+        reifiedAllowed = false,
+        isEnum = KModifier.ENUM in modifiers.toList(),
+    )
 
     // The file this type belongs to, threaded on unchanged: a nested type inherits the enclosing
     // type's `fileId`, a top-level one takes the file's own `id`. (A `BlockScope` has no file above
@@ -260,7 +268,14 @@ public fun typeSpec(
     typeVariables: List<TypeVariableName> = emptyList(),
     body: TypeScope.() -> Unit,
 ): TypeSpec {
-    checkTypeVariables("typeSpec", name, typeVariables, varianceAllowed = true, reifiedAllowed = false)
+    checkTypeVariables(
+        "typeSpec",
+        name,
+        typeVariables,
+        varianceAllowed = true,
+        reifiedAllowed = false,
+        isEnum = KModifier.ENUM in modifiers.toList(),
+    )
     val scope = TypeScope(
         TypeSpec.classBuilder(name).addModifiers(modifiers.toList()).addTypeVariables(typeVariables),
         NameScope(null),

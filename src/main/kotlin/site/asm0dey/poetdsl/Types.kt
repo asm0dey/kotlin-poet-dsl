@@ -232,11 +232,16 @@ public fun typeVar(
  * - **`reified` off an `inline` function.** KotlinPoet *does* reject this, but from
  *   `FunSpec.Builder.build` with `require`, as "only type parameters of inline functions can be
  *   reified!" — no construct, no function name, and the wrong exception type for this DSL.
+ * - **Type parameters on an `enum class`.** `enum class E<T>` renders and does not compile: an
+ *   enum's entries are singletons of the class itself, so Kotlin gives it no type parameters at
+ *   all. `annotation class Ann<T>`, which looks equally unusual, **is** valid Kotlin — compiled, not
+ *   assumed, in `TypesCompileTest` — so only the enum case is rejected.
  *
  * @param construct the DSL spelling to name in the message — `` `fun` ``, `` `class` ``.
  * @param owner the declaration's own name, so the message says which one.
  * @param varianceAllowed true for a class or interface, false for a function.
  * @param reifiedAllowed true when the declaration carries `inline`.
+ * @param isEnum true when the declaration carries [KModifier.ENUM], which forbids them outright.
  */
 internal fun checkTypeVariables(
     construct: String,
@@ -244,7 +249,13 @@ internal fun checkTypeVariables(
     typeVariables: List<TypeVariableName>,
     varianceAllowed: Boolean,
     reifiedAllowed: Boolean,
+    isEnum: Boolean = false,
 ) {
+    check(!isEnum || typeVariables.isEmpty()) {
+        "$construct: '$owner' is an enum class with type parameters, and Kotlin allows an enum class " +
+            "none — its entries are singletons of the class itself. Drop the type parameters, or " +
+            "declare a plain class."
+    }
     typeVariables.groupingBy { it.name }.eachCount().forEach { (name, count) ->
         check(count == 1) {
             "$construct: '$owner' declares a type parameter named \"$name\" more than once."

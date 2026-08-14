@@ -255,6 +255,45 @@ class TypesTest {
         assertTrue("`class`:" in e.message!!, e.message!!)
     }
 
+    /**
+     * `enum class E<T>` renders perfectly and does not compile — Kotlin gives an enum class no type
+     * parameters of its own, since its entries are singletons of the class itself. The same class of
+     * user error as declaration-site variance on a function, caught in the same place: `declareType`
+     * already holds both the modifiers and the type parameters.
+     */
+    @Test
+    fun `an enum class rejects type parameters`() {
+        val t = typeVariable("T")
+        val e = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") { `class`(KModifier.ENUM, "E", typeVariables = listOf(t)) { } }
+        }
+        assertTrue("`class`:" in e.message!!, e.message!!)
+        assertTrue("enum class" in e.message!!, e.message!!)
+
+        // The detached builder renders the same invalid Kotlin, so it takes the same guard.
+        val detached = assertFailsWith<IllegalStateException> {
+            typeSpec(KModifier.ENUM.toModifiers(), "E", typeVariables = listOf(t)) { }
+        }
+        assertTrue("typeSpec:" in detached.message!!, detached.message!!)
+
+        // The positive half: an enum class with no type parameters is untouched.
+        val rendered = file("com.example", "A") { `class`(KModifier.ENUM, "E") { } }.toString()
+        assertTrue("public enum class E" in rendered, rendered)
+    }
+
+    /**
+     * `annotation class Ann<T>` **is** valid Kotlin (compiled in [TypesCompileTest]), unlike the enum
+     * case, so it is deliberately not guarded — the guard is about what Kotlin rejects, not about
+     * which declarations look unusual.
+     */
+    @Test
+    fun `an annotation class keeps its type parameters`() {
+        val rendered = file("com.example", "A") {
+            `class`(KModifier.ANNOTATION, "Ann", typeVariables = listOf(typeVariable("T"))) { }
+        }.toString()
+        assertTrue("public annotation class Ann<T>" in rendered, rendered)
+    }
+
     /** Everything above is a plain function of its arguments, so it composes without a scope. */
     @Test
     fun `the type vocabulary needs no scope`() {
