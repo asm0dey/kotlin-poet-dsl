@@ -348,6 +348,41 @@ public fun typeSpec(
  * [name] is a *request*, not a guarantee: a parameter that would shadow a binding of the enclosing
  * scope is uniquified when the function is built, exactly as a lambda parameter is (ADR 0009). The
  * handle the body receives always carries the name actually rendered.
+ *
+ * @param default the `= …` in `fun f(n: Int = 0)`. Rejected on an `override` function's parameter —
+ *   *An overriding function is not allowed to specify default values for its parameters.* Unlike a
+ *   handle used in a body, a default value runs **no ownership check**: [param] is a descriptor
+ *   evaluated at the call site, before the declaration it belongs to exists, so a handle from an
+ *   unrelated scope is accepted here and never judged (the same unchecked boundary annotation
+ *   arguments have — ADR 0008, Task 11's tracked debt).
+ * @param modifiers a **single** [KModifier], not this DSL's usual [Modifiers] set, because Kotlin's
+ *   parameter modifiers are exactly `VARARG`, `NOINLINE` and `CROSSINLINE` and **no two of them ever
+ *   legally combine**: `noinline` and `crossinline` are alternatives to each other, and
+ *   `inline fun f(vararg noinline g: () -> Unit)` is *Modifier is only allowed for function
+ *   parameters of an inline function* — a vararg parameter's type is `Array<out …>`, never a
+ *   function type (measured). The slot's type therefore says what the language says. Two rules are
+ *   enforced when the declaration is built rather than here, because neither is decidable from one
+ *   parameter: **at most one `vararg` per parameter list** (*Multiple vararg parameters are
+ *   prohibited.*), counted across a whole primary constructor even when it is assembled one
+ *   `constructorParam` call at a time; and `noinline`/`crossinline` only inside an `INLINE`
+ *   function, which a constructor can never be. The `vararg`'s *position* is deliberately not
+ *   checked: `fun f(vararg xs: Int, y: Int)` compiles and callers pass `y` by name, so a
+ *   "vararg must be last" rule would refuse valid generator code. `private`/`override` on
+ *   `class C(private val x: Int)` is not a fourth parameter modifier — it belongs to the
+ *   **property** the parameter declares, which is built separately, and passing it here is refused.
+ * @param kdoc the parameter's own documentation, which KotlinPoet renders as an `@param` tag on the
+ *   **enclosing** declaration — the function's KDoc, or the class's for a primary-constructor
+ *   parameter. Three things worth knowing about where it comes out:
+ *   - a `VAL`/`VAR` primary-constructor parameter's text renders **twice**, as `@param` on the class
+ *     *and* inline above the parameter in the constructor list. `ParameterSpec.kdoc` drives both
+ *     inside KotlinPoet with no way to set one without the other, and the alternative — stripping
+ *     the parameter's kdoc and hand-assembling `@param` lines — reimplements KotlinPoet for a
+ *     cosmetic gain. Accepted, compiled and pinned by a golden;
+ *   - a **plain** primary-constructor parameter (`param(null, …)`) and every function parameter
+ *     render the `@param` tag once, with no inline block;
+ *   - a **secondary** constructor's parameter cannot carry this at all and says so: KotlinPoet emits
+ *     a member constructor with `includeKdocTags = false`, which drops every `@param`. Write the tag
+ *     into the constructor's own `kdoc` instead.
  */
 public fun param(
     name: String,
@@ -485,6 +520,10 @@ private fun checkParams(
  * can feed the list forms of `` `class` ``, `` `fun` `` and `` `constructor` `` alike. The `val`/`var`
  * choice rides along as a KotlinPoet tag, which is what tags are for; nothing else reads it, and
  * [buildFun] rejects a tagged parameter wherever `val`/`var` would not be valid Kotlin.
+ *
+ * [default], [modifiers] and [kdoc] behave exactly as they do on the two-argument [param] — see its
+ * KDoc, and note in particular that a `VAL`/`VAR` parameter's [kdoc] renders **twice**, as `@param`
+ * on the class and inline above the parameter, while the `null`-kind form renders it once.
  */
 public fun param(
     kind: ParamKind?,
@@ -633,6 +672,26 @@ internal fun buildFun(
             "param: \"${p.name}\" is a `val`/`var` parameter, which is only valid in a class's " +
                 "primary constructor. Declare it with `class`(…, param($kind, " +
                 "\"${p.name}\", …)) or constructorParam, or drop the kind here."
+        }
+    }
+
+    // A **secondary** constructor's parameter documentation reaches no output, so it is refused
+    // rather than dropped — the fourth of this feature's "nowhere to put it" rejections, beside
+    // `receiverKdoc` with no receiver, `returnsKdoc` on a `Unit` function, and a local binding's
+    // `kdoc`. KotlinPoet 2.3.0's `TypeSpec.emit` walks its `funSpecs` twice and passes
+    // `includeKdocTags = false` on the `isConstructor` pass and `true` on the other (read off the
+    // bytecode: `iconst_0` against `iconst_1` at the two `FunSpec.emit` calls); with the flag false
+    // `FunSpec.emit` writes `kdoc` instead of `kdocWithTags()`, and `@param` lives only in the
+    // latter. The *primary* constructor is untouched — its tags are folded into the class's own
+    // KDoc — and so is every `` `fun` ``, attached or detached.
+    if (kind == FunKind.CONSTRUCTOR) {
+        params.forEach { p ->
+            check(p.kdoc.isEmpty()) {
+                "param: \"${p.name}\" carries kdoc and this is a secondary constructor, where " +
+                    "KotlinPoet emits the constructor's own kdoc without the `@param` tags — so " +
+                    "the text would reach no output at all. Write it into the constructor's kdoc " +
+                    "as an `@param ${p.name} …` line, or drop it."
+            }
         }
     }
 

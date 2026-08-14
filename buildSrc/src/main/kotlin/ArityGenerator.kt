@@ -554,7 +554,10 @@ private fun ctorParamOverloads(): List<Overload> = CTOR_PARAM_NAMES.flatMap { nm
             doc = docFor(
                 nm,
                 "A primary-constructor parameter${v.doc}; " +
-                    "`ParamKind.VAL`/`VAR` also declares the matching property.",
+                    "`ParamKind.VAL`/`VAR` also declares the matching property. " +
+                    "`default`, `modifiers` and `kdoc` behave as they do on [param], whose KDoc " +
+                    "carries the rules — one `vararg` per parameter list, no two parameter " +
+                    "modifiers at once, and the double render of a `VAL`/`VAR` parameter's `kdoc`.",
             ),
             context = "context(t: TypeScope)",
             name = nm.value,

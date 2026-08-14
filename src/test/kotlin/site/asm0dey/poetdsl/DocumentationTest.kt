@@ -259,6 +259,64 @@ class DocumentationTest {
         )
     }
 
+    /**
+     * The fourth place a caller's documentation would be dropped on the floor, after `receiverKdoc`
+     * with no receiver, `returnsKdoc` on a `Unit` function and a local binding's `kdoc`.
+     *
+     * KotlinPoet 2.3.0's `TypeSpec.emit` walks its `funSpecs` twice and calls
+     * `FunSpec.emit(…, includeKdocTags)` with **`false` for every `isConstructor` spec and `true`
+     * for every other one** (read off the bytecode: `iconst_0` on the constructor branch,
+     * `iconst_1` on the function branch). With the flag false, `FunSpec.emit` writes `kdoc` alone
+     * instead of `kdocWithTags()`, and `@param` lives only in the latter. So
+     * `` `constructor`(param("s", INT, kdoc = "the doc")) `` rendered `public constructor(s: Int)`
+     * and the text existed nowhere — while the identical parameter on a member `` `fun` ``, on a
+     * top-level one, on `funSpec`, and on the *primary* constructor (whose tags KotlinPoet folds
+     * into the class's own KDoc) all render it. A standalone `FunSpec.toString()` renders it too,
+     * which is what makes this specific to the member position.
+     */
+    @Test
+    fun `a secondary constructor's parameter cannot carry kdoc`() {
+        val e = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") {
+                `class`("C") { `constructor`(param("s", INT, kdoc = "the doc")) { _ -> } }
+            }
+        }
+        assertEquals(
+            "param: \"s\" carries kdoc and this is a secondary constructor, where KotlinPoet emits " +
+                "the constructor's own kdoc without the `@param` tags — so the text would reach no " +
+                "output at all. Write it into the constructor's kdoc as an `@param s …` line, or " +
+                "drop it.",
+            e.message,
+        )
+    }
+
+    /** The remedy the message names, rendered. */
+    @Test
+    fun `a secondary constructor documents its parameters in its own kdoc`() {
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+
+            public class C {
+              /**
+               * Builds one.
+               *
+               * @param s the doc
+               */
+              public constructor(s: Int)
+            }
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `class`("C") {
+                    `constructor`(param("s", INT), kdoc = "Builds one.\n\n@param s the doc") { _ -> }
+                }
+            }.toString(),
+        )
+    }
+
     @Test
     fun `a receiver kdoc with no receiver is rejected`() {
         val e = assertFailsWith<IllegalStateException> {
