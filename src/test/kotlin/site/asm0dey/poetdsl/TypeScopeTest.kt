@@ -275,7 +275,10 @@ class TypeScopeTest {
         )
         positions.forEachIndexed { index, position ->
             val failure = assertFailsWith<IllegalStateException>("position $index") {
-                file("com.example", "A", position)
+                // `body = `, not positional: E2b's `fileComment: String?` slot sits between
+                // `fileName` and `body`, so a lambda passed positionally here binds to it and fails
+                // to compile. The one break the slot causes, and it is loud — see D35.
+                file("com.example", "A", body = position)
             }
             assertTrue(
                 "does not enclose the current scope" in failure.message.orEmpty(),

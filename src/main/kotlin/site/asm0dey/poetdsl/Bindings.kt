@@ -126,6 +126,7 @@ private fun Scope.propertyOf(
     setterParam: String,
     setter: (BlockScope.(Expr) -> Unit)?,
     getter: (BlockScope.() -> Unit)?,
+    kdoc: String?,
 ): PropertySpec {
     checkNotNull(type) {
         "Property '$name' requires an explicit type; KotlinPoet cannot infer it."
@@ -159,6 +160,7 @@ private fun Scope.propertyOf(
             init?.let { initializer("%L", it.code) }
             by?.let { delegate("%L", it.code) }
             annotations?.list?.forEach { addAnnotation(it) }
+            kdoc?.let { addKdoc(docBlock(it)) }
             addAccessors(this@propertyOf, name, type, setterParam, setter, getter)
         }
         .build()
@@ -187,12 +189,18 @@ internal fun PropertySpec.Builder.addAccessors(
     getter: (BlockScope.() -> Unit)?,
 ) {
     getter?.let { body ->
-        getter(buildFun(name, FunKind.GETTER, null, null, emptyList(), emptyList(), null, null, parent) { body() })
+        getter(
+            buildFun(
+                name, FunKind.GETTER, null, null, emptyList(), emptyList(), null, null,
+                null, null, null, parent,
+            ) { body() },
+        )
     }
     setter?.let { body ->
         setter(
             buildFun(
-                name, FunKind.SETTER, null, null, listOf(param(setterParam, type)), emptyList(), null, null, parent,
+                name, FunKind.SETTER, null, null, listOf(param(setterParam, type)), emptyList(), null, null,
+                null, null, null, parent,
             ) { (value) -> body(value) },
         )
     }
@@ -333,6 +341,7 @@ internal fun Scope.bind(
     setterParam: String = "value",
     setter: (BlockScope.(Expr) -> Unit)? = null,
     getter: (BlockScope.() -> Unit)? = null,
+    kdoc: String? = null,
 ): Expr {
     check(init == null || by == null) {
         "Binding '$name' cannot have both an initializer and a delegate."
@@ -350,13 +359,19 @@ internal fun Scope.bind(
                 "A local binding ('$name') cannot have accessors, an extension receiver or type " +
                     "parameters; only a property can."
             }
+            // A local variable takes no KDoc either: `bindLocal` builds a `CodeBlock`, which has no
+            // documentation slot, so the text would be silently dropped. Kotlin has no syntax for it
+            // anyway — a KDoc comment on a local is just a comment.
+            check(kdoc == null) {
+                "A local binding ('$name') cannot carry KDoc; only a declaration can."
+            }
             bindLocal(mutable, name, type, init, by)
         }
 
         is FileScope -> {
             val spec = propertyOf(
                 mutable, annotations, modifiers, name, type, init, by,
-                typeVariables, receiver, setterParam, setter, getter,
+                typeVariables, receiver, setterParam, setter, getter, kdoc,
             )
             builder.addProperty(spec)
             handle(spec.name, type, mutable, ownerOf(spec.name, receiver))
@@ -365,7 +380,7 @@ internal fun Scope.bind(
         is TypeScope -> {
             val spec = propertyOf(
                 mutable, annotations, modifiers, name, type, init, by,
-                typeVariables, receiver, setterParam, setter, getter,
+                typeVariables, receiver, setterParam, setter, getter, kdoc,
             )
             builder.addProperty(spec)
             handle(spec.name, type, mutable, ownerOf(spec.name, receiver))

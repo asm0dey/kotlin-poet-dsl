@@ -220,7 +220,8 @@ private fun TypeConstruct.overloads(): List<Overload> = names.flatMap { nm ->
                 context = "context(s: Scope)",
                 name = nm.value,
                 params = v.params() + listOf("name: String") + arityParams(arity) +
-                    typeVariablesParam(typeParams) + listOf("body: ${bodyType(arity, "TypeScope")}"),
+                    typeVariablesParam(typeParams) + KDOC_PARAM +
+                    listOf("body: ${bodyType(arity, "TypeScope")}"),
                 returns = null,
                 body = """
                     |s.declareType(
@@ -232,6 +233,7 @@ private fun TypeConstruct.overloads(): List<Overload> = names.flatMap { nm ->
                     |    ${v.modifiersArg},
                     |    ${paramList(arity)},
                     |    ${typeVariablesArg(typeParams)},
+                    |    kdoc,
                     |    ${forwarder(arity)},
                     |)
                 """.trimMargin(),
@@ -313,6 +315,10 @@ private fun BindConstruct.overloads(): List<Overload> = names.flatMap { nm ->
                 "receiver: TypeName? = null",
                 "setterParam: String = \"value\"",
                 "setter: (BlockScope.(Expr) -> Unit)? = null",
+                // E2b's slot goes *before* the getter, not after it: the getter is the trailing
+                // lambda, and a slot appended past it would stop `` `val`("x", INT) { … } `` from
+                // binding its block to the getter at all.
+            ) + KDOC_PARAM + listOf(
                 "getter: (BlockScope.() -> Unit)? = null",
             ),
             returns = "Expr",
@@ -329,6 +335,7 @@ private fun BindConstruct.overloads(): List<Overload> = names.flatMap { nm ->
                 "    setterParam,\n" +
                 "    setter,\n" +
                 "    getter,\n" +
+                "    kdoc,\n" +
                 ")",
         )
     }
@@ -380,6 +387,35 @@ private fun forwarder(arity: Int?): String = when {
  * non-defaulted `p1: ParameterSpec` list — and *before* `returns`, which is as close to Kotlin's own
  * `fun <T> name(…): R` order as that constraint allows.
  */
+/**
+ * E2b's KDoc slot, on every declaration construct. Like [typeVariablesParam] it is a **defaulted**
+ * parameter on every existing overload and **zero** new declarations.
+ *
+ * Its position is always "after every slot that was already there, and before the body lambda" — a
+ * defaulted slot appended anywhere else moves a positional argument, and a `String?` slot moved into
+ * a position where a `String` already resolves is the one shape that rebinds *silently* rather than
+ * failing at the caller's own compile (D32, D33). The body lambda has to stay last so that a trailing
+ * lambda still binds to it.
+ *
+ * The text is a plain `String`, and every route from it into KotlinPoet's `addKdoc` goes through
+ * `"%L"` — see `docBlock` in `Declarations.kt`. `addKdoc` is a *format* function: `addKdoc("100%
+ * done")` raises `IllegalArgumentException: index 1 for '% ' not in range (received 0 arguments)`,
+ * and `addKdoc("a %S b", …)` silently eats the next argument. A generator writing prose has no idea
+ * it is holding a format string.
+ */
+private val KDOC_PARAM: List<String> = listOf("kdoc: String? = null")
+
+/**
+ * The two KDoc tags KotlinPoet models as parameters of `returns`/`receiver` rather than as text —
+ * `@return` and `@receiver`. Written as slots rather than left to the caller's own prose because
+ * KotlinPoet emits the tags in the order Kotlin documents them (`@receiver`, then `@param` for each
+ * documented parameter, then `@return`), which hand-written text in [KDOC_PARAM] cannot get right
+ * once a parameter also carries one. `@param` needs no slot here: it rides on `param(…)`'s own
+ * `kdoc`.
+ */
+private val FUN_KDOC_PARAMS: List<String> =
+    KDOC_PARAM + listOf("receiverKdoc: String? = null", "returnsKdoc: String? = null")
+
 private fun typeVariablesParam(present: Boolean): List<String> =
     if (present) listOf("typeVariables: List<TypeVariableName> = emptyList()") else emptyList()
 
@@ -422,8 +458,7 @@ private fun funOverloads(): List<Overload> = FUN_NAMES.flatMap { nm ->
                         // to a receiver type, rendering `fun String.f()` for code that asked for
                         // `fun f(): String`. D32's breaks were loud; that one would not be. See D33.
                         "receiver: TypeName? = null",
-                        "body: ${bodyType(arity)}",
-                    ),
+                    ) + FUN_KDOC_PARAMS + listOf("body: ${bodyType(arity)}"),
                 returns = null,
                 body = """
                     |s.declareFun(
@@ -436,6 +471,9 @@ private fun funOverloads(): List<Overload> = FUN_NAMES.flatMap { nm ->
                     |        typeVariables,
                     |        returns,
                     |        receiver,
+                    |        kdoc,
+                    |        receiverKdoc,
+                    |        returnsKdoc,
                     |        s,
                     |        ${forwarder(arity)},
                     |    ),
@@ -459,7 +497,8 @@ private fun ctorOverloads(): List<Overload> = CTOR_NAMES.flatMap { nm ->
                 ),
                 context = "context(t: TypeScope)",
                 name = nm.value,
-                params = v.params() + arityParams(arity) + listOf("body: ${bodyType(arity)}"),
+                params = v.params() + arityParams(arity) + KDOC_PARAM +
+                    listOf("body: ${bodyType(arity)}"),
                 returns = null,
                 // The guards live on every overload rather than in `buildFun`: they are about what
                 // the *type* already has, and `buildFun` never sees the TypeScope. They are two
@@ -477,6 +516,9 @@ private fun ctorOverloads(): List<Overload> = CTOR_NAMES.flatMap { nm ->
                     |        ${v.modifiersArg},
                     |        ${paramList(arity)},
                     |        emptyList(),
+                    |        null,
+                    |        null,
+                    |        kdoc,
                     |        null,
                     |        null,
                     |        t,
@@ -526,9 +568,9 @@ private fun ctorParamOverloads(): List<Overload> = CTOR_PARAM_NAMES.flatMap { nm
                     // combine in Kotlin — see `PARAMETER_MODIFIERS` in `Declarations.kt`.
                     "default: Expr? = null",
                     "modifiers: KModifier? = null",
-                ),
+                ) + KDOC_PARAM,
             returns = "Expr",
-            body = "t.addConstructorParam(kind, ${v.annotationsArg}, name, type, default, modifiers)",
+            body = "t.addConstructorParam(kind, ${v.annotationsArg}, name, type, default, modifiers, kdoc)",
             shadow = "${nm.value} is only valid inside a class or object body.",
         )
     }

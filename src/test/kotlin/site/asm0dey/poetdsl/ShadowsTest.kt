@@ -29,7 +29,7 @@ class ShadowsTest {
         )
         assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
         assertTrue(
-            "'fun BlockScope.object(name: String, body: TypeScope.() -> Unit): Nothing' is deprecated" in
+            "'fun BlockScope.object(name: String, kdoc: String? = ..., body: TypeScope.() -> Unit): Nothing' is deprecated" in
                 result.messages,
             result.messages,
         )
@@ -318,7 +318,7 @@ class ShadowsTest {
         )
         assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, bare.exitCode, bare.messages)
         assertTrue(
-            "'fun BlockScope.constructor(body: BlockScope.() -> Unit): Nothing' is deprecated" in bare.messages,
+            "'fun BlockScope.constructor(kdoc: String? = ..., body: BlockScope.() -> Unit): Nothing' is deprecated" in bare.messages,
             bare.messages,
         )
         assertTrue("`constructor` is only valid inside a class body" in bare.messages, bare.messages)
@@ -443,7 +443,7 @@ class ShadowsTest {
         )
         assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
         assertTrue(
-            "'fun BlockScope.object(name: String, body: TypeScope.() -> Unit): Nothing' is deprecated" in
+            "'fun BlockScope.object(name: String, kdoc: String? = ..., body: TypeScope.() -> Unit): Nothing' is deprecated" in
                 result.messages,
             result.messages,
         )

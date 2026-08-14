@@ -17,6 +17,23 @@ import com.squareup.kotlinpoet.TypeVariableName
 // the machinery they all call, and the parameter descriptors they are handed.
 
 /**
+ * Wraps documentation prose so that KotlinPoet treats it as text and not as a format string.
+ *
+ * `Documentable.Builder.addKdoc`, `FileSpec.Builder.addFileComment` and the `kdoc` arguments of
+ * `FunSpec.Builder.returns`/`receiver` are all **format** functions, and documentation is exactly
+ * the place a `%` turns up in ordinary prose: a percentage, a `%s` in an example, a `%T` pasted from
+ * KotlinPoet's own docs. Handed straight through, `addKdoc("100% done")` raises
+ * `IllegalArgumentException: index 1 for '% ' not in range (received 0 arguments)` and
+ * `addKdoc("a %S b", …)` silently consumes whatever argument comes next (both measured against
+ * KotlinPoet 2.3.0). `%L` with the whole string as its single argument is the escape: the argument
+ * is emitted verbatim and never re-scanned.
+ *
+ * **Every route from a caller's text into KotlinPoet's documentation API goes through here or
+ * through the identical `"%L"` spelling.** Nothing in this DSL passes user text as a format string.
+ */
+internal fun docBlock(text: String): CodeBlock = CodeBlock.of("%L", text)
+
+/**
  * Adds a type declaration to whichever scope is innermost: a top-level type in a file, a
  * nested type in a type. Kotlin allows local classes but not local named objects, interfaces,
  * enums or annotation classes — [localAllowed] says which is which, and Task 20's shadow
@@ -71,6 +88,7 @@ internal fun Scope.declareType(
     modifiers: Modifiers?,
     params: List<ParameterSpec>,
     typeVariables: List<TypeVariableName>,
+    kdoc: String?,
     body: TypeScope.(List<Expr>) -> Unit,
 ) {
     if (this is BlockScope) {
@@ -101,6 +119,7 @@ internal fun Scope.declareType(
     // it — a local type is rejected below either way — so its own `id` stands in, which is the
     // scope a local type would nest under if KotlinPoet could render one.)
     val enclosingFileId = if (this is TypeScope) fileId else id
+    kdoc?.let { builder.addKdoc(docBlock(it)) }
     val scope = TypeScope(
         builder.addModifiers(modifiers.toList()).addTypeVariables(typeVariables),
         NameScope(null),
@@ -180,9 +199,10 @@ internal fun TypeScope.addConstructorParam(
     type: TypeName,
     default: Expr?,
     modifiers: KModifier?,
+    kdoc: String?,
 ): Expr = addConstructorParam(
     kind,
-    buildParam(name, type, default, modifiers) { annotations?.list?.forEach { addAnnotation(it) } },
+    buildParam(name, type, default, modifiers, kdoc) { annotations?.list?.forEach { addAnnotation(it) } },
 )
 
 /**
@@ -281,6 +301,7 @@ public fun typeSpec(
     modifiers: Modifiers? = null,
     name: String,
     typeVariables: List<TypeVariableName> = emptyList(),
+    kdoc: String? = null,
     body: TypeScope.() -> Unit,
 ): TypeSpec {
     checkTypeVariables(
@@ -292,7 +313,10 @@ public fun typeSpec(
         isEnum = KModifier.ENUM in modifiers.toList(),
     )
     val scope = TypeScope(
-        TypeSpec.classBuilder(name).addModifiers(modifiers.toList()).addTypeVariables(typeVariables),
+        TypeSpec.classBuilder(name)
+            .addModifiers(modifiers.toList())
+            .addTypeVariables(typeVariables)
+            .apply { kdoc?.let { addKdoc(docBlock(it)) } },
         NameScope(null),
         ScopeId(null, "type"),
     )
@@ -326,7 +350,8 @@ public fun param(
     type: TypeName,
     default: Expr? = null,
     modifiers: KModifier? = null,
-): ParameterSpec = buildParam(name, type, default, modifiers) {}
+    kdoc: String? = null,
+): ParameterSpec = buildParam(name, type, default, modifiers, kdoc) {}
 
 /**
  * The three parameter modifiers Kotlin has, and the whole of them: `vararg` on a value parameter,
@@ -360,6 +385,7 @@ private fun buildParam(
     type: TypeName,
     default: Expr?,
     modifiers: KModifier?,
+    kdoc: String?,
     extras: ParameterSpec.Builder.() -> Unit,
 ): ParameterSpec = ParameterSpec.builder(name, type)
     .apply {
@@ -377,6 +403,10 @@ private fun buildParam(
             addModifiers(it)
         }
         default?.let { defaultValue("%L", it.code) }
+        // Renders as an `@param` tag on the *enclosing* declaration's KDoc — the function's, or the
+        // class's for a primary-constructor parameter. KotlinPoet puts it in the right place; all
+        // this has to get right is not treating the text as a format string.
+        kdoc?.let { addKdoc(docBlock(it)) }
         extras()
     }
     .build()
@@ -458,7 +488,9 @@ public fun param(
     type: TypeName,
     default: Expr? = null,
     modifiers: KModifier? = null,
-): ParameterSpec = buildParam(name, type, default, modifiers) { if (kind != null) tag(ParamKind::class, kind) }
+    kdoc: String? = null,
+): ParameterSpec =
+    buildParam(name, type, default, modifiers, kdoc) { if (kind != null) tag(ParamKind::class, kind) }
 
 /**
  * What [buildFun] is building. Four shapes share one implementation because they share everything
@@ -525,6 +557,9 @@ internal fun buildFun(
     typeVariables: List<TypeVariableName>,
     returns: TypeName?,
     receiver: TypeName?,
+    kdoc: String?,
+    receiverKdoc: String?,
+    returnsKdoc: String?,
     parent: Scope?,
     body: BlockScope.(List<Expr>) -> Unit,
 ): FunSpec {
@@ -546,6 +581,15 @@ internal fun buildFun(
         varianceAllowed = false,
         reifiedAllowed = KModifier.INLINE in modifiers.toList(),
     )
+    // A `@receiver` tag with no receiver would be dropped on the floor by KotlinPoet — `receiverKdoc`
+    // only ever reaches the builder through `receiver(type, kdoc)`, so with no type there is no call
+    // to carry it. Silently losing the caller's prose is the "partial or silently wrong output"
+    // Global Constraint 26 forbids, so it says so instead. `returnsKdoc`'s twin is below, where the
+    // inferred return type is known.
+    check(receiverKdoc == null || receiver != null) {
+        "`fun`: '$name' documents a receiver with receiverKdoc but declares none. Pass receiver = …, " +
+            "or move the text into kdoc."
+    }
     val names = (parent?.names ?: NameScope(null)).child()
     val id = (parent?.id ?: ScopeId(null, "root")).child(label)
     val recorded = mutableListOf<TypeName?>()
@@ -651,12 +695,27 @@ internal fun buildFun(
             annotations?.list?.forEach { addAnnotation(it) }
             addModifiers(modifiers.toList())
             addTypeVariables(typeVariables)
-            receiver?.let { receiver(it) }
+            kdoc?.let { addKdoc(docBlock(it)) }
+            // `receiver(type, kdoc)` and `returns(type, kdoc)` rather than an `@receiver`/`@return`
+            // line written into `kdoc` by hand: KotlinPoet emits the tags in the order Kotlin
+            // documents them — `@receiver`, then one `@param` per documented parameter, then
+            // `@return` — and prose cannot slot itself in between the `@param`s.
+            receiver?.let { r -> if (receiverKdoc == null) receiver(r) else receiver(r, docBlock(receiverKdoc)) }
             declared.forEach { addParameter(it) }
             // Never for an accessor: `FunSpec.Builder.returns` is `check(!name.isAccessor)` and
             // throws, and there is nothing to say anyway — a getter returns the property's declared
             // type and a setter returns `Unit`.
-            if (!kind.isAccessor) inferReturnType(name, kind, returns, recorded)?.let { returns(it) }
+            if (!kind.isAccessor) {
+                val inferred = inferReturnType(name, kind, returns, recorded)
+                // The `@return` half of the receiverKdoc check above. `inferred == null` is the
+                // `Unit` case — ADR 0007 omits the type entirely — and a `Unit` function returns
+                // nothing to document.
+                check(returnsKdoc == null || inferred != null) {
+                    "`fun`: '$name' documents a return value with returnsKdoc but returns Unit. " +
+                        "Pass returns = …, or move the text into kdoc."
+                }
+                inferred?.let { r -> if (returnsKdoc == null) returns(r) else returns(r, docBlock(returnsKdoc)) }
+            }
             // Before the body: the delegation call is the constructor's header, and KotlinPoet
             // renders it there whatever order the builder is fed in. Written through
             // `callThisConstructor`/`callSuperConstructor` rather than emitted, per D25.
@@ -835,9 +894,14 @@ public fun funSpec(
     typeVariables: List<TypeVariableName> = emptyList(),
     returns: TypeName? = null,
     receiver: TypeName? = null,
+    kdoc: String? = null,
+    receiverKdoc: String? = null,
+    returnsKdoc: String? = null,
     body: BlockScope.() -> Unit,
-): FunSpec =
-    buildFun(name, FunKind.FUNCTION, null, modifiers, emptyList(), typeVariables, returns, receiver, null) { body() }
+): FunSpec = buildFun(
+    name, FunKind.FUNCTION, null, modifiers, emptyList(), typeVariables, returns, receiver,
+    kdoc, receiverKdoc, returnsKdoc, null,
+) { body() }
 
 /** [funSpec] with one parameter; the body receives its handle. */
 public fun funSpec(
@@ -847,11 +911,14 @@ public fun funSpec(
     typeVariables: List<TypeVariableName> = emptyList(),
     returns: TypeName? = null,
     receiver: TypeName? = null,
+    kdoc: String? = null,
+    receiverKdoc: String? = null,
+    returnsKdoc: String? = null,
     body: BlockScope.(Expr) -> Unit,
-): FunSpec =
-    buildFun(name, FunKind.FUNCTION, null, modifiers, listOf(p1), typeVariables, returns, receiver, null) { (a) ->
-        body(a)
-    }
+): FunSpec = buildFun(
+    name, FunKind.FUNCTION, null, modifiers, listOf(p1), typeVariables, returns, receiver,
+    kdoc, receiverKdoc, returnsKdoc, null,
+) { (a) -> body(a) }
 
 /**
  * Detached property builder. The type is mandatory for the same reason it is on a `` `val` ``
@@ -875,6 +942,7 @@ public fun propertySpec(
     by: Expr? = null,
     typeVariables: List<TypeVariableName> = emptyList(),
     receiver: TypeName? = null,
+    kdoc: String? = null,
     getter: (BlockScope.() -> Unit)? = null,
 ): PropertySpec {
     check(init == null || by == null) {
@@ -885,6 +953,7 @@ public fun propertySpec(
     checkProperty("propertySpec", name, mutable = false, init, by, typeVariables, receiver, setter = null, getter)
     val spec = PropertySpec.builder(name, type, modifiers.toList())
     spec.addTypeVariables(typeVariables)
+    kdoc?.let { spec.addKdoc(docBlock(it)) }
     receiver?.let { spec.receiver(it) }
     init?.let { spec.initializer("%L", it.code) }
     by?.let { spec.delegate("%L", it.code) }
