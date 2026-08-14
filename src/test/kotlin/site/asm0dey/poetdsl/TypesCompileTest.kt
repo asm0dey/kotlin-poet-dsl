@@ -5,6 +5,7 @@ import com.squareup.kotlinpoet.BOOLEAN
 import com.squareup.kotlinpoet.COMPARABLE
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.ABSTRACT
+import com.squareup.kotlinpoet.KModifier.ANNOTATION
 import com.squareup.kotlinpoet.KModifier.INLINE
 import com.squareup.kotlinpoet.LIST
 import com.squareup.kotlinpoet.MAP
@@ -96,7 +97,7 @@ class TypesCompileTest {
             // annotation class Ann<T> — valid Kotlin, which is why `class` guards `enum class E<T>`
             // and not this one. Only kotlinc can settle that, so it is asserted here rather than
             // assumed from the shape.
-            `class`(com.squareup.kotlinpoet.KModifier.ANNOTATION, "Ann", typeVariables = listOf(t)) { }
+            `class`(ANNOTATION, "Ann", typeVariables = listOf(t)) { }
 
             // inline fun <reified T> filterOnly(xs: List<Any>): List<T>
             `fun`(

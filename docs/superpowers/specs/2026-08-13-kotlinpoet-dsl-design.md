@@ -335,7 +335,7 @@ Arguments are `Expr`, not strings, so `%T`/`%M` survive and imports resolve.
 
 KotlinPoet emits one annotation per line rather than Kotlin's bracketed `@set:[A B]` form. The output is semantically identical; no raw escape is provided.
 
-Type-position annotations go through `annotated`, this DSL's bridge from `annotation`/`ann` to a `TypeName`: `param("x", INT.annotated(ann<Positive>("min" to 0.lit)))`. (The spelling this line carried originally — `INT.annotated<Positive>()` — matched no overload; KotlinPoet 2.3.0 has no reified form, and its `AnnotationSpec`-taking overloads cannot be reached from outside the module because `Annotations.list` is `@PublishedApi internal`. See the E1 fix round.)
+Type-position annotations go through `annotated`, this DSL's bridge from `annotation`/`ann` to a `TypeName`: `param("x", INT.annotated(ann<Positive>("min" to 0.lit)))`. (The spelling this line carried originally — `INT.annotated<Positive>()` — matched no overload; KotlinPoet 2.3.0 has no reified form, and its `AnnotationSpec`-taking overloads cannot be reached from *this DSL's* `Annotations` outside the module, because `Annotations.list` is `@PublishedApi internal` — a consumer could always hand-build an `AnnotationSpec` in raw KotlinPoet, which is precisely the leak `annotated` closes. See the E1 fix round.)
 
 ### Aliases
 
