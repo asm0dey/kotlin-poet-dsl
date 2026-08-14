@@ -259,14 +259,54 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     // at all — `expect class E { class N(val x: Int) }` rendered, and all three frontends call it
     // *expected class constructor cannot have a property parameter*. See [Expect].
     if (kind != null && isExpectContainer) {
-        expectRefusal(
-            "constructorParam",
-            "'$name' declares a `${if (kind == ParamKind.VAR) "var" else "val"}` property on the " +
-                "primary constructor of an `expect` class",
-            "expected class constructor cannot have a property parameter",
-            "Declare it as a plain parameter — constructorParam(null, \"$name\", …) or " +
-                "param(null, \"$name\", …) — and put the property on the `actual` class.",
-        )
+        val keyword = if (kind == ParamKind.VAR) "var" else "val"
+        val propertyParamKind = builder.modifiers.firstOrNull { it in PROPERTY_PARAM_KINDS }
+        when {
+            // The **control row**: Kotlin's rule has exactly two exceptions, and they are the two
+            // kinds whose primary-constructor parameters Kotlin *requires* to be `val`, so the rule
+            // it would break has nothing left to say. Measured, all three frontends, one file per
+            // row — and the exempt set is measured rather than reasoned, because every other
+            // classifier modifier is refused:
+            //
+            //     expect class E { annotation class N(val x: Int) }  clean      (the exemption)
+            //     expect class E { value class V(val y: Int) }       clean      (the exemption)
+            //     expect class E { annotation class N(x: Int) }      'val' keyword is missing in
+            //                                                        annotation parameter.
+            //     expect class E { value class V(y: Int) }           value class primary constructor
+            //                                                        must only have final read-only
+            //                                                        ('val') property parameters.
+            //     expect class E { data class D(val x: Int) }        expected class constructor
+            //     expect class E { inner class N(val x: Int) }       cannot have a property
+            //     expect class E { sealed class S(val x: Int) }      parameter.
+            //     expect class E { abstract class A(val x: Int) }
+            //     expect class E { open class O(val x: Int) }
+            //     expect class E { enum class Z(val x: Int) { A(1) } }
+            //
+            // So the refusal below made a nested `annotation class` with parameters *unspellable* —
+            // `val` refused here and a plain parameter invalid Kotlin — which is the shape D34's
+            // "refused from both sides at once" names. The exemption reads the **immediate**
+            // builder's own modifiers and nothing inherited, exactly as `expectAllowed` and
+            // `externalAllowed` do, and for the same reason: it is a fact about what *this*
+            // declaration renders.
+            propertyParamKind == null -> expectRefusal(
+                "constructorParam",
+                "'$name' declares a `$keyword` property on the primary constructor of an `expect` " +
+                    "class",
+                "expected class constructor cannot have a property parameter",
+                "Declare it as a plain parameter — constructorParam(null, \"$name\", …) or " +
+                    "param(null, \"$name\", …) — and put the property on the `actual` class.",
+            )
+            // …and the other side of that boundary. `expect annotation class A(val x: Int)` is clean
+            // on all three frontends too, and KotlinPoet 2.3.0 renders it by no route at all:
+            // `TypeSpec.Builder.addProperty` (`TypeSpec.kt:725-733`) `require`s a null initializer
+            // whenever the builder's *own* modifiers carry EXPECT, with no exemption of its own, and
+            // a `val`/`var` primary-constructor parameter is a property with a `%N` initializer —
+            // the only shape KotlinPoet's `constructorProperties` recognises (D19). At `fa12efe`
+            // this raised that `require`'s own `IllegalArgumentException`; what changes here is the
+            // exception type and a message that names the construct and the gap, rather than
+            // quoting a frontend diagnostic no frontend produces.
+            KModifier.EXPECT in builder.modifiers -> error(annotationOrValueRenderGap(name, keyword, propertyParamKind))
+        }
     }
     declaredConstructorParamNames += name
     // D30's split, in one line. A `val`/`var` parameter *is* a property: it is visible in every

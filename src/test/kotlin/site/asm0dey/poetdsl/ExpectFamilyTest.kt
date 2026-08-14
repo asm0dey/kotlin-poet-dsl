@@ -2,7 +2,9 @@ package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.INT
+import com.squareup.kotlinpoet.KModifier.ANNOTATION
 import com.squareup.kotlinpoet.KModifier.EXPECT
+import com.squareup.kotlinpoet.KModifier.VALUE
 import com.squareup.kotlinpoet.LONG
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import kotlin.test.Test
@@ -76,6 +78,25 @@ class ExpectFamilyTest {
             "— and put the property on the `actual` class.",
     )
 
+    /**
+     * The render gap, which is *not* a member of the family — no frontend rejects the Kotlin, so
+     * [refusal]'s "this is …on the JVM, on Kotlin/JS and on Kotlin/Wasm alike" clause would be a
+     * false claim. A separate sentence, deliberately.
+     */
+    private fun renderGapMessage(name: String, keyword: String, kind: String) =
+        "constructorParam: '$name' declares a `$keyword` property on the primary constructor of an " +
+            "`expect $kind class`, and KotlinPoet 2.3.0 renders no such thing: a `val`/`var` " +
+            "primary-constructor parameter is a property with a `%N` initializer, and " +
+            "`TypeSpec.Builder.addProperty` rejects every property carrying an initializer when the " +
+            "builder's own modifiers contain EXPECT. The Kotlin is valid on all three frontends — " +
+            "${if (kind == "annotation") "an" else "a"} $kind class parameter must be `val`, so " +
+            "the rule against a property parameter in an " +
+            "`expect` class does not reach it — which makes this a backend gap and not a language " +
+            "rule. Build the type with typeSpec(${kind.uppercase()}.toModifiers(), …) and add the " +
+            "modifier afterwards with .toBuilder().addModifiers(EXPECT).build(), or declare it " +
+            "inside the `expect` type, where Kotlin makes the keyword implicit and this DSL renders " +
+            "the parameter."
+
     private fun bodyMessage(name: String) = refusal(
         "`fun`",
         "'$name' is `expect` — by its own EXPECT modifier, or by the `expect` type it is declared " +
@@ -146,6 +167,123 @@ class ExpectFamilyTest {
             assertFailsWith<IllegalStateException> {
                 typeSpec(EXPECT.toModifiers(), name = "E") { constructorParam(ParamKind.VAL, "x", INT) }
             }.message,
+        )
+    }
+
+    /**
+     * **The control row for the test above** — the nearest *valid* neighbour of the shape it
+     * refuses, which is the only thing that can show a guard is not over-broad against the language.
+     * Falsification shows a guard is load-bearing against the test set and nothing more, and this
+     * guard was verified at the top level while the answer inverts one level down.
+     *
+     * Kotlin's *expected class constructor cannot have a property parameter* has two exceptions, and
+     * they are the two kinds whose primary-constructor parameters Kotlin **requires** to be `val`.
+     * Measured, one file per row, `kotlinc` / `kotlinc-js` / `kotlinc-wasm` 2.4.10, all three
+     * identical:
+     *
+     * ```
+     * expect class E { annotation class N(val x: Int) }   clean       — the exemption
+     * expect class E { value class V(val y: Int) }        clean       — the exemption
+     * expect class E { annotation class N(x: Int) }       'val' keyword is missing in annotation
+     *                                                     parameter.
+     * expect class E { value class V(y: Int) }            value class primary constructor must only
+     *                                                     have final read-only ('val') property
+     *                                                     parameters.
+     * expect class E { data class D(val x: Int) }         expected class constructor cannot have a
+     * expect class E { inner class N(val x: Int) }        property parameter.        (the controls
+     * expect class E { sealed class S(val x: Int) }        that keep the exempt set to two: every
+     * expect class E { abstract class A(val x: Int) }      other classifier modifier is refused)
+     * expect class E { open class O(val x: Int) }
+     * expect class E { enum class Z(val x: Int) { A(1) } }
+     * ```
+     *
+     * So the DSL's guard made a nested `annotation class` with parameters **unspellable**: `val` was
+     * refused here and a plain parameter is invalid Kotlin. Both shapes rendered at `fa12efe` and
+     * were refused at `68df28f`.
+     *
+     * The exempt set is read off the **immediate** builder's own modifiers, which is what keeps the
+     * top-level refusal below intact.
+     */
+    @Test
+    fun `an expect container keeps a nested annotation or value class's property parameter`() {
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+
+            public expect class E {
+              public annotation class N(
+                public val x: Int,
+              )
+
+              public value class V(
+                public val y: Int,
+              )
+            }
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `class`(EXPECT, "E") {
+                    `class`(ANNOTATION, "N") { constructorParam(ParamKind.VAL, "x", INT) }
+                    `class`(VALUE, "V") { constructorParam(ParamKind.VAL, "y", INT) }
+                }
+            }.toString(),
+        )
+    }
+
+    /**
+     * The other side of that boundary, and the reason the exemption reads the **immediate** builder
+     * rather than the nest. `expect annotation class A(val x: Int)` and `expect value class V(val
+     * y: Int)` are clean on all three frontends too — and KotlinPoet 2.3.0 cannot render either by
+     * any route: `TypeSpec.Builder.addProperty` (`TypeSpec.kt:725-733`) `require`s a null
+     * `initializer` whenever the builder's own modifiers contain `EXPECT`, with no exemption of its
+     * own, and a `val`/`var` primary-constructor parameter **is** a property with a `%N` initializer
+     * (D19 — KotlinPoet models it no other way, and `constructorProperties` matches on exactly that
+     * initializer).
+     *
+     * So this is a **render gap**, not a language rule, and the message says so rather than quoting
+     * a frontend diagnostic that does not exist. At `fa12efe` the same shape raised KotlinPoet's own
+     * `IllegalArgumentException: properties in expect classes can't have initializers` — Global
+     * Constraint 26's forbidden type, naming neither construct — so the refusal is not new; only its
+     * type and its message are.
+     *
+     * The escape hatch the message names is measured, not assumed: a `TypeSpec` built *without*
+     * `EXPECT` passes `addProperty`, and `toBuilder().addModifiers(EXPECT)` afterwards never runs
+     * that `require` again.
+     */
+    @Test
+    fun `an expect annotation or value class cannot carry a property parameter KotlinPoet can render`() {
+        refused(renderGapMessage("x", "val", "annotation")) {
+            `class`(EXPECT + ANNOTATION, "A") { constructorParam(ParamKind.VAL, "x", INT) }
+        }
+        refused(renderGapMessage("y", "val", "value")) {
+            `class`(EXPECT + VALUE, "V") { constructorParam(ParamKind.VAL, "y", INT) }
+        }
+        assertEquals(
+            renderGapMessage("x", "var", "annotation"),
+            assertFailsWith<IllegalStateException> {
+                typeSpec((EXPECT + ANNOTATION), name = "A") { constructorParam(ParamKind.VAR, "x", INT) }
+            }.message,
+        )
+        // The escape hatch, rendered: the spec is built without EXPECT and gains it afterwards.
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+
+            public expect annotation class A(
+              public val x: Int,
+            )
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                +typeSpec(ANNOTATION.toModifiers(), name = "A") { constructorParam(ParamKind.VAL, "x", INT) }
+                    .toBuilder()
+                    .addModifiers(EXPECT)
+                    .build()
+            }.toString(),
         )
     }
 

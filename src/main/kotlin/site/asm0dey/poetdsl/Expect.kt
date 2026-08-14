@@ -1,5 +1,7 @@
 package site.asm0dey.poetdsl
 
+import com.squareup.kotlinpoet.KModifier
+
 // The `expect` family, as one unit.
 //
 // **An `expect` container refuses every member that carries a body or a value.** One sentence, one
@@ -125,6 +127,67 @@ internal fun expectRefusal(construct: String, what: String, diagnostic: String, 
     "$construct: $what. An `expect` declaration is a signature — it carries no body and no value — " +
         "so this is \"$diagnostic\" on the JVM, on Kotlin/JS and on Kotlin/Wasm alike. $remedy",
 )
+
+/**
+ * The two classifier kinds Kotlin **exempts** from *expected class constructor cannot have a
+ * property parameter*, because both of them *require* their primary-constructor parameters to be
+ * `val` — so the rule the refusal implements has nothing left to refuse. Measured on `kotlinc`,
+ * `kotlinc-js` and `kotlinc-wasm` 2.4.10, one file per row, all three identical:
+ *
+ *     expect class E { annotation class N(val x: Int) }   clean         — the exemption
+ *     expect class E { value class V(val y: Int) }        clean         — the exemption
+ *     expect class E { annotation class N(x: Int) }       'val' keyword is missing in annotation
+ *                                                         parameter.
+ *     expect class E { value class V(y: Int) }            value class primary constructor must only
+ *                                                         have final read-only ('val') property
+ *                                                         parameters.
+ *
+ * The set is **measured rather than reasoned**, and the four control rows that keep it to two are
+ * every other classifier modifier a nested type can carry — `data`, `inner`, `sealed`, `abstract`,
+ * `open` and `enum` are all *expected class constructor cannot have a property parameter* exactly as
+ * a bare `class` is, on all three frontends. Copying a plausible-looking list here would have been
+ * the mistake the accessor exemption avoided one round ago.
+ *
+ * Read off the **immediate** builder's own modifiers, never inherited: this is a fact about what
+ * *this* declaration renders, the same reading `PropertyContainer.expectAllowed` and
+ * `externalAllowed` make, and it is what keeps [annotationOrValueRenderGap] reachable.
+ */
+internal val PROPERTY_PARAM_KINDS: Set<KModifier> = setOf(KModifier.ANNOTATION, KModifier.VALUE)
+
+/**
+ * The other side of [PROPERTY_PARAM_KINDS], and the one place in this family where the refusal is a
+ * **backend gap rather than a language rule** — so it does not go through [expectRefusal], whose
+ * invariant middle clause would claim a frontend diagnostic that no frontend produces.
+ *
+ * `expect annotation class A(val x: Int)` and `expect value class V(val y: Int)` are clean on
+ * `kotlinc`, `kotlinc-js` and `kotlinc-wasm` alike, and KotlinPoet 2.3.0 renders neither by any
+ * route: `TypeSpec.Builder.addProperty` (`TypeSpec.kt:725-733`) `require`s a null `initializer`
+ * whenever the builder's *own* modifiers contain `EXPECT`, with no exemption for either kind, and a
+ * `val`/`var` primary-constructor parameter is a property carrying a `%N` initializer — the only
+ * shape KotlinPoet's `constructorProperties` recognises, and the only way KotlinPoet models
+ * `val`/`var` on a parameter at all (D19).
+ *
+ * At `fa12efe` the same shape raised that `require`'s own `IllegalArgumentException: properties in
+ * expect classes can't have initializers`, Global Constraint 26's forbidden type naming neither
+ * construct. The refusal is therefore not new; its type and its message are.
+ *
+ * The escape hatch the message names is measured, not assumed — a spec built without `EXPECT` passes
+ * `addProperty`, and `toBuilder().addModifiers(EXPECT)` never runs that `require` again.
+ */
+internal fun annotationOrValueRenderGap(name: String, keyword: String, kindModifier: KModifier): String {
+    val kind = kindModifier.name.lowercase()
+    return "constructorParam: '$name' declares a `$keyword` property on the primary constructor of " +
+        "an `expect $kind class`, and KotlinPoet 2.3.0 renders no such thing: a `val`/`var` " +
+        "primary-constructor parameter is a property with a `%N` initializer, and " +
+        "`TypeSpec.Builder.addProperty` rejects every property carrying an initializer when the " +
+        "builder's own modifiers contain EXPECT. The Kotlin is valid on all three frontends — " +
+        "${if (kindModifier == KModifier.ANNOTATION) "an" else "a"} $kind class parameter must be " +
+        "`val`, so the rule against a property parameter in an `expect` class does not reach it — " +
+        "which makes this a backend gap and not a language rule. Build the type with " +
+        "typeSpec(${kindModifier.name}.toModifiers(), …) and add the modifier afterwards with " +
+        ".toBuilder().addModifiers(EXPECT).build(), or declare it inside the `expect` type, where " +
+        "Kotlin makes the keyword implicit and this DSL renders the parameter."
+}
 
 /**
  * How a member says it is `expect` when **both** sources can apply: its own `EXPECT` modifier (the
