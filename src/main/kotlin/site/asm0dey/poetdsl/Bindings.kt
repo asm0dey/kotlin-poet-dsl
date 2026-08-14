@@ -512,9 +512,19 @@ internal fun checkProperty(
     }
 }
 
-/** `"A"`, `"A or B"`, `"A, B or C"` — the remedy list, spelled the way the rest of a message is. */
-private fun List<String>.joinToOr(): String =
-    if (size == 1) single() else dropLast(1).joinToString(", ") + " or " + last()
+/**
+ * `""`, `"A"`, `"A or B"`, `"A, B or C"` — the remedy list, spelled the way the rest of a message is.
+ *
+ * The empty row is there so the helper is total on its own rather than only in context: `last()`
+ * throws on an empty list, and the sole call site happens to guard emptiness before calling — but it
+ * guards it because an empty remedy list needs the whole *clause* dropped, not an empty tail, which
+ * is a decision about the sentence rather than about this function. Nothing reaches this row today.
+ */
+private fun List<String>.joinToOr(): String = when (size) {
+    0 -> ""
+    1 -> single()
+    else -> dropLast(1).joinToString(", ") + " or " + last()
+}
 
 /**
  * Whether [variable] occurs anywhere in this type — `T` itself, `List<T>`, `out T`, `(T) -> Unit`.
