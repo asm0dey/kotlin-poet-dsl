@@ -238,6 +238,53 @@ class AccessorsTest {
         )
     }
 
+    @Test
+    fun `a mutable extension property requires a setter as well`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") { `var`("head", INT, receiver = STRING) { ret(0.lit) } }
+        }
+        assertEquals(
+            "`var`: 'head' is a mutable extension property, which has no backing field, so it needs " +
+                "a setter as well as a getter (or a delegate).",
+            failure.message,
+        )
+    }
+
+    @Test
+    fun `a delegated property takes no accessors`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") {
+                `val`("cached", INT, by = call("lazy", detachedLambda { +1.lit })) { ret(1.lit) }
+            }
+        }
+        assertEquals(
+            "`val`: 'cached' is delegated with `by`, and a delegated property cannot have " +
+                "accessors. Drop the delegate, or drop the accessors.",
+            failure.message,
+        )
+    }
+
+    /**
+     * A property's type parameters go through the same [checkTypeVariables] a function's do, so
+     * declaration-site variance and `reified` are rejected here too — neither is valid on a
+     * property, and both render.
+     */
+    @Test
+    fun `a property type parameter takes no variance`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") {
+                val out = typeVariable("T", variance = com.squareup.kotlinpoet.KModifier.OUT)
+                `val`("second", out, receiver = LIST.of(out), typeVariables = listOf(out)) { ret(0.lit) }
+            }
+        }
+        assertEquals(
+            "`val`: type parameter \"T\" of 'second' declares `out` variance, which Kotlin allows " +
+                "only on a class or interface. Drop the variance, or project the type argument at " +
+                "the use site with out(…)/`in`(…).",
+            failure.message,
+        )
+    }
+
     /**
      * Two extension properties of the same name on *different* receivers are legal Kotlin, so D21's
      * duplicate-property rejection has to key on the receiver as well as the name. Two on the *same*
