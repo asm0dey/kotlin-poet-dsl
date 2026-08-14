@@ -536,10 +536,28 @@ internal fun checkProperty(
                 "$construct: '$name' is an extension property, which has no backing field, so it " +
                     "needs a getter (or a delegate)."
             }
-            check(!mutable || setter != null || by != null) {
-                "$construct: '$name' is a mutable extension property, which has no backing field, " +
-                    "so it needs a setter as well as a getter (or a delegate)."
-            }
+        }
+        // The **pair** requirement, and it is *not* the same question as the one above: an accessor
+        // is not required here, but once a `var` has a getter it gets the **default** setter, which
+        // writes a backing field an extension property does not have. That holds in every container,
+        // and exempting it along with the requirement above would have been a new false permission —
+        // measured while checking this round's own boundary, all three frontends:
+        //
+        //     abstract class C { abstract var String.a: Int get() = 1 }  property with getter
+        //                                                                implementation cannot be
+        //                                                                abstract.
+        //     interface I      { var String.a: Int get() = 1 }           property in interface
+        //                                                                cannot have a backing field.
+        //     abstract class C { abstract var String.a: Int }            OK  OK  OK — the control,
+        //     interface I      { var String.a: Int }                     both still render.
+        //
+        // The first row is the shape the exemption above would have let through; the second is one
+        // the *previous* round's container exemption already let through, and closing both is one
+        // condition rather than two. `by` needs no term: a delegated property takes no accessors at
+        // all, which the check near the top of this function has already settled.
+        check(!mutable || getter == null || setter != null) {
+            "$construct: '$name' is a mutable extension property, which has no backing field, " +
+                "so it needs a setter as well as a getter (or a delegate)."
         }
     }
     // The dual of [PropertyContainer.needsValue], and the reason it is a second field rather than a

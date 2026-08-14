@@ -522,6 +522,29 @@ class AccessorsTest {
                 `var`(EXPECT, "brim", INT, receiver = STRING)
             }.toString(),
         )
+        // The pair requirement is **not** exempted with it: a `var` that has a getter gets the
+        // default setter, which writes a backing field an extension property does not have, and that
+        // holds in every container. `abstract var String.a: Int get() = 1` is *property with getter
+        // implementation cannot be abstract* on all three frontends, and
+        // `interface I { var String.a: Int get() = 1 }` — which the previous round's container
+        // exemption let through — is *property in interface cannot have a backing field* on all
+        // three. Both are refused; both drop their getter and render.
+        val pair = "`var`: 'head' is a mutable extension property, which has no backing field, so " +
+            "it needs a setter as well as a getter (or a delegate)."
+        assertEquals(
+            pair,
+            assertFailsWith<IllegalStateException> {
+                file("com.example", "A") {
+                    `class`(ABSTRACT, "C") { `var`(ABSTRACT, "head", INT, receiver = STRING) { ret(1.lit) } }
+                }
+            }.message,
+        )
+        assertEquals(
+            pair,
+            assertFailsWith<IllegalStateException> {
+                file("com.example", "A") { `interface`("I") { `var`("head", INT, receiver = STRING) { ret(1.lit) } } }
+            }.message,
+        )
         // The two modifiers that are *not* exempt, and the plain file-level control beside them.
         listOf<Pair<String, FileScope.() -> Unit>>(
             "`var`: 'head' is an extension property, which has no backing field, so it needs a " +
