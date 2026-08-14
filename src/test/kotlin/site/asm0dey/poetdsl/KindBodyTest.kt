@@ -8,10 +8,13 @@ import com.squareup.kotlinpoet.KModifier.DATA
 import com.squareup.kotlinpoet.KModifier.ENUM
 import com.squareup.kotlinpoet.KModifier.EXPECT
 import com.squareup.kotlinpoet.KModifier.EXTERNAL
+import com.squareup.kotlinpoet.KModifier.FUN
+import com.squareup.kotlinpoet.KModifier.LATEINIT
 import com.squareup.kotlinpoet.KModifier.INNER
 import com.squareup.kotlinpoet.KModifier.OPEN
 import com.squareup.kotlinpoet.KModifier.SEALED
 import com.squareup.kotlinpoet.KModifier.VALUE
+import com.squareup.kotlinpoet.STRING
 import com.squareup.kotlinpoet.UNIT
 import site.asm0dey.poetdsl.ParamKind.VAL
 import site.asm0dey.poetdsl.ParamKind.VAR
@@ -379,6 +382,84 @@ class KindBodyTest {
                 // A *plain* parameter is exactly what an ordinary class still takes.
                 `class`("C", param(null, "a", INT)) { _ -> }
                 `class`("K") { constructorParam(null, "a", INT) }
+            },
+        )
+    }
+
+    // --- a `value class` holds no property with a backing field --------------------------------
+
+    @Test
+    fun `a value class property with a backing field is refused`() {
+        val v = { member: TypeScope.() -> Unit ->
+            message { `class`(VALUE, "V", param(VAL, "a", INT)) { _ -> member() } }
+        }
+        assertTrue(
+            "value class cannot have properties with backing fields" in
+                v { `val`("p", INT, init = 1.lit) },
+        )
+        assertTrue(
+            "value class cannot have properties with backing fields" in
+                v { `var`("p", INT, init = 1.lit) },
+        )
+        assertTrue(
+            "value class cannot have delegated properties" in
+                v { `val`("p", INT, by = call("lazy", lambda { ret(1.lit) })) },
+        )
+        assertTrue(
+            "value class cannot have properties with backing fields" in
+                v { `var`(LATEINIT, "p", STRING) },
+        )
+    }
+
+    /** The control rows: what a value class still holds, and what an interface still says. */
+    @Test
+    fun `a value class still holds accessors, functions and a companion object`() {
+        val rendered = render {
+            `class`(VALUE, "V", param(VAL, "a", INT)) { _ ->
+                `val`("p", INT, getter = { ret(1.lit) })
+                `fun`("f", returns = INT) { ret(1.lit) }
+                `class`("N") { }
+                companionObject { `val`("q", INT, init = 2.lit) }
+            }
+        }
+        assertTrue("public val p: Int" in rendered, rendered)
+        assertTrue("get() = 1" in rendered, rendered)
+        // The interface's own three messages are untouched by the shared reason.
+        val i = message { `interface`("I") { `val`("p", INT, init = 1.lit) } }
+        assertTrue("property initializers in interfaces are prohibited" in i, i)
+    }
+
+    // --- a `fun interface` holds no abstract property -------------------------------------------
+
+    @Test
+    fun `an abstract property in a fun interface is refused`() {
+        val m = message {
+            `interface`(FUN, "F") {
+                `fun`(ABSTRACT, "g", returns = INT) { }
+                `val`("p", INT)
+            }
+        }
+        assertTrue("functional interface cannot have abstract properties" in m, m)
+        assertTrue(
+            "functional interface cannot have abstract properties" in message {
+                `interface`(FUN, "F") {
+                    `fun`(ABSTRACT, "g", returns = INT) { }
+                    `val`(ABSTRACT, "p", INT)
+                }
+            },
+        )
+    }
+
+    /** The control rows: an ordinary interface, and a fun interface's non-abstract property. */
+    @Test
+    fun `a fun interface still holds a property with accessors, and an interface an abstract one`() {
+        assertCompiles(
+            render {
+                `interface`(FUN, "F") {
+                    `fun`(ABSTRACT, "g", returns = INT) { }
+                    `val`("p", INT, getter = { ret(1.lit) })
+                }
+                `interface`("H") { `val`("p", INT) }
             },
         )
     }

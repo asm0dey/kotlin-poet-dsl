@@ -269,6 +269,15 @@ internal fun PropertySpec.Builder.addAccessors(
  *   `expect class E { class N { expect val a: Int } }` — it *is* printed, and all three frontends
  *   answer *modifier 'expect' is not applicable to 'member property without backing field or
  *   delegate'*.
+ * @property backingFieldDenial which kind, if any, forbids a property here from having *storage* —
+ *   the reason [backingFieldAllowed] is false, carried with the answer because the three sentences
+ *   the frontends print are the kind's and not this DSL's. `null` means storage is fine. One
+ *   question, one field: an interface and a value class both forbid the backing field, and folding
+ *   them into two booleans would be the second reader D38 warns about, not the second question.
+ * @property funInterface whether this container is a `fun interface`, which holds no **abstract**
+ *   property — a different question from [backingFieldAllowed], which it also answers `false` to as
+ *   any interface does, and from [abstractAllowed], which is about the modifier rather than about
+ *   the property being abstract by having no accessor.
  * @property membersAllowed whether a property may be declared here **at all** — false in an
  *   `annotation class`, which declares a shape and holds nothing but its primary-constructor
  *   parameters. Its own field rather than a reading of [backingFieldAllowed], because it is a
@@ -282,13 +291,17 @@ internal fun PropertySpec.Builder.addAccessors(
  */
 internal class PropertyContainer(
     val needsValue: Boolean,
-    val backingFieldAllowed: Boolean,
+    val backingFieldDenial: BackingFieldDenial?,
     val isExpectContext: Boolean,
     val abstractAllowed: Boolean,
     val expectAllowed: Boolean,
     val externalAllowed: Boolean,
     val membersAllowed: Boolean,
+    val funInterface: Boolean,
 ) {
+    /** See [backingFieldDenial]. */
+    val backingFieldAllowed: Boolean get() = backingFieldDenial == null
+
     internal companion object {
         /**
          * [propertySpec]'s detached builder, which has no container and cannot be given one: it
@@ -305,12 +318,13 @@ internal class PropertyContainer(
          */
         val UNKNOWN: PropertyContainer = PropertyContainer(
             needsValue = false,
-            backingFieldAllowed = true,
             isExpectContext = false,
             abstractAllowed = true,
             expectAllowed = true,
             externalAllowed = true,
             membersAllowed = true,
+            backingFieldDenial = null,
+            funInterface = false,
         )
     }
 }
@@ -320,7 +334,8 @@ private fun Scope.propertyContainer(): PropertyContainer {
     if (this !is TypeScope) {
         return PropertyContainer(
             needsValue = true,
-            backingFieldAllowed = true,
+            backingFieldDenial = null,
+            funInterface = false,
             // [Scope.isExpectContainer], which is false here: a *file* is not an `expect` container.
             // Read through the shared predicate rather than written as `false` so that both branches
             // of this function, and every other site in the family, read one fact from one place.
@@ -344,8 +359,16 @@ private fun Scope.propertyContainer(): PropertyContainer {
         // the third container fact in this class that used to be consulted at one site only. An
         // interface holds no state, so a property there both *may* have no value and *may not* have
         // one that needs storage. Nothing inherited: an interface's companion object is a container
-        // of its own and takes all three (measured, all three frontends).
-        backingFieldAllowed = kindName != "interface",
+        // of its own and takes all three (measured, all three frontends) — and so is a value
+        // class's, which is why the second denial reads the immediate builder too.
+        backingFieldDenial = when {
+            kindName == "interface" -> BackingFieldDenial.INTERFACE
+            KModifier.VALUE in typeModifiers -> BackingFieldDenial.VALUE_CLASS
+            else -> null
+        },
+        // [KModifier.FUN] on an interface builder is what makes it a `fun interface`; KotlinPoet
+        // records the same fact as `isFunInterface` and keeps it internal.
+        funInterface = kindName == "interface" && KModifier.FUN in typeModifiers,
         // The same [TypeScope.isExpect] the line above reads, asked the other way round: an `expect`
         // property needs no value *and* may have none. Two questions, two fields, two call sites —
         // and read through [Scope.isExpectContainer], the one predicate every member of the `expect`
@@ -670,24 +693,42 @@ internal fun checkProperty(
     // `interface I { companion object { val a: Int = 1 } }` and the `by lazy` form both compile
     // clean. That is why [PropertyContainer.backingFieldAllowed] reads `kindName` and nothing
     // inherited — the exemption stops at the body, exactly as `needsValue`'s does.
-    if (!container.backingFieldAllowed) {
-        val inInterface = "$construct: '$name' is declared in an interface body, and an interface " +
-            "holds no state, so its properties have no backing field: "
-        check(init == null) {
-            inInterface + "\"property initializers in interfaces are prohibited\" on all three " +
-                "frontends. Move the value into a getter, or declare it in the interface's " +
-                "companion object."
+    container.backingFieldDenial?.let { denial ->
+        when (denial) {
+            BackingFieldDenial.INTERFACE -> {
+                val inInterface = "$construct: '$name' is declared in an interface body, and an " +
+                    "interface holds no state, so its properties have no backing field: "
+                check(init == null) {
+                    inInterface + "\"property initializers in interfaces are prohibited\" on all " +
+                        "three frontends. Move the value into a getter, or declare it in the " +
+                        "interface's companion object."
+                }
+                check(by == null) {
+                    inInterface + "\"delegated properties in interfaces are prohibited\" on all " +
+                        "three frontends. Move the delegate into a getter, or declare it in the " +
+                        "interface's companion object."
+                }
+                check(KModifier.LATEINIT !in declared) {
+                    inInterface + "\"'lateinit' modifier is not allowed on abstract properties\" " +
+                        "on all three frontends. Drop LATEINIT; an interface property is abstract, " +
+                        "and the implementing class carries the storage."
+                }
+            }
+            // The same question, the same three shapes, a different kind — and the frontends have
+            // their own two sentences for it. See [Kinds].
+            BackingFieldDenial.VALUE_CLASS -> {
+                if (by != null) valueClassHoldsNoStorage(construct, name, "a delegate", true)
+                if (init != null) valueClassHoldsNoStorage(construct, name, "an initializer", false)
+                if (KModifier.LATEINIT in declared) {
+                    valueClassHoldsNoStorage(construct, name, "LATEINIT", false)
+                }
+            }
         }
-        check(by == null) {
-            inInterface + "\"delegated properties in interfaces are prohibited\" on all three " +
-                "frontends. Move the delegate into a getter, or declare it in the " +
-                "interface's companion object."
-        }
-        check(KModifier.LATEINIT !in declared) {
-            inInterface + "\"'lateinit' modifier is not allowed on abstract properties\" on all " +
-                "three frontends. Drop LATEINIT; an interface property is abstract, and the " +
-                "implementing class carries the storage."
-        }
+    }
+    // A `fun interface` holds no *abstract* property, and a property with no accessor in an
+    // interface body is abstract whether or not the modifier is written. See [Kinds].
+    if (container.funInterface && getter == null && (KModifier.ABSTRACT in declared || by == null)) {
+        funInterfaceHoldsNoAbstractProperty(construct, name)
     }
     // A property with no initializer, no delegate and no getter renders `val x: Int`, and kotlinc
     // answers `Property must be initialized.` at file level and `Property must be initialized or be

@@ -365,6 +365,85 @@ internal fun dataClassNeedsAParameter(kindName: String): Nothing = kindRefusal(
 )
 
 /**
+ * Which classifier kind forbids a property here from having a **backing field**. See
+ * [PropertyContainer.backingFieldDenial].
+ */
+internal enum class BackingFieldDenial {
+    /** An interface holds no state; its properties are abstract. */
+    INTERFACE,
+
+    /** A value class *is* one value; a second one would have nowhere to live. */
+    VALUE_CLASS,
+}
+
+/**
+ * A `value class` wraps exactly one value, so a property of its own would need storage the class
+ * does not have. Measured, one file per row, all three frontends identical (the JVM adds
+ * *value classes without '@JvmInline' annotation are not yet supported* to every row, which is the
+ * caller's annotation to add and not this DSL's business — D37's platform rule):
+ *
+ *     value class V(val a: Int) { val p: Int = 1 }        value class cannot have properties with
+ *     value class V(val a: Int) { var p: Int = 1 }          backing fields.
+ *     value class V(val a: Int) { lateinit var p: String }
+ *     value class V(val a: Int) { val p: Int by lazy { 1 } }  value class cannot have delegated
+ *                                                              properties.
+ * and the controls, clean on all three:
+ *
+ *     value class V(val a: Int) { val p: Int get() = 1 }
+ *     value class V(val a: Int) { var p: Int get() = 1; set(v) { } }
+ *     value class V(val a: Int) { val Int.q: Int get() = 1 }
+ *     value class V(val a: Int) { fun f(): Int = 1 ; class N }
+ *     value class V(val a: Int) { companion object { val q: Int = 1 } }   — a container of its own,
+ *                                                                          exactly as an interface's
+ *
+ * The primary-constructor property parameter is untouched: it is the value, and it reaches
+ * `addConstructorParam` rather than [checkProperty].
+ */
+internal fun valueClassHoldsNoStorage(
+    construct: String,
+    name: String,
+    carries: String,
+    delegated: Boolean,
+): Nothing = kindRefusal(
+    construct,
+    "'$name' carries $carries and is declared in a `value class`, which wraps exactly one value " +
+        "and has nowhere to store a second",
+    if (delegated) {
+        "value class cannot have delegated properties"
+    } else {
+        "value class cannot have properties with backing fields"
+    },
+    "Move the value into a getter — `val`(\"$name\", …) { … } — or declare it in the value class's " +
+        "companion object, both of which a value class still holds.",
+)
+
+/**
+ * A `fun interface` has exactly one abstract member and it is the function. An abstract *property*
+ * is refused whether the modifier is written or not, because a property with no accessor in an
+ * interface body is abstract either way. Measured, all three frontends identical:
+ *
+ *     fun interface F { fun g(): Int; val p: Int }            functional interface cannot have
+ *     fun interface F { fun g(): Int; abstract val p: Int }    abstract properties.
+ *
+ * and the controls, clean on all three:
+ *
+ *     fun interface F { fun g(): Int; val p: Int get() = 1 }
+ *     fun interface F { fun g(): Int; var p: Int get() = 1; set(v) { } }
+ *     fun interface F { fun g(): Int; companion object { val q: Int = 1 } }
+ *     fun interface F { fun g(): Int; class N }
+ *     interface H { val p: Int }        — an ordinary interface's abstract property is the whole
+ *                                         point of an interface, and is untouched
+ */
+internal fun funInterfaceHoldsNoAbstractProperty(construct: String, name: String): Nothing = kindRefusal(
+    construct,
+    "'$name' has no accessor and is declared in a `fun interface`, whose one abstract member is " +
+        "its function",
+    "functional interface cannot have abstract properties",
+    "Give '$name' a getter, declare it in the interface's companion object, or drop the FUN " +
+        "modifier to make this an ordinary interface.",
+)
+
+/**
  * Whether a classifier may be declared *inside* this one.
  *
  * An `inner class` is the one container that holds no nested classifier at all, and the exception is
