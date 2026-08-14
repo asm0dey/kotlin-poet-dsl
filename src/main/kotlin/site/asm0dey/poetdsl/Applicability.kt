@@ -175,8 +175,8 @@ internal enum class DeclarationForm(
     ),
     ;
 
-    /** See [allowed]. */
-    val denied: Set<KModifier> get() = KModifier.entries.toSet() - allowed
+    /** See [allowed]. Computed once per form rather than per check — this runs on every declaration. */
+    val denied: Set<KModifier> = KModifier.entries.toSet() - allowed
 }
 
 /**
@@ -198,9 +198,10 @@ internal fun declarationForm(kindName: String): DeclarationForm = when (kindName
  * 'y'*, because that is what the frontends print, and in this project the quoted sentence is the
  * currency:
  *
- * - `FUN` on anything but an interface is a **syntax error** — `fun class M` and `fun fun f()` are
- *   both *function declaration must have a name*, because `fun` starts a function declaration and
- *   the parser never reaches the rest;
+ * - `FUN` on a class, an object or a function is a **syntax error** — `fun class M` and `fun fun f()`
+ *   are both *function declaration must have a name*, because `fun` starts a function declaration
+ *   and the parser never reaches the rest — and on a **constructor** it renders a function *named*
+ *   `constructor`, which is *function 'constructor' without a body must be abstract*;
  * - `ENUM` on a constructor is *syntax error: 'class' keyword is expected after 'enum'*;
  * - `INLINE` on a property is KotlinPoet's own refusal, and a render gap rather than a language
  *   rule.

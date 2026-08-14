@@ -1043,12 +1043,18 @@ internal fun buildFun(
                     // renders `public fun f(): Int`, which is a signature and is valid. Refusing it
                     // here would be a refusal of output some target accepts, which is the direction
                     // Global Constraint 26's second half forbids.
-                    val bodyOmitted = parent == null ||
-                        KModifier.ABSTRACT in declaredModifiers ||
+                    val bodyOmitted = KModifier.ABSTRACT in declaredModifiers ||
                         KModifier.EXPECT in declaredModifiers ||
                         KModifier.EXTERNAL in declaredModifiers ||
-                        parent.isExpectContainer ||
-                        parent.isExternalContainer
+                        parent?.isExpectContainer == true ||
+                        parent?.isExternalContainer == true ||
+                        // Last, and that ordering is about *testability* rather than style: written
+                        // first, `parent == null ||` smart-casts `parent` for every term after it,
+                        // so deleting the term stops the file compiling — and a mutation test reads
+                        // a compile failure as a passing suite, which is a guard nothing can
+                        // falsify. Last, the safe calls above are genuinely necessary, the term is
+                        // deletable, and deleting it fails two tests.
+                        parent == null
                     if (!bodyOmitted) missingReturnStatement(name, inferred)
                 }
                 // The `@return` half of the receiverKdoc check above. `inferred == null` is the
