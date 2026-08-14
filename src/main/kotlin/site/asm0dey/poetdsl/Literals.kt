@@ -60,6 +60,39 @@ private fun escapeCharLiteral(c: Char): String = when (c) {
 public val String.literal: Expr get() = Expr(CodeBlock.of("%S", this), STRING)
 public val String.lit: Expr get() = literal
 
+/**
+ * `[a, b, c]` — a Kotlin collection literal, joining a **computed** list of expressions into one
+ * (deviation D28).
+ *
+ * The shape it exists for is an annotation argument built from a model, where the elements are
+ * derived rather than written out:
+ *
+ *     val nodes = names.map { expression("%T(%L)", nan, it.lit) }
+ *     annotation(neg, "attributeNodes" to arrayLiteral(nodes))
+ *
+ * Without it that call needs a hand-built format string — `nodes.joinToString(",·") { "%L" }` and a
+ * spread — which leaks exactly the KotlinPoet formatting the DSL exists to hide. The elements' own
+ * `%T`/`%M` placeholders survive, so imports still resolve.
+ *
+ * **Not** named `arrayOf`, deliberately: that is a stdlib function every caller has imported by
+ * default, and shadowing it inside a generator would be a trap in precisely the context this helper
+ * is used in. There is no bare comma-joined sibling either — every variadic position in this DSL
+ * (`call`, `annotation`, `superclass`, `` `this` ``) takes a `vararg Expr`, so a computed list
+ * already reaches them as `*list.toTypedArray()`; the bracketed form is the one with no such route.
+ *
+ * The scopes of every element are carried through, exactly as `call` carries its arguments' — so a
+ * joined list of literals stays a compile-time constant that an annotation argument accepts, and one
+ * built from handles is rejected there by the same check any other handle would be.
+ */
+public fun arrayLiteral(elements: List<Expr>): Expr =
+    Expr(
+        CodeBlock.of("[%L]", argList(elements)),
+        usedScopes = elements.flatMapTo(mutableSetOf()) { it.usedScopes },
+    )
+
+/** Alias of [arrayLiteral]. */
+public fun arrayLit(elements: List<Expr>): Expr = arrayLiteral(elements)
+
 /** The `null` literal. */
 public val nullLiteral: Expr get() = Expr(CodeBlock.of("null"))
 public val nul: Expr get() = nullLiteral

@@ -2,6 +2,7 @@
 
 package site.asm0dey.poetdsl
 
+import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.PropertySpec
@@ -182,5 +183,49 @@ class LiteralsTest {
     @Test
     fun `nullable sugar`() {
         assertEquals("kotlin.String?", STRING.nullable.toString())
+    }
+
+    /**
+     * Deviation D28: a computed `List<Expr>` becomes one bracketed expression, with the
+     * non-breaking separator every other joined list in this DSL uses.
+     */
+    @Test
+    fun `array literal joins a computed list`() {
+        assertEquals("[1, 2, 3]", arrayLiteral(listOf(1.lit, 2.lit, 3.lit)).code.toString())
+        assertEquals("[1]", arrayLit(listOf(1.lit)).code.toString())
+        assertEquals("[]", arrayLiteral(emptyList()).code.toString())
+    }
+
+    /**
+     * The separator is KotlinPoet's non-breaking `·`, not a plain space: a joined list far past the
+     * 100-column wrap limit still renders on one line, where a breakable space would have been torn
+     * apart mid-literal.
+     */
+    @Test
+    fun `the array literal separator does not wrap`() {
+        val long = arrayLiteral((1..20).map { "element$it".lit })
+        val out = file("com.example", "Api") { `fun`("f") { +long } }.toString()
+        assertTrue(out.lines().any { """["element1",""" in it && """"element20"]""" in it }, out)
+    }
+
+    /** `%T`/`%M` in the elements survive the join, so imports still resolve at render time. */
+    @Test
+    fun `array literal keeps placeholders`() {
+        val nan = ClassName("com.example", "Node")
+        val joined = arrayLiteral(listOf("a", "b").map { expression("%T(%L)", nan, it.lit) })
+        assertEquals("""[com.example.Node("a"), com.example.Node("b")]""", joined.code.toString())
+    }
+
+    /**
+     * The elements' scopes are carried through, exactly as `call` carries its arguments' — so a
+     * joined list is judged where it is emitted, and a list of literals carries none at all, which
+     * is what keeps it usable as an annotation argument (Task 21's B1 guard).
+     */
+    @Test
+    fun `array literal carries its elements' scopes and nothing more`() {
+        lateinit var handle: Expr
+        stmts { handle = `val`("x", init = 1.lit) }
+        assertEquals(handle.usedScopes, arrayLiteral(listOf(1.lit, handle)).usedScopes)
+        assertEquals(emptySet(), arrayLiteral(listOf(1.lit, "a".lit)).usedScopes)
     }
 }

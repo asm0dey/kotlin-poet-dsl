@@ -3,7 +3,7 @@ package site.asm0dey.poetdsl
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.MemberName
 
-internal fun argList(args: Array<out Expr>): CodeBlock {
+internal fun argList(args: List<Expr>): CodeBlock {
     val builder = CodeBlock.builder()
     args.forEachIndexed { index, arg ->
         if (index > 0) builder.add(",·")
@@ -11,6 +11,9 @@ internal fun argList(args: Array<out Expr>): CodeBlock {
     }
     return builder.build()
 }
+
+/** The `vararg` callers' shape; one implementation, so the separator is written down once. */
+internal fun argList(args: Array<out Expr>): CodeBlock = argList(args.asList())
 
 private fun scopesOf(receiver: Expr?, args: Array<out Expr>): Set<ScopeId> =
     buildSet {
