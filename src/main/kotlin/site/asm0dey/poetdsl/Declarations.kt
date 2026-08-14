@@ -729,7 +729,9 @@ public fun propertySpec(
     check(init == null || by == null) {
         "propertySpec: '$name' cannot have both an initializer and a delegate."
     }
-    checkProperty("`val`", name, mutable = false, init, by, typeVariables, receiver, setter = null, getter = getter)
+    // "propertySpec", not `` `val` ``: Global Constraint 26 wants the construct the caller actually
+    // wrote, and the caller wrote this one — the init/by check just above says so too.
+    checkProperty("propertySpec", name, mutable = false, init, by, typeVariables, receiver, setter = null, getter)
     val spec = PropertySpec.builder(name, type, modifiers.toList())
     spec.addTypeVariables(typeVariables)
     receiver?.let { spec.receiver(it) }

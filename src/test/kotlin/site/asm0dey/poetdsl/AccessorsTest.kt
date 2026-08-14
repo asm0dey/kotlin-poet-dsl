@@ -562,11 +562,23 @@ class AccessorsTest {
                 typeVariables = listOf(t),
             ) { ret(expression("this").call("get", 1.lit)) }.toString(),
         )
+        // Global Constraint 26: the message names the construct the caller wrote. `propertySpec`
+        // used to hand `` `val` `` to the shared guard, so its own init/by check said
+        // `propertySpec: …` while every guard one line below it said `` `val`: … ``.
         assertEquals(
-            "`val`: 'stray' is an extension property, which has no backing field, so it needs a " +
-                "getter (or a delegate).",
+            "propertySpec: 'stray' is an extension property, which has no backing field, so it " +
+                "needs a getter (or a delegate).",
             assertFailsWith<IllegalStateException> {
                 propertySpec(name = "stray", type = INT, receiver = STRING)
+            }.message,
+        )
+        assertEquals(
+            "propertySpec: type parameter \"T\" of 'stray' is not used in the receiver type. " +
+                "Kotlin allows a property's type parameter only where its receiver type uses it.",
+            assertFailsWith<IllegalStateException> {
+                propertySpec(name = "stray", type = INT, receiver = STRING, typeVariables = listOf(t)) {
+                    ret(0.lit)
+                }
             }.message,
         )
     }
