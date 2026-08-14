@@ -249,7 +249,7 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     // constructor(p: Long) }` is clean on all three frontends and *adding* the delegation call is
     // "explicit delegation call for constructor of expected class is prohibited" (measured). Without
     // the exemption the two halves of this rule would make the shape unspellable. See [Expect].
-    check(!hasUndelegatedSecondaryCtor || isExpect) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
+    check(!hasUndelegatedSecondaryCtor || isExpectContainer) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
     // A `val`/`var` parameter *is* a property — the [PropertySpec] built below, with a `%N`
     // initializer — so it is the same member the `expect` rule already refuses, reached through the
     // one property-construction site that never goes near [checkProperty]. Refused here, before
@@ -258,7 +258,7 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     // Constraint 26's forbidden type, naming neither construct), and one level down it answers not
     // at all — `expect class E { class N(val x: Int) }` rendered, and all three frontends call it
     // *expected class constructor cannot have a property parameter*. See [Expect].
-    if (kind != null && isExpect) {
+    if (kind != null && isExpectContainer) {
         expectRefusal(
             "constructorParam",
             "'$name' declares a `${if (kind == ParamKind.VAR) "var" else "val"}` property on the " +
@@ -1011,7 +1011,7 @@ internal fun TypeScope.addSecondaryConstructor(spec: FunSpec) {
     // reason: an `expect` class's secondary constructor must **not** delegate, so requiring it here
     // would refuse `expect class E(x: Int) { constructor(p: Long) }`, which is clean on all three
     // frontends, and there would be no other spelling — the delegating form is refused in [buildFun].
-    check(!hasCtor || delegatesToPrimary || isExpect) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
+    check(!hasCtor || delegatesToPrimary || isExpectContainer) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
     if (!delegatesToPrimary) hasUndelegatedSecondaryCtor = true
     // The self-delegation cycle [TypeScope.finish] rejects is counted there, off `builder.funSpecs`
     // — not here — so a sibling constructor spliced in as a raw `FunSpec` (bypassing this function

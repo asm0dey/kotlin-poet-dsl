@@ -327,9 +327,9 @@ private fun Scope.propertyContainer(): PropertyContainer {
     }
     val typeModifiers = builder.modifiers
     return PropertyContainer(
-        // [TypeScope.isExpect], not `EXPECT in typeModifiers`: the modifier sits on the *outermost*
+        // [Scope.isExpectContainer] — [TypeScope.isExpect], not `EXPECT in typeModifiers`: the modifier sits on the *outermost*
         // `expect class` only, and every classifier nested inside one inherits the rule.
-        needsValue = !(kindName == "interface" || isExpect),
+        needsValue = !(kindName == "interface" || isExpectContainer),
         // The same `kindName == "interface"` the line above reads, asked the other way round — and
         // the third container fact in this class that used to be consulted at one site only. An
         // interface holds no state, so a property there both *may* have no value and *may not* have
