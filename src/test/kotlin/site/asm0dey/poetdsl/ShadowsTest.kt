@@ -191,6 +191,92 @@ class ShadowsTest {
         )
     }
 
+    /**
+     * D29's two constructs have the identical gap, and it is the worse one to leave open: an
+     * `init { }` written inside a member body would attach an initializer block to the enclosing
+     * type, running code the author meant to run inside the function.
+     */
+    @Test
+    fun `init in a function body is a compile error naming the shadow`() {
+        val result = compileDsl(
+            """
+            fun build() = file("com.example", "A") {
+                `class`("C") {
+                    `fun`("f") {
+                        `init` { +call("println") }
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+        assertTrue(
+            "'fun BlockScope.init(body: BlockScope.() -> Unit): Nothing' is deprecated" in result.messages,
+            result.messages,
+        )
+        assertTrue("`init` is only valid inside a class or object body" in result.messages, result.messages)
+    }
+
+    /** Both companion overloads are shadowed, so neither form falls through to the context function. */
+    @Test
+    fun `companionObject in a function body is a compile error naming the shadow`() {
+        for (call in listOf("companionObject { }", """companionObject("Factory") { }""")) {
+            val result = compileDsl(
+                """
+                fun build() = file("com.example", "A") {
+                    `class`("C") {
+                        `fun`("f") {
+                            $call
+                        }
+                    }
+                }
+                """.trimIndent(),
+            )
+            assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+            assertTrue(
+                "companionObject is only valid inside a class or interface body" in result.messages,
+                result.messages,
+            )
+        }
+    }
+
+    /** The control for D29's pair: the same calls one scope out are the intended use. */
+    @Test
+    fun `init and companionObject in a type body compile`() {
+        val result = compileDsl(
+            """
+            fun build() = file("com.example", "A") {
+                `class`("C") {
+                    `init` { +call("println") }
+                    companionObject("Factory") { }
+                }
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+    }
+
+    /**
+     * `init` is a *soft* keyword: it is a keyword only in a class body's declaration position, so
+     * the construct needs no backticks and both spellings resolve to the same declaration. Written
+     * without them it is the one construct in this DSL whose name is a Kotlin keyword and yet is
+     * spelled plainly, so both forms are pinned.
+     */
+    @Test
+    fun `init compiles with and without backticks`() {
+        val result = compileDsl(
+            """
+            fun build() = file("com.example", "A") {
+                `class`("C") {
+                    init { +call("println") }
+                    `init` { +call("println") }
+                }
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+    }
+
     /** The control for both: the same two calls one scope out are the intended use. */
     @Test
     fun `superclass and superinterface in a type body compile`() {

@@ -83,7 +83,10 @@ private fun Scope.propertyOf(
         "A property named \"$name\" is already declared in this scope."
     }
     declaredPropertyNames += name
-    return PropertySpec.builder(names.unique(name), type, modifiers.toList())
+    // `uniqueMemberName`, not `names.unique`: a property is visible in every member body, so it is
+    // declared at the member level — but its own initializer is evaluated where a plain primary
+    // constructor parameter is also in scope, so it still has to step over one (D30).
+    return PropertySpec.builder(uniqueMemberName(name), type, modifiers.toList())
         .mutable(mutable)
         .apply {
             init?.let { initializer("%L", it.code) }

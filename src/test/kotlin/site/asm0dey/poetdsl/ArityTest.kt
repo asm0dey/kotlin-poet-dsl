@@ -142,12 +142,12 @@ class ArityTest {
     fun `aliases carry the list form`() {
         assertEquals(
             file("com.example", "A") {
-                `class`("C", params(9)) { ps -> `fun`("f") { +ps[8] } }
+                `class`("C", params(9)) { ps -> `init` { +ps[8] } }
                 `class`("D") { `constructor`(params(9)) { ps -> +ps[8] } }
                 `fun`("g", params(9)) { ps -> +ps[8] }
             }.toString(),
             file("com.example", "A") {
-                klass("C", params(9)) { ps -> `fun`("f") { +ps[8] } }
+                klass("C", params(9)) { ps -> `init` { +ps[8] } }
                 klass("D") { ctor(params(9)) { ps -> +ps[8] } }
                 func("g", params(9)) { ps -> +ps[8] }
             }.toString(),
@@ -190,29 +190,34 @@ class ArityTest {
     /**
      * The same index-based binding D1 forced on `` `fun` ``, on the construct that got it last:
      * the last handle is used first, so an `args[0]`-everywhere generator fails here.
+     *
+     * The handles are used in an `init { }` block rather than a member body, because `params`
+     * builds *plain* parameters — no `val`/`var`, so no property — and D30 measured that those are
+     * unresolvable in a member body. This is where they *are* resolvable, so the rendered class is
+     * Kotlin as well as evidence of the binding order.
      */
     @Test
     fun `class arities 1 through 8 bind every handle in order`() {
         val p = params(8)
         val out = file("com.example", "Api") {
             `class`("C0") { }
-            `class`("C1", p[0]) { a1 -> `fun`("f") { +call("use", a1) } }
-            `class`("C2", p[0], p[1]) { a1, a2 -> `fun`("f") { +call("use", a2, a1) } }
-            `class`("C3", p[0], p[1], p[2]) { a1, a2, a3 -> `fun`("f") { +call("use", a3, a2, a1) } }
+            `class`("C1", p[0]) { a1 -> `init` { +call("use", a1) } }
+            `class`("C2", p[0], p[1]) { a1, a2 -> `init` { +call("use", a2, a1) } }
+            `class`("C3", p[0], p[1], p[2]) { a1, a2, a3 -> `init` { +call("use", a3, a2, a1) } }
             `class`("C4", p[0], p[1], p[2], p[3]) { a1, a2, a3, a4 ->
-                `fun`("f") { +call("use", a4, a3, a2, a1) }
+                `init` { +call("use", a4, a3, a2, a1) }
             }
             `class`("C5", p[0], p[1], p[2], p[3], p[4]) { a1, a2, a3, a4, a5 ->
-                `fun`("f") { +call("use", a5, a4, a3, a2, a1) }
+                `init` { +call("use", a5, a4, a3, a2, a1) }
             }
             `class`("C6", p[0], p[1], p[2], p[3], p[4], p[5]) { a1, a2, a3, a4, a5, a6 ->
-                `fun`("f") { +call("use", a6, a5, a4, a3, a2, a1) }
+                `init` { +call("use", a6, a5, a4, a3, a2, a1) }
             }
             `class`("C7", p[0], p[1], p[2], p[3], p[4], p[5], p[6]) { a1, a2, a3, a4, a5, a6, a7 ->
-                `fun`("f") { +call("use", a7, a6, a5, a4, a3, a2, a1) }
+                `init` { +call("use", a7, a6, a5, a4, a3, a2, a1) }
             }
             `class`("C8", p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]) { a1, a2, a3, a4, a5, a6, a7, a8 ->
-                `fun`("f") { +call("use", a8, a7, a6, a5, a4, a3, a2, a1) }
+                `init` { +call("use", a8, a7, a6, a5, a4, a3, a2, a1) }
             }
         }.toString()
         assertTrue("public class C0\n" in out, out)

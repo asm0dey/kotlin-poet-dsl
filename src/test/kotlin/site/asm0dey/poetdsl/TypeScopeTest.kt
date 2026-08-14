@@ -3,9 +3,11 @@ package site.asm0dey.poetdsl
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.DATA
 import com.squareup.kotlinpoet.KModifier.INTERNAL
 import com.squareup.kotlinpoet.KModifier.SEALED
+import com.squareup.kotlinpoet.LONG
 import com.squareup.kotlinpoet.STRING
 import com.tschuchort.compiletesting.KotlinCompilation
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
@@ -532,6 +534,95 @@ class TypeScopeTest {
             rendered,
         )
         assertCompiles(rendered)
+    }
+
+    // --- D30: what a plain primary-constructor parameter is visible to ------------------------
+
+    /**
+     * Deviation D30. A **plain** primary-constructor parameter — no `val`/`var`, so no property —
+     * is unresolvable in a member body, so a member parameter of the same name shadows nothing and
+     * must not be renamed against it. A `val`/`var` parameter *is* a property, is visible in every
+     * member body, and keeps renaming: that is ADR 0009's cross-construct case, and the invariant
+     * that nothing is ever qualified with `this.` depends on it.
+     *
+     * Both halves in one class, so the split is pinned by the same rendered output.
+     */
+    @Test
+    fun `a member parameter renames against a property parameter but not a plain one`() {
+        val rendered = file("com.example", "User") {
+            `class`("User", param(VAL, "id", LONG), param(null, "seed", INT)) { _, _ ->
+                `fun`("withId", param("id", LONG)) { p -> +call("println", p) }
+                `fun`("withSeed", param("seed", INT)) { p -> +call("println", p) }
+            }
+        }.toString()
+        assertTrue("public fun withId(id2: Long)" in rendered, rendered)
+        assertTrue("public fun withSeed(seed: Int)" in rendered, rendered)
+        assertCompiles(rendered)
+    }
+
+    /** The measurement D30 rests on: a plain parameter really is unresolvable in a member body. */
+    @Test
+    fun `kotlinc cannot resolve a plain constructor parameter in a member body`() {
+        val result = compile("class A(x: Int) { fun f() = x }")
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+        assertTrue("Unresolved reference 'x'" in result.messages, result.messages)
+    }
+
+    /**
+     * The use side of the same split, answered by ADR 0008 with no change to `checkOwned`: a plain
+     * parameter's handle belongs to the initializer level nested inside the type, which encloses an
+     * `init { }` block but not a member body. So the DSL refuses to render the unresolved name
+     * rather than emitting Kotlin that does not compile (Global Constraint 26).
+     */
+    @Test
+    fun `a plain parameter handle is rejected in a member body`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "User") {
+                `class`("User", param(null, "seed", INT)) { seed ->
+                    `fun`("f") { +call("println", seed) }
+                }
+            }
+        }
+        assertEquals(
+            "Handle from scope 'the primary constructor's plain parameters' does not enclose the " +
+                "current scope 'fun(f)'.",
+            failure.message,
+        )
+    }
+
+    /** A `val` parameter is a property, so the same use in the same place is accepted. */
+    @Test
+    fun `a property parameter handle is accepted in a member body`() {
+        val rendered = file("com.example", "User") {
+            `class`("User", param(VAL, "id", LONG)) { id ->
+                `fun`("f") { +call("println", id) }
+            }
+        }.toString()
+        assertTrue("println(id)" in rendered, rendered)
+        assertCompiles(rendered)
+    }
+
+    /**
+     * A property still steps over a plain parameter, in both writing orders: the two names would be
+     * distinct declarations, but every mention of the property inside an initializer would resolve
+     * to the parameter instead.
+     */
+    @Test
+    fun `a property and a plain parameter still uniquify against each other`() {
+        val paramFirst = file("com.example", "A") {
+            `class`("A", param(null, "seed", INT)) { _ -> `val`("seed", INT, init = 1.lit) }
+        }.toString()
+        assertTrue("public val seed2: Int = 1" in paramFirst, paramFirst)
+
+        val propertyFirst = file("com.example", "B") {
+            `class`("B") {
+                `val`("seed", INT, init = 1.lit)
+                constructorParam(null, "seed", INT)
+            }
+        }.toString()
+        assertTrue("seed2: Int," in propertyFirst, propertyFirst)
+        assertCompiles(paramFirst)
+        assertCompiles(propertyFirst)
     }
 
     // --- typeSpec ---------------------------------------------------------------------------

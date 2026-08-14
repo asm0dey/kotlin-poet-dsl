@@ -164,7 +164,13 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     // names both constructs. A secondary that *does* delegate is fine here — that is D25.
     check(!hasUndelegatedSecondaryCtor) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
     declaredConstructorParamNames += name
-    val unique = names.unique(name)
+    // D30's split, in one line. A `val`/`var` parameter *is* a property: it is visible in every
+    // member body, so it is declared at the member level and a member parameter of the same name
+    // still renames against it (ADR 0009's cross-construct case). A plain parameter is visible only
+    // in property initializers and `init { }` blocks, so it is declared one level in — where it
+    // still steps over every member name, but nothing declared against the member level steps over
+    // it. See [TypeScope.initializerNames].
+    val unique = if (kind == null) initializerNames.unique(name) else uniqueMemberName(name)
     // Rebuilt only when the name actually moved: `toBuilder` carries the annotations — and the
     // `ParamKind` tag — across, but an untouched spec is the one the caller passed.
     val param = if (unique == name) spec else spec.toBuilder(name = unique).build()
@@ -180,12 +186,17 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     }
     // A bare parameter (kind == null, no property) is still immutable — Kotlin has no `var`
     // constructor parameter without a property — so it is `false`, same as ParamKind.VAL.
+    //
+    // The owner is the other half of D30: a `val`/`var` parameter is a property of this type, so its
+    // handle belongs to the type's own scope and works in every member body; a plain one belongs to
+    // the initializer scope nested inside it, so ADR 0008's existing check accepts it in an
+    // `init { }` block and rejects it in a member body, where the name it renders is unresolvable.
     return Expr(
         CodeBlock.of("%L", unique),
         type,
         Prec.ATOM,
         unique,
-        id,
+        if (kind == null) initializerId else id,
         mutable = kind == ParamKind.VAR,
     )
 }

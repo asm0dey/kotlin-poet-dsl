@@ -478,6 +478,77 @@ private val SUPERTYPES: List<Overload> = listOf(
     ),
 )
 
+/**
+ * D29's `` `init` `` and `companionObject`. Like [SUPERTYPES], generated here for the shadows: both
+ * are `TypeScope`-only, and `context(t: TypeScope)` does not stop a call in a member body — the
+ * enclosing type's context parameter is still in scope there, so `` `fun`("f") { `init` { … } } ``
+ * would resolve and silently attach an initializer block to the enclosing type. Neither goes through
+ * the six-variant matrix: an `init` block takes no annotations or modifiers in Kotlin at all, and a
+ * companion object takes none in practice, so the companion's name is the only axis either has.
+ *
+ * `init` is a *soft* keyword — a keyword only in a class body's declaration position — so the
+ * function is declared without backticks and calls read as `` `init` { } `` or `init { }`
+ * interchangeably. The bodies are a single call into `TypeBody.kt`, which keeps the guards.
+ */
+private val TYPE_BODY: List<Overload> = listOf(
+    Overload(
+        doc = """
+            |`init { … }` — an initializer block, run as part of every constructor.
+            |
+            |The place a generated class validates its constructor arguments. The block sees this
+            |type's properties and *all* of its primary-constructor parameters, including the plain
+            |ones that have no property and are therefore invisible in a member body (D30).
+            |
+            |Kotlin allows no `return` in an initializer block; a returning one is rejected rather
+            |than rendered. A class or an object may have several — they run in declaration order —
+            |and an interface may have none.
+        """.trimMargin(),
+        context = "context(t: TypeScope)",
+        name = "init",
+        params = listOf("body: BlockScope.() -> Unit"),
+        returns = null,
+        body = "t.addInitializerBlock(body)",
+        shadow = "`init` is only valid inside a class or object body. Written in a block it would " +
+            "silently attach an initializer block to the enclosing type.",
+    ),
+    Overload(
+        doc = """
+            |`companion object { … }` — the anonymous companion object, referred to as `Companion`.
+            |
+            |Where a generated class keeps its factory functions and its constants. The body is an
+            |ordinary type body, so `` `fun` ``, `` `val` `` and the rest read inside it exactly as
+            |they do in the class. A companion object is a *nested* object: it cannot see the
+            |enclosing type's instance members, and its own names are uniquified independently.
+            |
+            |One per type, and only in a class or an interface — an object cannot have one.
+        """.trimMargin(),
+        context = "context(t: TypeScope)",
+        name = "companionObject",
+        params = listOf("body: TypeScope.() -> Unit"),
+        returns = null,
+        body = "t.addCompanionObject(null, body)",
+        shadow = "companionObject is only valid inside a class or interface body. Written in a " +
+            "block it would silently attach a companion object to the enclosing type.",
+    ),
+    Overload(
+        doc = """
+            |`companion object Name { … }` — the named companion object.
+            |
+            |The same construct as the anonymous [companionObject], with the name callers refer to
+            |it by (`User.Factory.of(…)`) instead of the implicit `Companion`. A separate overload
+            |rather than a defaulted parameter, so both forms are distinguished by presence, as
+            |every other pair in this DSL is.
+        """.trimMargin(),
+        context = "context(t: TypeScope)",
+        name = "companionObject",
+        params = listOf("name: String", "body: TypeScope.() -> Unit"),
+        returns = null,
+        body = "t.addCompanionObject(name, body)",
+        shadow = "companionObject is only valid inside a class or interface body. Written in a " +
+            "block it would silently attach a companion object to the enclosing type.",
+    ),
+)
+
 // --- files ----------------------------------------------------------------------------------------
 
 private val IMPORTS = listOf(
@@ -517,7 +588,8 @@ public open class ArityGeneratorTask : DefaultTask() {
         val declarations = TYPES.flatMap { it.overloads() } +
             BINDINGS.flatMap { it.overloads() } +
             ctorParamOverloads() +
-            SUPERTYPES
+            SUPERTYPES +
+            TYPE_BODY
         val funs = funOverloads()
         val ctors = ctorOverloads()
 

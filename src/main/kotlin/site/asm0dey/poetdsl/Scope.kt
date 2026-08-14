@@ -82,6 +82,43 @@ public class TypeScope internal constructor(
      */
     internal var hasSuperclass: Boolean = false
 
+    /**
+     * Where a **plain** primary-constructor parameter — `param(null, …)` / `constructorParam(null, …)`,
+     * no `val`/`var`, so no property — lives, on both axes at once. Deviation D30.
+     *
+     * A plain parameter is in scope in a property initializer and in an `init { }` block, and
+     * nowhere else: `class A(x: Int) { fun f() = x }` is `e: Unresolved reference 'x'.` (measured).
+     * The type's own [names]/[id] are therefore the *member* level — properties, `val`/`var`
+     * parameters, member bodies — and this pair is a child level nested inside it, holding what only
+     * initializers can see:
+     *
+     * - [initializerNames] is a child [NameScope], so a member function's parameters (declared
+     *   against [names]`.child()`) no longer rename against a plain parameter they cannot shadow,
+     *   while a property or a `val`/`var` parameter still steps over one — see
+     *   [NameScope.uniqueAvoiding] for why that direction still has to hold.
+     * - [initializerId] is a child [ScopeId], so ADR 0008 answers the *use* side with no change to
+     *   [checkOwned]: a plain parameter's handle encloses an `init { }` block, whose [BlockScope] is
+     *   built as its child, and does not enclose a member body, whose [BlockScope] is a child of
+     *   [id] — so `` `fun`("f") { +seed } `` is rejected instead of rendering an unresolved name.
+     *   A `val`/`var` parameter is a property and keeps [id] itself, so it stays usable everywhere.
+     */
+    internal val initializerNames: NameScope = names.child()
+
+    /**
+     * See [initializerNames]. The label is what [checkOwned] prints when a plain parameter's handle
+     * is used in a member body — "Handle from scope 'the primary constructor's plain parameters'
+     * does not enclose the current scope 'fun(f)'." — so it names the level rather than the type.
+     */
+    internal val initializerId: ScopeId = id.child("the primary constructor's plain parameters")
+
+    /**
+     * Whether a `companionObject` was already declared. Kotlin allows one per type, and KotlinPoet
+     * agrees ("Multiple companion objects are present but only one is allowed.") — but only from
+     * `TypeSpec.Builder.build`, once the whole type is assembled and with no idea which construct
+     * wrote what. Deviation D29.
+     */
+    internal var hasCompanionObject: Boolean = false
+
     internal val ctor: FunSpec.Builder by lazy(LazyThreadSafetyMode.NONE) { FunSpec.constructorBuilder() }
     internal var hasCtor: Boolean = false
 

@@ -38,13 +38,32 @@ internal class NameScope(private val parent: NameScope?) {
     }
 
     /** Returns [base] if free, otherwise `base2`, `base3`, … Registers the result. */
-    fun unique(base: String): String {
-        if (!isTaken(base)) {
+    fun unique(base: String): String = uniqueAvoiding(base, null)
+
+    /**
+     * [unique], additionally stepping over the names taken in [also] — a scope this one does *not*
+     * chain to, so `isTaken` would never see them.
+     *
+     * The one caller is D30's split of [TypeScope]'s names: a plain primary-constructor parameter
+     * lives in a child scope, visible in initializers and `init { }` blocks but not in a member
+     * body, and a property declared in the parent still has to step over it — `class A(x: Int) {
+     * val x = … }` compiles, but every mention of `x` in an initializer would then resolve to the
+     * parameter rather than to the property, and ADR 0009's invariant is that nothing is ever
+     * qualified with `this.`. Registered in **this** scope, not in [also], so the name stays
+     * visible to member bodies.
+     *
+     * A separately named function rather than a defaulted parameter or an overload: `::unique` is
+     * used as a callable reference (`Lambdas.kt`), and both alternatives change what that resolves
+     * to.
+     */
+    fun uniqueAvoiding(base: String, also: NameScope?): String {
+        fun taken(name: String): Boolean = isTaken(name) || also?.isTaken(name) == true
+        if (!taken(base)) {
             declare(base)
             return base
         }
         var suffix = 2
-        while (isTaken("$base$suffix")) suffix++
+        while (taken("$base$suffix")) suffix++
         val name = "$base$suffix"
         declare(name)
         return name
@@ -52,6 +71,18 @@ internal class NameScope(private val parent: NameScope?) {
 
     fun child(): NameScope = NameScope(this)
 }
+
+/**
+ * The name a **member** declared in this scope is rendered under: unique among everything a member
+ * body can see, and — in a type — also stepping over the plain primary-constructor parameters that
+ * only initializers can see (D30, [TypeScope.initializerNames]).
+ *
+ * Registered at the member level, so what is declared here stays visible to member bodies and to
+ * initializers alike. A file or block scope has no second level, so this is plain [NameScope.unique]
+ * there.
+ */
+internal fun Scope.uniqueMemberName(base: String): String =
+    names.uniqueAvoiding(base, (this as? TypeScope)?.initializerNames)
 
 /**
  * Best-effort English singular, for loop-variable defaults. Falls back to `item`.
