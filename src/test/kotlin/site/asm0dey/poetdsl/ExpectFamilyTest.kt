@@ -244,6 +244,18 @@ class ExpectFamilyTest {
               public value class V(
                 public val y: Int,
               )
+
+              public class Deep {
+                public annotation class M(
+                  public val z: Int,
+                )
+              }
+
+              public companion object {
+                public value class W(
+                  public val w: Int,
+                )
+              }
             }
 
             """.trimIndent(),
@@ -251,6 +263,11 @@ class ExpectFamilyTest {
                 `class`(EXPECT, "E") {
                     `class`(ANNOTATION, "N") { constructorParam(ParamKind.VAL, "x", INT) }
                     `class`(VALUE, "V") { constructorParam(ParamKind.VAL, "y", INT) }
+                    // Two levels down and inside the companion object, because the exemption reads
+                    // the immediate builder and the *refusal* it sits inside reads a fact inherited
+                    // to every depth — so both depths are controls, not one.
+                    `class`("Deep") { `class`(ANNOTATION, "M") { constructorParam(ParamKind.VAL, "z", INT) } }
+                    companionObject { `class`(VALUE, "W") { constructorParam(ParamKind.VAL, "w", INT) } }
                 }
             }.toString(),
         )
