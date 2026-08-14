@@ -4,9 +4,11 @@ import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.EXPECT
 import com.squareup.kotlinpoet.KModifier.LATEINIT
 import com.squareup.kotlinpoet.STRING
+import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 /**
  * An `expect` property is a **signature**: it carries no initializer, no delegate, no accessor body
@@ -38,6 +40,7 @@ import kotlin.test.assertFailsWith
  * The first of those is D36's own table, row 2 — measured a round ago as an error and rendered by
  * this DSL ever since.
  */
+@OptIn(ExperimentalCompilerApi::class)
 class ExpectSignatureTest {
     private val expected =
         "is an `expect` declaration — by its own EXPECT modifier, or by the `expect` type it is " +
@@ -140,6 +143,33 @@ class ExpectSignatureTest {
             }.message,
         )
         assertEquals("val x: kotlin.Int = 1\n", propertySpec(name = "x", type = INT, init = 1.lit).toString())
+    }
+
+    /**
+     * The renders the guard now refuses, handed to kotlinc — the exact strings this DSL produced for
+     * each of them before this round.
+     *
+     * The assertion is on **messages** and not on the exit code, because an `expect` compilation in a
+     * single module always ends in `COMPILATION_ERROR` on the missing `actual` alone (D36), so an
+     * exit code would prove nothing here. Each row asserts the diagnostic that names the rule.
+     */
+    @Test
+    fun `every expect shape the guard rejects is one kotlinc rejects`() {
+        listOf(
+            "public expect val x: Int = 1" to "property cannot have an initializer",
+            "public expect class E {\n  public class N {\n    public val x: Int = 1\n  }\n}" to
+                "property cannot have an initializer",
+            "public expect class E {\n  public companion object {\n    public val x: Int = 1\n  }\n}" to
+                "property cannot have an initializer",
+            "public expect val x: Int by lazy()" to "property cannot be delegated",
+            "public expect val x: Int\n  get() = 1" to "declaration cannot have a body",
+            "public expect lateinit var x: String" to "property cannot be 'lateinit'",
+            "public expect class E {\n  public lateinit var x: String\n}" to "property cannot be 'lateinit'",
+        ).forEach { (source, diagnostic) ->
+            val messages =
+                compile("package com.example\n\nimport kotlin.Int\nimport kotlin.String\n\n$source\n").messages
+            assertTrue(diagnostic in messages, "$source\n$messages")
+        }
     }
 
     /**

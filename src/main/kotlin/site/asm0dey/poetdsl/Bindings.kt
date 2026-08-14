@@ -249,6 +249,11 @@ internal fun PropertySpec.Builder.addAccessors(
  *
  * @property needsValue whether a property here *must* be given an initializer, a delegate or a
  *   getter. False in an interface body and in every `expect` body, at any nesting depth.
+ * @property backingFieldAllowed whether a property here may have storage — an initializer, a
+ *   delegate or `LATEINIT`. False in an interface body only, where Kotlin answers with three
+ *   different sentences for one reason: *property initializers in interfaces are prohibited*,
+ *   *delegated properties in interfaces are prohibited*, and *'lateinit' modifier is not allowed on
+ *   abstract properties*. An interface's *companion object* allows all three.
  * @property isExpectContext whether a property here **is** `expect` by virtue of the container, so
  *   that it is a signature and may carry no value of any kind. The same [TypeScope.isExpect] that
  *   [needsValue] reads, asked the opposite way round: one says a value is not required, this one
@@ -272,6 +277,7 @@ internal fun PropertySpec.Builder.addAccessors(
  */
 internal class PropertyContainer(
     val needsValue: Boolean,
+    val backingFieldAllowed: Boolean,
     val isExpectContext: Boolean,
     val abstractAllowed: Boolean,
     val expectAllowed: Boolean,
@@ -293,6 +299,7 @@ internal class PropertyContainer(
          */
         val UNKNOWN: PropertyContainer = PropertyContainer(
             needsValue = false,
+            backingFieldAllowed = true,
             isExpectContext = false,
             abstractAllowed = true,
             expectAllowed = true,
@@ -306,6 +313,7 @@ private fun Scope.propertyContainer(): PropertyContainer {
     if (this !is TypeScope) {
         return PropertyContainer(
             needsValue = true,
+            backingFieldAllowed = true,
             isExpectContext = false,
             abstractAllowed = false,
             expectAllowed = true,
@@ -319,6 +327,12 @@ private fun Scope.propertyContainer(): PropertyContainer {
         // [TypeScope.isExpect], not `EXPECT in typeModifiers`: the modifier sits on the *outermost*
         // `expect class` only, and every classifier nested inside one inherits the rule.
         needsValue = !(kindName == "interface" || isExpect),
+        // The same `kindName == "interface"` the line above reads, asked the other way round — and
+        // the third container fact in this class that used to be consulted at one site only. An
+        // interface holds no state, so a property there both *may* have no value and *may not* have
+        // one that needs storage. Nothing inherited: an interface's companion object is a container
+        // of its own and takes all three (measured, all three frontends).
+        backingFieldAllowed = kindName != "interface",
         // The same [TypeScope.isExpect] the line above reads, asked the other way round: an `expect`
         // property needs no value *and* may have none. Two questions, two fields, two call sites.
         isExpectContext = isExpect,
@@ -534,6 +548,41 @@ internal fun checkProperty(
         check(KModifier.LATEINIT !in declared) {
             expected + "\"expected property cannot be 'lateinit'\" on all three frontends. Drop " +
                 "LATEINIT; it belongs on the `actual` declaration."
+        }
+    }
+    // The same shape once more, on the third container fact this class carries. An interface holds
+    // no state, and `kindName == "interface"` was read only where it decides whether a value is
+    // *required* — so a property that needs storage rendered, and compiles nowhere. Measured, one
+    // file per row, all three frontends:
+    //
+    //     interface I { val a: Int = 1 }           property initializers in interfaces are prohibited.
+    //     interface I { var a: Int = 1 }
+    //     interface I { val a: Int by lazy { 1 } } delegated properties in interfaces are prohibited.
+    //     interface I { lateinit var a: String }   'lateinit' modifier is not allowed on abstract
+    //                                              properties.
+    //
+    // A getter is the shape that *does* work (`interface I { val a: Int get() = 1 }`, clean on all
+    // three), and so is the interface's companion object, which is a container of its own:
+    // `interface I { companion object { val a: Int = 1 } }` and the `by lazy` form both compile
+    // clean. That is why [PropertyContainer.backingFieldAllowed] reads `kindName` and nothing
+    // inherited — the exemption stops at the body, exactly as `needsValue`'s does.
+    if (!container.backingFieldAllowed) {
+        val inInterface = "$construct: '$name' is declared in an interface body, and an interface " +
+            "holds no state, so its properties have no backing field: "
+        check(init == null) {
+            inInterface + "\"property initializers in interfaces are prohibited\" on all three " +
+                "frontends. Move the value into a getter, or declare it in the interface's " +
+                "companion object."
+        }
+        check(by == null) {
+            inInterface + "\"delegated properties in interfaces are prohibited\" on all three " +
+                "frontends. Move the delegate into a getter, or declare it in the " +
+                "interface's companion object."
+        }
+        check(KModifier.LATEINIT !in declared) {
+            inInterface + "\"'lateinit' modifier is not allowed on abstract properties\" on all " +
+                "three frontends. Drop LATEINIT; an interface property is abstract, and the " +
+                "implementing class carries the storage."
         }
     }
     // A property with no initializer, no delegate and no getter renders `val x: Int`, and kotlinc
