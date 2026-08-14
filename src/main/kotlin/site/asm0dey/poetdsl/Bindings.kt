@@ -314,7 +314,10 @@ private fun Scope.propertyContainer(): PropertyContainer {
         return PropertyContainer(
             needsValue = true,
             backingFieldAllowed = true,
-            isExpectContext = false,
+            // [Scope.isExpectContainer], which is false here: a *file* is not an `expect` container.
+            // Read through the shared predicate rather than written as `false` so that both branches
+            // of this function, and every other site in the family, read one fact from one place.
+            isExpectContext = isExpectContainer,
             abstractAllowed = false,
             expectAllowed = true,
             // The file level is the only place an `external` property renders the keyword and still
@@ -334,8 +337,10 @@ private fun Scope.propertyContainer(): PropertyContainer {
         // of its own and takes all three (measured, all three frontends).
         backingFieldAllowed = kindName != "interface",
         // The same [TypeScope.isExpect] the line above reads, asked the other way round: an `expect`
-        // property needs no value *and* may have none. Two questions, two fields, two call sites.
-        isExpectContext = isExpect,
+        // property needs no value *and* may have none. Two questions, two fields, two call sites —
+        // and read through [Scope.isExpectContainer], the one predicate every member of the `expect`
+        // family asks (see [Expect]), so that a property is not answering it privately.
+        isExpectContext = isExpectContainer,
         // Exactly Kotlin's list, which is narrower than KotlinPoet's on one row: KotlinPoet accepts
         // an abstract property in an `abstract object`, and Kotlin has no such thing. `kindName`
         // separates the three builders this DSL uses — `classBuilder`, `objectBuilder`,
@@ -548,23 +553,35 @@ internal fun checkProperty(
     // control that keeps the boundary honest is `expect class E { val a: Int }`, which draws nothing
     // but the missing-`actual` complaint on all three, and still renders.
     if (container.isExpectContext || KModifier.EXPECT in declared) {
-        val expected = "$construct: '$name' is an `expect` declaration — by its own EXPECT modifier, " +
-            "or by the `expect` type it is declared in — and an expected property is a signature: "
-        check(init == null) {
-            expected + "\"expected property cannot have an initializer\" on the JVM, on Kotlin/JS " +
-                "and on Kotlin/Wasm alike. Drop init = …; the value belongs on the `actual` declaration."
+        // [expectRefusal] and [expectSubject], not four `check`s of this function's own: a property
+        // is one member of the `expect` family and the family is one rule, so these four raise the
+        // same sentence a `val`/`var` constructor parameter, a function body, an `init` block, a
+        // delegation call and a supertype's arguments raise. See [Expect].
+        val subject = expectSubject("'$name'")
+        if (init != null) {
+            expectRefusal(
+                construct, "$subject carries an initializer",
+                "expected property cannot have an initializer",
+                "Drop init = …; the value belongs on the `actual` declaration.",
+            )
         }
-        check(by == null) {
-            expected + "\"expected property cannot be delegated\" on all three frontends. Drop " +
-                "by = …; the delegate belongs on the `actual` declaration."
+        if (by != null) {
+            expectRefusal(
+                construct, "$subject carries a delegate", "expected property cannot be delegated",
+                "Drop by = …; the delegate belongs on the `actual` declaration.",
+            )
         }
-        check(getter == null && setter == null) {
-            expected + "\"expected declaration cannot have a body\" on all three frontends. Drop " +
-                "the accessor; it belongs on the `actual` declaration."
+        if (getter != null || setter != null) {
+            expectRefusal(
+                construct, "$subject carries an accessor", "expected declaration cannot have a body",
+                "Drop the accessor; it belongs on the `actual` declaration.",
+            )
         }
-        check(KModifier.LATEINIT !in declared) {
-            expected + "\"expected property cannot be 'lateinit'\" on all three frontends. Drop " +
-                "LATEINIT; it belongs on the `actual` declaration."
+        if (KModifier.LATEINIT in declared) {
+            expectRefusal(
+                construct, "$subject is LATEINIT", "expected property cannot be 'lateinit'",
+                "Drop LATEINIT; it belongs on the `actual` declaration.",
+            )
         }
     }
     // The same shape once more, on the third container fact this class carries. An interface holds

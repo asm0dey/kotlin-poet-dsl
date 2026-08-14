@@ -42,26 +42,37 @@ import kotlin.test.assertTrue
  */
 @OptIn(ExperimentalCompilerApi::class)
 class ExpectSignatureTest {
-    private val expected =
-        "is an `expect` declaration — by its own EXPECT modifier, or by the `expect` type it is " +
-            "declared in — and an expected property is a signature: "
+    /**
+     * The message shape is **the whole family's**, not this rule's own: since the `expect` round it
+     * comes from `expectRefusal`/`expectSubject`, which a `val`/`var` constructor parameter, a
+     * function body, an `init` block, a delegation call and a supertype's arguments raise too. The
+     * invariant middle clause *is* the rule, so a property that drifts away from it fails here.
+     */
+    private fun message(construct: String, carries: String, diagnostic: String, remedy: String) =
+        "$construct: 'x' is `expect` — by its own EXPECT modifier, or by the `expect` type it is " +
+            "declared in — and $carries. An `expect` declaration is a signature — it carries no " +
+            "body and no value — so this is \"$diagnostic\" on the JVM, on Kotlin/JS and on " +
+            "Kotlin/Wasm alike. $remedy"
 
-    private fun initMessage(keyword: String = "val") =
-        "`$keyword`: 'x' $expected\"expected property cannot have an initializer\" on the JVM, on " +
-            "Kotlin/JS and on Kotlin/Wasm alike. Drop init = …; the value belongs on the `actual` " +
-            "declaration."
+    private fun initMessage(keyword: String = "val") = message(
+        "`$keyword`", "carries an initializer", "expected property cannot have an initializer",
+        "Drop init = …; the value belongs on the `actual` declaration.",
+    )
 
-    private fun byMessage(keyword: String = "val") =
-        "`$keyword`: 'x' $expected\"expected property cannot be delegated\" on all three frontends. " +
-            "Drop by = …; the delegate belongs on the `actual` declaration."
+    private fun byMessage(keyword: String = "val") = message(
+        "`$keyword`", "carries a delegate", "expected property cannot be delegated",
+        "Drop by = …; the delegate belongs on the `actual` declaration.",
+    )
 
-    private fun accessorMessage(keyword: String = "val") =
-        "`$keyword`: 'x' $expected\"expected declaration cannot have a body\" on all three " +
-            "frontends. Drop the accessor; it belongs on the `actual` declaration."
+    private fun accessorMessage(keyword: String = "val") = message(
+        "`$keyword`", "carries an accessor", "expected declaration cannot have a body",
+        "Drop the accessor; it belongs on the `actual` declaration.",
+    )
 
-    private fun lateinitMessage(keyword: String = "var") =
-        "`$keyword`: 'x' $expected\"expected property cannot be 'lateinit'\" on all three " +
-            "frontends. Drop LATEINIT; it belongs on the `actual` declaration."
+    private fun lateinitMessage(keyword: String = "var") = message(
+        "`$keyword`", "is LATEINIT", "expected property cannot be 'lateinit'",
+        "Drop LATEINIT; it belongs on the `actual` declaration.",
+    )
 
     /** The property's own `EXPECT`, at file level, where no container is involved at all. */
     @Test
@@ -135,9 +146,11 @@ class ExpectSignatureTest {
     @Test
     fun `a detached property answers for its own expect modifier`() {
         assertEquals(
-            "propertySpec: 'x' $expected\"expected property cannot have an initializer\" on the JVM, " +
-                "on Kotlin/JS and on Kotlin/Wasm alike. Drop init = …; the value belongs on the " +
-                "`actual` declaration.",
+            message(
+                "propertySpec", "carries an initializer",
+                "expected property cannot have an initializer",
+                "Drop init = …; the value belongs on the `actual` declaration.",
+            ),
             assertFailsWith<IllegalStateException> {
                 propertySpec(EXPECT.toModifiers(), "x", INT, init = 1.lit)
             }.message,

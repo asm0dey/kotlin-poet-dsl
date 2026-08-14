@@ -58,6 +58,24 @@ internal fun TypeScope.applySuperclass(type: TypeName, args: Array<out Expr>) {
     check(!hasSuperclass) {
         "superclass: a $kindName can only extend one class, and this one already does."
     }
+    // The member of the `expect` family nothing had filed, and the only one whose failure was
+    // *silent*: `TypeSpec.emit` drops the superclass constructor arguments when the type carries
+    // `EXPECT` (`TypeSpec.kt:239`), so `` `class`(EXPECT, "E") { superclass(Base, 1.lit) } ``
+    // rendered `expect class E : Base` and the argument reached no output at all — partial output,
+    // which Global Constraint 26 forbids as loudly as invalid output. One level down nothing is
+    // dropped and `expect class E { class N : Base(1) }` renders, which all three frontends answer
+    // with *expected classes cannot initialize supertypes* — as they do for the header form, with or
+    // without a primary constructor. Refusing the *supertype* would be wrong in both directions:
+    // `expect class E : Base` is valid everywhere. See [Expect].
+    if (isExpectContainer && args.isNotEmpty()) {
+        expectRefusal(
+            "superclass",
+            "$type is given constructor arguments in an `expect` type",
+            "expected classes cannot initialize supertypes",
+            "Drop the arguments — KotlinPoet renders `: $type` and drops them silently — and " +
+                "initialize the supertype on the `actual` declaration.",
+        )
+    }
     hasSuperclass = true
     builder.superclass(type)
     // One `CodeBlock` per argument, not one joined block: KotlinPoet joins them itself, and keeping

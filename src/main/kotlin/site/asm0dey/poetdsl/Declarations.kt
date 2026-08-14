@@ -244,7 +244,30 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     // secondary constructor that does not delegate with `: this(…)` was legal until this parameter
     // gave the class a primary constructor. Same broken output either way, so the same message
     // names both constructs. A secondary that *does* delegate is fine here — that is D25.
-    check(!hasUndelegatedSecondaryCtor) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
+    //
+    // Not in an `expect` type, where Kotlin requires the opposite: `expect class E(x: Int) {
+    // constructor(p: Long) }` is clean on all three frontends and *adding* the delegation call is
+    // "explicit delegation call for constructor of expected class is prohibited" (measured). Without
+    // the exemption the two halves of this rule would make the shape unspellable. See [Expect].
+    check(!hasUndelegatedSecondaryCtor || isExpect) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
+    // A `val`/`var` parameter *is* a property — the [PropertySpec] built below, with a `%N`
+    // initializer — so it is the same member the `expect` rule already refuses, reached through the
+    // one property-construction site that never goes near [checkProperty]. Refused here, before
+    // anything is added to either builder: KotlinPoet's `addProperty` answers the *direct* case with
+    // `IllegalArgumentException: properties in expect classes can't have initializers` (Global
+    // Constraint 26's forbidden type, naming neither construct), and one level down it answers not
+    // at all — `expect class E { class N(val x: Int) }` rendered, and all three frontends call it
+    // *expected class constructor cannot have a property parameter*. See [Expect].
+    if (kind != null && isExpect) {
+        expectRefusal(
+            "constructorParam",
+            "'$name' declares a `${if (kind == ParamKind.VAR) "var" else "val"}` property on the " +
+                "primary constructor of an `expect` class",
+            "expected class constructor cannot have a property parameter",
+            "Declare it as a plain parameter — constructorParam(null, \"$name\", …) or " +
+                "param(null, \"$name\", …) — and put the property on the `actual` class.",
+        )
+    }
     declaredConstructorParamNames += name
     // D30's split, in one line. A `val`/`var` parameter *is* a property: it is visible in every
     // member body, so it is declared at the member level and a member parameter of the same name
@@ -756,6 +779,43 @@ internal fun buildFun(
             "leave early, or assign to `field` — expression(\"field\") — instead."
     }
 
+    // The function side of the `expect` family, refused here because this is the one place that sees
+    // both the container and the body. Two sources of `expect`-ness and both have to be asked, or
+    // the rule holds at one site only: the declaration's own EXPECT modifier — which is what makes
+    // `` `fun`(EXPECT, "f") { … } `` at file level and `funSpec(EXPECT.toModifiers(), …)` answer for
+    // themselves, exactly as `propertySpec` does — and [Scope.isExpectContainer], inherited to every
+    // depth (D36). What is refused is the **body**, not the function: a bodiless member function, a
+    // bodiless secondary constructor and a parameter default are all valid in an `expect` type and
+    // all still render. See [Expect] for the three-frontend table and for what KotlinPoet does with
+    // each of these (an `IllegalArgumentException` for a direct member, an `IllegalStateException`
+    // thrown from `toString()` one level down).
+    if (parent?.isExpectContainer == true || KModifier.EXPECT in modifiers.toList()) {
+        val construct = when (kind) {
+            FunKind.CONSTRUCTOR -> "`constructor`"
+            FunKind.GETTER, FunKind.SETTER -> label
+            FunKind.FUNCTION -> "`fun`"
+        }
+        // A constructor names itself `<init>`, which is not a name to quote back at the caller.
+        val subject = if (kind == FunKind.CONSTRUCTOR) {
+            "this secondary constructor is declared in an `expect` type and"
+        } else {
+            expectSubject("'$name'")
+        }
+        if (!scope.builder.build().isEmpty()) {
+            expectRefusal(
+                construct, "$subject has a body", "expected declaration cannot have a body",
+                "Drop the body; the implementation belongs on the `actual` declaration.",
+            )
+        }
+        delegation?.target?.let { target ->
+            expectRefusal(
+                construct, "$subject delegates with `${target.keyword}`(…)",
+                "explicit delegation call for constructor of expected class is prohibited",
+                "Drop the delegation call; it belongs on the `actual` declaration.",
+            )
+        }
+    }
+
     val builder = when (kind) {
         FunKind.CONSTRUCTOR -> FunSpec.constructorBuilder()
         FunKind.GETTER -> FunSpec.getterBuilder()
@@ -947,7 +1007,11 @@ internal fun TypeScope.beginSecondaryConstructor() {
  */
 internal fun TypeScope.addSecondaryConstructor(spec: FunSpec) {
     val delegatesToPrimary = spec.delegateConstructor == DelegationTarget.THIS.keyword
-    check(!hasCtor || delegatesToPrimary) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
+    // The `expect` exemption is the same one [addConstructorParam] carries, for the same measured
+    // reason: an `expect` class's secondary constructor must **not** delegate, so requiring it here
+    // would refuse `expect class E(x: Int) { constructor(p: Long) }`, which is clean on all three
+    // frontends, and there would be no other spelling — the delegating form is refused in [buildFun].
+    check(!hasCtor || delegatesToPrimary || isExpect) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
     if (!delegatesToPrimary) hasUndelegatedSecondaryCtor = true
     // The self-delegation cycle [TypeScope.finish] rejects is counted there, off `builder.funSpecs`
     // — not here — so a sibling constructor spliced in as a raw `FunSpec` (bypassing this function

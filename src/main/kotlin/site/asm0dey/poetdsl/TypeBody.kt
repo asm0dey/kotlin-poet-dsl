@@ -50,6 +50,20 @@ internal fun TypeScope.addInitializerBlock(body: BlockScope.() -> Unit) {
         "`init`: an interface cannot have an initializer block; it has no state to initialize. " +
             "Move the code to a property initializer or a function."
     }
+    // The third member of the `expect` family, refused before the block is built rather than after.
+    // KotlinPoet answers the *direct* case with `IllegalStateException: expect CLASS can't have
+    // initializer blocks` — the right exception type, with a message naming neither construct — and
+    // one level down it answers not at all: `expect class E { class N { init { } } }` rendered, and
+    // all three frontends call it *expected declaration cannot have a body* even when the block is
+    // empty. See [Expect].
+    if (isExpectContainer) {
+        expectRefusal(
+            "`init`",
+            "this initializer block is declared in an `expect` type",
+            "expected declaration cannot have a body",
+            "Move the code to the `actual` declaration; an `expect` type initializes nothing.",
+        )
+    }
     val recorded = mutableListOf<TypeName?>()
     val scope = BlockScope(
         builder = CodeBlock.builder(),
