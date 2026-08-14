@@ -215,6 +215,15 @@ internal fun PropertySpec.Builder.addAccessors(
  * scope in one place so that [checkProperty] never has to infer a container from what the property
  * holds. Every row below is one kotlinc 2.4.10 run; `expect` needs `-Xmulti-platform`.
  *
+ * **Four fields, because these are four questions**, and each is asked at the site that needs it
+ * rather than folded into another. Two rounds of this work have already produced the same defect —
+ * a container fact consulted at one site and missing at another — and its shape here was that
+ * "must a property in this container be given a value?" ([needsValue]) and "which modifiers are
+ * legal in this container?" ([abstractAllowed], [expectAllowed], [externalAllowed]) were being
+ * asked in one place: inside the `if (needsValue …)` branch that only the first belongs to. An
+ * interface body and every `expect` body have `needsValue == false`, so they validated no modifier
+ * at all.
+ *
  * | container | no value | `abstract` | `expect` on the property | `external` on the property |
  * |---|---|---|---|---|
  * | file | *Property must be initialized.* | *modifier 'abstract' is not applicable to 'top level property without backing field or delegate'* | OK | JVM: *modifier 'external' is not applicable to 'property'*; **JS and Wasm: OK** |
@@ -222,11 +231,13 @@ internal fun PropertySpec.Builder.addAccessors(
  * | `abstract`/`sealed`/`enum class` | *…or be abstract.* | OK | as above | as above |
  * | `interface` | OK | OK (rendered without the keyword — it is implicit) | as above | as above |
  * | `object`, `companion object` | *…or be abstract.* | *abstract property 'a' in non-abstract class 'O'* | as above | as above |
- * | `expect class` body | OK | *abstract property 'a' in non-abstract class 'E'* | as above | as above |
+ * | `expect class` body | OK | *abstract property 'a' in non-abstract class 'E'* | **OK** — KotlinPoet drops the keyword, and the render is valid | *expected declaration cannot be external*, plus the row above |
+ * | body nested in an `expect class` | OK | as its own kind | as the `class` row — the keyword is **not** dropped here | as above |
+ * | `external class` body | *Property must be initialized.* (D37's open row) | as its own kind | as above | **OK** — KotlinPoet drops the keyword, and JS and Wasm accept the render |
  *
  * The `external` column is the one that needs three frontends rather than one, and it is why
  * [externalAllowed] exists as a container fact at all: the file row has a target where the output
- * compiles and every member row has none. `kotlinc-js`/`kotlinc-wasm` run with the matching
+ * compiles and the ordinary member rows have none. `kotlinc-js`/`kotlinc-wasm` run with the matching
  * `kotlin-stdlib-js.klib` / `kotlin-stdlib-wasm-js.klib` from the same distribution. See D37.
  *
  * [abstractAllowed] is also what keeps KotlinPoet's own
@@ -235,6 +246,23 @@ internal fun PropertySpec.Builder.addAccessors(
  * carries none of `ABSTRACT`/`SEALED`/`ENUM`, and reading `non-abstract type **null**` for an
  * anonymous companion object — out of this DSL's output. Global Constraint 26 forbids that exception
  * type, and its message names neither construct.
+ *
+ * @property needsValue whether a property here *must* be given an initializer, a delegate or a
+ *   getter. False in an interface body and in every `expect` body, at any nesting depth.
+ * @property abstractAllowed whether `ABSTRACT` is legal on a property here.
+ * @property expectAllowed whether `EXPECT` is legal on a property here — read off the **immediate**
+ *   builder's own modifiers rather than [TypeScope.isExpect], and the difference is load-bearing in
+ *   both directions. KotlinPoet hands a `TypeSpec`'s own `EXPECT` down to its direct members as an
+ *   *implicit* modifier, so inside `expect class E` the keyword is never printed and
+ *   `expect class E { val a: Int }` is what renders; one level down —
+ *   `expect class E { class N { expect val a: Int } }` — it *is* printed, and all three frontends
+ *   answer *modifier 'expect' is not applicable to 'member property without backing field or
+ *   delegate'*.
+ * @property externalAllowed whether `EXTERNAL` is legal on a property here, on the same
+ *   immediate-builder rule and for the same measured reason: `external class C { val a: Int }` — the
+ *   render KotlinPoet produces once it drops the member's keyword — compiles clean on Kotlin/JS and
+ *   Kotlin/Wasm, while `external class C { class N { external val a: Int } }`, where the keyword
+ *   survives, is *non-top-level 'external' declaration* on both.
  */
 internal class PropertyContainer(
     val needsValue: Boolean,
@@ -265,8 +293,8 @@ private fun Scope.propertyContainer(): PropertyContainer {
             needsValue = true,
             abstractAllowed = false,
             expectAllowed = true,
-            // The file level is the only place an `external` property has a target that accepts it,
-            // and this branch *is* the file level. See the exempt list in [checkProperty] and D37.
+            // The file level is the only place an `external` property renders the keyword and still
+            // has a target that accepts it, and this branch *is* the file level. See D37.
             externalAllowed = true,
         )
     }
@@ -284,12 +312,17 @@ private fun Scope.propertyContainer(): PropertyContainer {
                 it == KModifier.ABSTRACT || it == KModifier.SEALED || it == KModifier.ENUM
             }
             ),
-        expectAllowed = false,
-        // A *member* `external` property is refused by every frontend that ships with Kotlin 2.4.10
-        // — *non-top-level 'external' declaration* on JS and on Wasm, and not applicable to a
-        // property at all on the JVM — so there is no target where this renders something that
-        // compiles, which is the bar the file-level row clears. See [PropertyContainer]'s table.
-        externalAllowed = false,
+        // Both of these read the **immediate** builder's own modifiers, and not [TypeScope.isExpect]
+        // or anything else inherited, because that is exactly what decides whether the keyword
+        // reaches the output: KotlinPoet hands a `TypeSpec`'s own `EXPECT`/`EXTERNAL` down to its
+        // direct members as an *implicit* modifier, so the member's copy is not printed — and the
+        // render that results is valid (`expect class E { val a: Int }` everywhere,
+        // `external class C { val a: Int }` on JS and Wasm). One level down the keyword is printed
+        // again and every frontend refuses it. Guarding what is *rendered* is the whole job;
+        // guarding the modifier list as passed would refuse output two frontends accept, which is
+        // the direction D37's standing rule exists to prevent.
+        expectAllowed = KModifier.EXPECT in typeModifiers,
+        externalAllowed = KModifier.EXTERNAL in typeModifiers,
     )
 }
 
@@ -346,6 +379,45 @@ internal fun checkProperty(
             "ABSTRACT, SEALED or ENUM class — not at file level, not in an object or a companion " +
             "object, and not in a class that is none of those. Declare the container ABSTRACT, or " +
             "give '$name' a value."
+    }
+    // The other two container-and-modifier questions, asked here — **unconditionally**, beside the
+    // one above — rather than inside the missing-value branch below, which is where they used to be
+    // asked and which an interface body and every `expect` body never enter. That is what let
+    // `` `interface`("I") { `val`(EXTERNAL, "x", INT) } `` render `public external val x: Int`, and
+    // `` `class`("C") { `val`(EXTERNAL, "x", INT, init = 1.lit) } `` render it with an initializer:
+    // one branch answering two questions, only one of which is about values.
+    //
+    // Neither modifier is refused by its name. Both are refused by whether **the render carries the
+    // keyword**, which is what a frontend sees: KotlinPoet suppresses a member's `EXPECT`/`EXTERNAL`
+    // when the enclosing `TypeSpec` already carries it, so `` `class`(EXPECT, "E") ``'s and
+    // `` `class`(EXTERNAL, "C") ``'s direct members print no keyword and their renders are accepted
+    // (`expect class E { val a: Int }` on all three frontends; `external class C { val a: Int }` on
+    // JS and Wasm, D37 row 6). One level down, and in every other container, the keyword survives:
+    //
+    //     interface I    { external val a: Int }  jvm  not applicable to 'property'
+    //                                             js   non-top-level 'external' declaration.
+    //                                             wasm non-top-level 'external' declaration.
+    //     expect class E { external val a: Int }  all three, plus `expected declaration cannot be
+    //                                             external.`
+    //     interface I    { expect   val a: Int }  all three: modifier 'expect' is not applicable to
+    //     class C        { expect   val a: Int = 1 }        'member property without backing field
+    //     expect class E { class N { expect val a: Int } }   or delegate'.
+    //
+    // — measured one file per row, kotlinc 2.4.10 with `kotlin-stdlib-js.klib` /
+    // `kotlin-stdlib-wasm-js.klib` for the two non-JVM frontends. No target accepts any of them, so
+    // every refusal here costs nothing that D37's standing rule protects.
+    check(container.expectAllowed || KModifier.EXPECT !in declared) {
+        "$construct: '$name' is EXPECT, and this container is not one where that renders something " +
+            "any target accepts: \"modifier 'expect' is not applicable to 'member property without " +
+            "backing field or delegate'\" on the JVM, on Kotlin/JS and on Kotlin/Wasm alike. Drop " +
+            "EXPECT — inside an `expect` type Kotlin makes it implicit, and at file level it is legal."
+    }
+    check(container.externalAllowed || KModifier.EXTERNAL !in declared) {
+        "$construct: '$name' is EXTERNAL, and this container is not one where that renders something " +
+            "any target accepts: a member `external` property is \"non-top-level 'external' " +
+            "declaration\" on Kotlin/JS and Kotlin/Wasm and \"modifier 'external' is not applicable " +
+            "to 'property'\" on the JVM. Drop EXTERNAL — inside an `external` type Kotlin makes it " +
+            "implicit, and at file level it is the one position Kotlin/JS and Kotlin/Wasm accept."
     }
     check(mutable || setter == null) {
         "$construct: '$name' is a `val` and has no setter. Declare it with `var`, or drop the setter."
@@ -408,7 +480,12 @@ internal fun checkProperty(
     //   Nothing else exempts: not a companion object inside an interface, not an enum, not a sealed
     //   class. [PropertyContainer.needsValue] carries the answer down from the scope rather than
     //   being inferred from anything visible here.
-    // - **modifier**: ABSTRACT, LATEINIT and EXPECT everywhere, plus EXTERNAL **at file level only**.
+    // - **modifier**: ABSTRACT, LATEINIT, EXPECT and EXTERNAL, and the list needs no container term
+    //   of its own any more — the two gates near the top of this function have already refused every
+    //   modifier that is illegal *here*, so reaching this line with EXPECT or EXTERNAL declared is
+    //   itself proof that the container allows it. The list used to carry `if
+    //   (container.externalAllowed)`, which restated a decision this function was not otherwise
+    //   taking at all.
     //
     // EXTERNAL is on that list against E2b's finding, which read *"`external` is not an exempt case,
     // and never could be"* off a JVM-only measurement. It is a **platform** question, and two of the
@@ -427,18 +504,14 @@ internal fun checkProperty(
     // EXTERNAL" means "the definition lives in JavaScript", which is not an answer to "this property
     // has no value".
     //
-    // But the exemption is **gated on the container**, which is the whole of what justifies it: an
-    // exemption is earned by there existing a target platform where the output compiles, and a
-    // *member* `external` property has none (measured, same three frontends, one file each):
+    // Where the modifier is *legal* is decided above and not here: an exemption is earned by there
+    // existing a target platform where the render compiles, and an ordinary member `external`
+    // property has none (measured, same three frontends, one file each):
     //
     //     kotlinc        class C { external val a: Int } → modifier 'external' is not applicable to 'property'
     //     kotlinc-js     class C { external val a: Int } → non-top-level 'external' declaration.
     //     kotlinc-wasm   class C { external val a: Int } → non-top-level 'external' declaration.
     //     …and identically for `object O { … }`.
-    //
-    // Ungated, the exemption emitted exactly those, where the DSL had refused them since the check
-    // landed. [PropertyContainer.externalAllowed] carries the file/member split down from the scope,
-    // the same way `needsValue` carries the interface and `expect` containers. Recorded as D37.
     //
     // The one platform not measured either way is Kotlin/Native. It is an argument for keeping the
     // file-level exemption — an unmeasured target cannot license a refusal — and not an argument for
@@ -447,12 +520,16 @@ internal fun checkProperty(
     // Unlike the `expect` rows none of this is measurable by the suite: kctfork compiles for the
     // JVM only, so the lines above are hand-run and the tests pin the render and the refusal alone.
     //
-    // What an `external` *class* makes of its members is a separate question and still open. Measured
-    // on the same three frontends: `external class C { val a: Int }` and `external object O { val a:
-    // Int }` both compile clean on JS and on Wasm (and are *modifier 'external' is not applicable to
-    // 'class'* on the JVM), so the container exempts its members there — and this DSL refuses both,
-    // as it did before any of this. That is the container-inheritance shape D36 solved for `expect`,
-    // not yet solved for `external`, and a new exemption rather than a restoration.
+    // What an `external` *class* makes of its members is **half** answered. Measured on the same
+    // three frontends, `external class C { val a: Int }` and `external object O { val a: Int }`
+    // compile clean on JS and on Wasm (and are *modifier 'external' is not applicable to 'class'* on
+    // the JVM), so the container exempts its members there. Since this round, writing the member's
+    // own `EXTERNAL` reaches that render — KotlinPoet drops the keyword, `externalAllowed` is true,
+    // and this exempt list lets the missing value through. What is still refused is the same
+    // container with the modifier *omitted* — `` `class`(EXTERNAL, "C") { `val`("x", INT) } `` —
+    // because `needsValue` has no `external` term to match `isExpect`. That is D36's
+    // container-inheritance shape, still unsolved for `external`; the difference from before is that
+    // the shape now has a working spelling rather than none.
     //
     // Both `expect` rows *are* measured, contrary to E2b's report: `-Xmulti-platform` gets the
     // frontend past `'expect' and 'actual' declarations can be used only in multiplatform projects`,
@@ -465,12 +542,18 @@ internal fun checkProperty(
     // field, which is more useful than this one. By the time control reaches here a `receiver`
     // implies a getter or a delegate, so the condition needs no term for it.
     if (container.needsValue && init == null && by == null && getter == null) {
-        val exempt = buildList {
-            add(KModifier.ABSTRACT)
-            add(KModifier.LATEINIT)
-            add(KModifier.EXPECT)
-            if (container.externalAllowed) add(KModifier.EXTERNAL)
-        }
+        // Unconditional, and it can be: this branch is now only ever reached by a property whose
+        // modifiers are already legal in this container, because the two gates above ran first. A
+        // declared `EXPECT` implies `container.expectAllowed` and a declared `EXTERNAL` implies
+        // `container.externalAllowed` by the time control gets here, so folding either container
+        // fact into this list a second time would restate a decision already taken — which is the
+        // shape of defect this round exists to remove.
+        val exempt = listOf(
+            KModifier.ABSTRACT,
+            KModifier.LATEINIT,
+            KModifier.EXPECT,
+            KModifier.EXTERNAL,
+        )
         // The remedy list is built from what is legal *in this container*, not from the exempt list.
         // The two are not the same set, and a remedy that does not compile where it is offered is
         // worse than none: `abstract val a: Int` at file level is `modifier 'abstract' is not

@@ -334,29 +334,35 @@ class UninitializedPropertyTest {
      * positions below threw. Adding the modifier to a container-blind exempt list flipped the member
      * position from refusing to emitting, and only the file-level half of that was intended.
      *
-     * The remedy list is unchanged and still names none of `EXTERNAL`: "declare it EXTERNAL" means
-     * "the definition lives in JavaScript", which is not an answer to "this property has no value".
+     * The refusal is unchanged; **the message moved** in this round, from the missing-value check to
+     * the modifier gate that now runs in every container
+     * ([ContainerModifierTest]). That is the point of the move: the reason these are refused was
+     * never "no value", it was "no target accepts a member `external` property", and the old message
+     * offered `init = …` — the one remedy measured to be wrong for `external` on every frontend.
+     *
+     * The remedy list of the *missing-value* message is untouched and still names none of
+     * `EXTERNAL`: "declare it EXTERNAL" means "the definition lives in JavaScript", which is not an
+     * answer to "this property has no value".
      */
     @Test
     fun `an external property in a type is rejected`() {
+        val message = ContainerModifierTest().externalMessage()
         listOf<Pair<String, FileScope.() -> Unit>>(
-            valMessage() to { `class`("C") { `val`(EXTERNAL, "x", INT) } },
-            valMessage() to { `object`("O") { `val`(EXTERNAL, "x", INT) } },
-            valMessage() to { `class`("C") { companionObject { `val`(EXTERNAL, "x", INT) } } },
-            valMessage() to { `class`("C") { `class`("N") { `val`(EXTERNAL, "x", INT) } } },
-            // A `var` still gets its own container's remedy — the exempt list and the remedy list are
-            // separate mechanisms, and only the first one moved.
-            valMessage(keyword = "var", modifiers = "LATEINIT") to
+            message to { `class`("C") { `val`(EXTERNAL, "x", INT) } },
+            message to { `object`("O") { `val`(EXTERNAL, "x", INT) } },
+            message to { `class`("C") { companionObject { `val`(EXTERNAL, "x", INT) } } },
+            message to { `class`("C") { `class`("N") { `val`(EXTERNAL, "x", INT) } } },
+            ContainerModifierTest().externalMessage(keyword = "var") to
                 { `class`("C") { `var`(EXTERNAL, "x", INT) } },
-        ).forEachIndexed { index, (message, position) ->
+        ).forEachIndexed { index, (expected, position) ->
             val e = assertFailsWith<IllegalStateException>("position $index") {
                 file("com.example", "A", body = position)
             }
-            assertEquals(message, e.message, "position $index")
+            assertEquals(expected, e.message, "position $index")
         }
         // …and the detached builder, whose container is a type as well.
         assertEquals(
-            valMessage(),
+            message,
             assertFailsWith<IllegalStateException> {
                 typeSpec(name = "C") { `val`(EXTERNAL, "x", INT) }
             }.message,
