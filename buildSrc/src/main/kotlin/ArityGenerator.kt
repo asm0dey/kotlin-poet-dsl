@@ -366,12 +366,14 @@ private fun ctorOverloads(): List<Overload> = CTOR_NAMES.flatMap { nm ->
                 params = v.params() + arityParams(arity) + listOf("body: ${bodyType(arity)}"),
                 returns = null,
                 // The guards live on every overload rather than in `buildFun`: they are about what
-                // the *type* already has, and `buildFun` never sees the TypeScope. They are one
-                // call rather than inline `check`s so that the rules — and D25's coming relaxation
-                // of the primary/secondary one — are stated once, in `Declarations.kt`.
+                // the *type* already has, and `buildFun` never sees the TypeScope. They are two
+                // calls rather than inline `check`s so that the rules are stated once, in
+                // `Declarations.kt` — and they are *two* because D25 split them by what is knowable
+                // when: the kind check before the body runs, the delegation check after, on the
+                // built spec. `addSecondaryConstructor` is also what adds the function to the type.
                 body = """
                     |t.beginSecondaryConstructor()
-                    |t.builder.addFunction(
+                    |t.addSecondaryConstructor(
                     |    buildFun(
                     |        "<init>",
                     |        true,

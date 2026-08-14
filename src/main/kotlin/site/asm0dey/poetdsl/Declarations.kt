@@ -158,9 +158,11 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     check(name !in declaredConstructorParamNames) {
         "A constructor parameter named \"$name\" is already declared in this scope."
     }
-    // The other half of the guard in `constructor`, for the reverse writing order. Same broken
-    // output either way, so the same message names both constructs.
-    check(!hasSecondaryCtor) { PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE }
+    // The other half of the guard in `addSecondaryConstructor`, for the reverse writing order: a
+    // secondary constructor that does not delegate with `: this(…)` was legal until this parameter
+    // gave the class a primary constructor. Same broken output either way, so the same message
+    // names both constructs. A secondary that *does* delegate is fine here — that is D25.
+    check(!hasUndelegatedSecondaryCtor) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
     declaredConstructorParamNames += name
     val unique = names.unique(name)
     // Rebuilt only when the name actually moved: `toBuilder` carries the annotations — and the
@@ -278,12 +280,18 @@ internal fun buildFun(
     val names = (parent?.names ?: NameScope(null)).child()
     val id = (parent?.id ?: ScopeId(null, "root")).child("fun($name)")
     val recorded = mutableListOf<TypeName?>()
+    // The slot D25's `` `this` ``/`` `super` `` write into, and the only one ever created: a
+    // delegation call is part of a constructor's header, so nothing else in the DSL may accept one.
+    // `BlockScope.child` does not propagate it, which is what rejects a delegation call written
+    // inside a lambda or a nested block — Kotlin allows one in neither.
+    val delegation = if (isConstructor) ConstructorDelegation() else null
     val scope = BlockScope(
         builder = CodeBlock.builder(),
         names = names,
         id = id,
         returns = recorded,
         detachedRoot = parent == null,
+        delegation = delegation,
     )
 
     // Two parameters of one function with the same name is a compile error in Kotlin with no valid
@@ -343,6 +351,14 @@ internal fun buildFun(
             addModifiers(modifiers.toList())
             declared.forEach { addParameter(it) }
             inferReturnType(name, isConstructor, returns, recorded)?.let { returns(it) }
+            // Before the body: the delegation call is the constructor's header, and KotlinPoet
+            // renders it there whatever order the builder is fed in. Written through
+            // `callThisConstructor`/`callSuperConstructor` rather than emitted, per D25.
+            when (delegation?.target) {
+                null -> Unit
+                DelegationTarget.THIS -> callThisConstructor(delegation.args)
+                DelegationTarget.SUPER -> callSuperConstructor(delegation.args)
+            }
             addCode(scope.builder.build())
         }
         .build()
@@ -426,45 +442,61 @@ private fun localFunIsUnrenderable(): Nothing = error(
 )
 
 /**
- * The message both halves of the primary/secondary guard raise.
+ * The message both halves of the primary/secondary guard raise, as D25 leaves it.
  *
  * A class with a primary constructor requires every secondary constructor to delegate to it with
- * `: this(…)`. KotlinPoet can express that (`FunSpec.Builder.callThisConstructor`), but this DSL
- * exposes no way to say *which* arguments to pass, and there is no correct default — so the pair is
- * rejected outright rather than rendered as `public constructor(other: String) { … }` under a
- * primary constructor, which is `e: Primary constructor call expected.` (Global Constraint 26).
+ * `: this(…)`; a secondary constructor that delegates with `: super(…)` or not at all is
+ * `e: Primary constructor call expected.` either way (both measured). That call is now expressible
+ * — `` `this`(…) `` inside the constructor's body, over `FunSpec.Builder.callThisConstructor` — so
+ * the combination is no longer rejected outright: only the undelegated form is (Global Constraint 26).
  */
-internal const val PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE: String =
-    "constructor: a class cannot have both a primary constructor (from constructorParam) and a " +
-        "secondary `constructor`, because the DSL cannot express the required `: this(…)` " +
-        "delegation call. Fold the parameters into one constructor."
+internal const val SECONDARY_MUST_DELEGATE_TO_PRIMARY: String =
+    "constructor: a class with a primary constructor (from `class`(…, param(…)) or " +
+        "constructorParam) requires every secondary `constructor` to delegate to it with " +
+        "`: this(…)`. Call `this`(…) in the secondary constructor's body — `super`(…) does not " +
+        "satisfy it — or fold the parameters into one constructor."
 
 /**
- * What every generated `` `constructor` ``/`ctor` overload runs before it builds the secondary
- * constructor: the two things the *type* has to be asked about, stated once instead of inlined into
- * ~120 generated bodies.
+ * What every generated `` `constructor` ``/`ctor` overload runs *before* it builds the secondary
+ * constructor: the one thing that can be known before the body has run, stated once instead of
+ * inlined into ~120 generated bodies.
  *
- * Both are about a delegation call the DSL cannot yet write — `: this(…)` for a primary constructor,
- * `: super(…)` for superclass arguments carried in the class header — so both are guards on the same
- * gap, and both are rejections rather than broken output (Global Constraint 26). D25 adds those two
- * calls and must revisit both checks here together: with `: this(…)` available, a primary
- * constructor *and* a delegating secondary one become legal, and so does a header
- * `superclass(Bar, x)` alongside them; a secondary constructor with no primary one still cannot
- * carry header arguments, because that is precisely what its own `: super(…)` is for.
+ * Only a class has constructors at all. `object O { constructor(x: Int) }` and the same in an
+ * `interface` are both `IllegalStateException` here rather than rendered output the Kotlin compiler
+ * refuses (Global Constraint 26) — this is the one central place every `` `constructor` `` overload
+ * passes through, and [TypeScope.kindName] is what makes the message name the kind as well as the
+ * construct.
  *
- * The kind check is the third: only a class has constructors at all. `object O { constructor(x: Int) }`
- * and the same in an `interface` are both `IllegalStateException` here rather than rendered output
- * the Kotlin compiler refuses (Global Constraint 26) — this is the one central place every
- * `` `constructor` `` overload passes through, and [TypeScope.kindName] is what makes the message
- * name the kind as well as the construct.
+ * The other two guards that used to live here have moved, because D25 made both of them depend on
+ * facts that do not exist yet at this point:
+ * - the primary/secondary pair is now legal when the secondary delegates with `` `this`(…) ``, and
+ *   whether it does is only known once its body has run — so that check is in
+ *   [addSecondaryConstructor], on the built [FunSpec];
+ * - header superclass arguments alongside a secondary constructor are legal when the class also has
+ *   a primary constructor, which a `constructorParam` written later in the body can still supply —
+ *   so that check is in [TypeScope.finish], where writing order no longer matters.
  */
 internal fun TypeScope.beginSecondaryConstructor() {
     check(kindName == "class") {
         "constructor: a $kindName cannot declare a constructor; only a class can."
     }
-    check(!hasCtor) { PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE }
-    check(builder.superclassConstructorParameters.isEmpty()) { superclassArgsPlusSecondary(kindName) }
     hasSecondaryCtor = true
+}
+
+/**
+ * What every generated `` `constructor` ``/`ctor` overload runs *after* it has built the secondary
+ * constructor: the half of the primary/secondary guard that needs to know whether the body wrote a
+ * `` `this`(…) `` delegation call, plus the emission itself.
+ *
+ * `FunSpec.delegateConstructor` is KotlinPoet's own public record of it — `"this"`, `"super"` or
+ * null — so the answer is read off the spec that was just built rather than threaded back out of
+ * the block scope by hand.
+ */
+internal fun TypeScope.addSecondaryConstructor(spec: FunSpec) {
+    val delegatesToPrimary = spec.delegateConstructor == DelegationTarget.THIS.keyword
+    check(!hasCtor || delegatesToPrimary) { SECONDARY_MUST_DELEGATE_TO_PRIMARY }
+    if (!delegatesToPrimary) hasUndelegatedSecondaryCtor = true
+    builder.addFunction(spec)
 }
 
 /**

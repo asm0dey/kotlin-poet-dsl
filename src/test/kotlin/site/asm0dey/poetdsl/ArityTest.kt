@@ -385,10 +385,12 @@ class ArityTest {
      * The primary/secondary guard is per-overload, not inside `buildFun`, so a generated
      * overload that forgot it would render `constructor` under a primary constructor — Kotlin's
      * `Primary constructor call expected`. Checked on a generated arity/variant the hand-written
-     * pair never had.
+     * pair never had. D25 moved the check to the second of the two calls the generated body makes
+     * (`addSecondaryConstructor`, which sees whether the body delegated); a generated overload that
+     * dropped *either* call would land here.
      */
     @Test
-    fun `a generated constructor still rejects a primary constructor alongside it`() {
+    fun `a generated constructor still rejects an undelegated one alongside a primary`() {
         val thrown = kotlin.runCatching {
             file("com.example", "User") {
                 `class`("User") {
@@ -398,7 +400,21 @@ class ArityTest {
             }
         }.exceptionOrNull()
         assertTrue(thrown is IllegalStateException, "$thrown")
-        assertTrue(thrown.message.orEmpty().startsWith("constructor: a class cannot have both"), "$thrown")
+        assertEquals(SECONDARY_MUST_DELEGATE_TO_PRIMARY, thrown.message)
+    }
+
+    /** And the same generated overload accepts the pair once the secondary delegates (D25). */
+    @Test
+    fun `a generated constructor accepts a primary alongside it once it delegates`() {
+        val out = file("com.example", "User") {
+            `class`("User") {
+                constructorParam(VAL, "id", STRING)
+                `constructor`(PRIVATE, param("a", INT), param("b", INT)) { a, b ->
+                    `this`(call("buildId", a, b))
+                }
+            }
+        }.toString()
+        assertTrue("private constructor(a: Int, b: Int) : this(buildId(a, b))" in out, out)
     }
 
     // --- the six variants on the other declaration constructs (deviation D10) ----------------

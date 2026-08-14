@@ -86,15 +86,25 @@ public class TypeScope internal constructor(
     internal var hasCtor: Boolean = false
 
     /**
-     * Whether a secondary `` `constructor` `` was already declared. Kotlin requires every secondary
-     * constructor of a class that has a primary one to delegate to it with `: this(…)`, and this DSL
-     * has no way to express that call, so the two constructs are mutually exclusive here — see the
-     * guards in [addConstructorParam] and in [beginSecondaryConstructor], which every generated
-     * `` `constructor` `` overload runs. Tracked in both directions because the two can be written
-     * in either order and the broken output is the same. [superclass] arguments carried in the class
-     * header are the same problem in a second place, and are guarded the same way.
+     * Whether a secondary `` `constructor` `` was already declared. Read by [finish], which rejects
+     * superclass constructor arguments carried in the class header when the type has secondary
+     * constructors but no primary one — `Supertype initialization is impossible without a primary
+     * constructor` (measured).
      */
     internal var hasSecondaryCtor: Boolean = false
+
+    /**
+     * Whether a secondary `` `constructor` `` was declared that does **not** delegate with
+     * `` `this`(…) `` — either it delegates with `` `super`(…) `` or it delegates not at all.
+     *
+     * That is the half of the primary/secondary combination that is still invalid after D25:
+     * Kotlin requires every secondary constructor of a class that *has* a primary one to delegate
+     * to it with `: this(…)`, and answers anything else with `Primary constructor call expected`
+     * (measured, both for a plain secondary and for one calling `: super(…)`). Tracked because the
+     * two constructs can be written in either order and the broken output is the same — see the
+     * guards in [addConstructorParam] and [addSecondaryConstructor].
+     */
+    internal var hasUndelegatedSecondaryCtor: Boolean = false
 
     /**
      * Constructor parameter names declared directly in this type via [addConstructorParam].
@@ -105,7 +115,24 @@ public class TypeScope internal constructor(
      */
     internal val declaredConstructorParamNames: MutableSet<String> = mutableSetOf()
 
+    /**
+     * Builds the type, after the one check that can only be made once the whole body has run.
+     *
+     * Superclass constructor arguments in the header need a primary constructor to hang from as
+     * soon as the type also declares a secondary constructor, and the three constructs involved —
+     * `superclass(…, args)`, `` `constructor` `` and `constructorParam` — may be written in any
+     * order, with the last of them able to *fix* the combination as easily as to break it. Checking
+     * eagerly at each of them would therefore reject `superclass(Base, x)` + a delegating
+     * `` `constructor` `` + a later `constructorParam`, which is valid Kotlin. Here the answer does
+     * not depend on writing order. D25's other guard needs no such deferral: neither a primary
+     * constructor nor an undelegated secondary one can be taken back by a later call, so
+     * [addConstructorParam] and [addSecondaryConstructor] catch that pair eagerly, at the call that
+     * creates it.
+     */
     internal fun finish(): TypeSpec {
+        check(builder.superclassConstructorParameters.isEmpty() || !hasSecondaryCtor || hasCtor) {
+            superclassArgsPlusSecondary(kindName)
+        }
         if (hasCtor) builder.primaryConstructor(ctor.build())
         return builder.build()
     }
@@ -144,6 +171,17 @@ public class BlockScope internal constructor(
      * built in, so what its body captured has to be attributable to that body alone (ADR 0008).
      */
     internal val captured: MutableSet<ScopeId> = mutableSetOf(),
+    /**
+     * The `: this(…)` / `: super(…)` slot the `` `this` ``/`` `super` `` constructs write into (D25).
+     *
+     * Non-null in exactly one place: the *root* block of a secondary constructor's body, which
+     * [buildFun] is the only creator of. A delegation call is part of a constructor's header, not
+     * its body, so it is captured here and handed to `FunSpec.Builder.callThisConstructor` instead
+     * of being emitted — and Kotlin allows it nowhere else, which is why [child] does not propagate
+     * it: a `` `this`(…) `` inside a lambda, an `if` body or a `stmts { }` fragment finds `null` and
+     * is rejected.
+     */
+    internal val delegation: ConstructorDelegation? = null,
 ) : Scope(names, id) {
     internal var pending: PendingFlow? = null
 }

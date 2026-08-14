@@ -644,12 +644,14 @@ class FunctionsTest {
 
     /**
      * Kotlin requires a secondary constructor of a class that has a primary one to delegate with
-     * `: this(…)`, and the DSL cannot express that call, so the pair renders
+     * `: this(…)`. D25 made that call expressible — `` `this`(…) `` in the constructor's body — so
+     * the pair is legal *when it delegates* (`DelegationTest`); an undelegated secondary under a
+     * primary constructor still renders
      * `public class Box(public val size: Int) { public constructor(other: String) { … } }` —
-     * `e: Primary constructor call expected.` Rejected with a diagnostic instead.
+     * `e: Primary constructor call expected.` — and is still rejected with a diagnostic instead.
      */
     @Test
-    fun `a primary and a secondary constructor together are rejected`() {
+    fun `a primary and an undelegated secondary constructor together are rejected`() {
         val failure = assertFailsWith<IllegalStateException> {
             file("com.example", "Box") {
                 `class`("Box") {
@@ -663,7 +665,7 @@ class FunctionsTest {
 
     /** The same guard in the other writing order — the broken output is identical. */
     @Test
-    fun `a secondary constructor followed by a constructor parameter is rejected`() {
+    fun `an undelegated secondary constructor followed by a constructor parameter is rejected`() {
         val failure = assertFailsWith<IllegalStateException> {
             file("com.example", "Box") {
                 `class`("Box") {
@@ -719,11 +721,15 @@ class FunctionsTest {
     }
 }
 
-/** The message both halves of the primary/secondary constructor guard raise. */
+/**
+ * The message both halves of the primary/secondary constructor guard raise, spelled out here rather
+ * than referenced so that a change to the production constant has to be a deliberate one.
+ */
 private const val PRIMARY_PLUS_SECONDARY: String =
-    "constructor: a class cannot have both a primary constructor (from constructorParam) and a " +
-        "secondary `constructor`, because the DSL cannot express the required `: this(…)` " +
-        "delegation call. Fold the parameters into one constructor."
+    "constructor: a class with a primary constructor (from `class`(…, param(…)) or " +
+        "constructorParam) requires every secondary `constructor` to delegate to it with " +
+        "`: this(…)`. Call `this`(…) in the secondary constructor's body — `super`(…) does not " +
+        "satisfy it — or fold the parameters into one constructor."
 
 /** A one-statement lambda value, built outside every scope, for the delegate tests above. */
 private fun oneValueLambda(): Expr = detachedLambda { +1.lit }

@@ -20,31 +20,37 @@ import com.squareup.kotlinpoet.TypeName
 // the type already has.
 
 /**
- * The message both halves of the header-arguments guard raise.
+ * The message the header-arguments guard raises, as D25 leaves it.
  *
- * `class Foo : Bar(1) { constructor(y: Int) }` is not valid Kotlin: the arguments in the header give
- * `Foo` an implicit primary constructor, and a secondary constructor of a class that has a primary
- * one must delegate with `: this(…)`. KotlinPoet rejects the same pair from its own side
- * (`types without a primary constructor cannot specify secondary constructors and superclass
- * constructor parameters`, an `IllegalArgumentException` from `TypeSpec.Builder.build`), but only
- * once the whole type has been built and with no idea which construct wrote what — so this fires
- * first, at the call that creates the conflict, whichever of the two is written second.
+ * `class Foo : Bar(1) { constructor(y: Int) : this() }` is not valid Kotlin however the secondary
+ * constructor delegates: with no primary constructor to carry it, the header call is
+ * `e: Supertype initialization is impossible without a primary constructor.` (measured). KotlinPoet
+ * rejects the same shape from its own side (`types without a primary constructor cannot specify
+ * secondary constructors and superclass constructor parameters`, an `IllegalArgumentException` from
+ * `TypeSpec.Builder.build`), but only once the whole type has been built and with no idea which
+ * construct wrote what — so [TypeScope.finish] checks it first, naming both constructs.
+ *
+ * Both ways out are now open, which is what D25 changed: give the type a primary constructor and
+ * keep the arguments here (the secondary constructors then delegate to it with `` `this`(…) ``), or
+ * drop them from the header and pass them from a secondary constructor's own `` `super`(…) ``.
  *
  * A function of [kindName] rather than a constant, so it reads the same way its two neighbouring
  * messages do: an `object` that hits it says "a named object", not "a class".
- *
- * The other legal home for those arguments is the secondary constructor's own `: super(…)` call,
- * which D25 adds; until then a class that needs both a superclass call and secondary constructors
- * must give the superclass call a primary constructor to hang from.
  */
 internal fun superclassArgsPlusSecondary(kindName: String): String =
     "superclass: a $kindName cannot pass superclass constructor arguments in its header and also " +
-        "declare a secondary `constructor`, because the arguments make the header a primary " +
-        "constructor that the secondary one would have to delegate to. Give the $kindName a primary " +
-        "constructor (`class`(…, param(VAL, …)) or constructorParam) and keep the arguments here, " +
-        "or drop the arguments."
+        "declare a secondary `constructor` with no primary constructor to carry them — a supertype " +
+        "cannot be initialized in the header without one. Give the $kindName a primary constructor " +
+        "(`class`(…, param(VAL, …)) or constructorParam) and keep the arguments here, or drop them " +
+        "and pass them from the secondary constructor with `super`(…)."
 
-/** What the generated `superclass` runs: the three things the *type* has to be asked about first. */
+/**
+ * What the generated `superclass` runs: the two things the *type* has to be asked about first.
+ *
+ * The third — header arguments alongside a secondary constructor — moved to [TypeScope.finish] with
+ * D25, because a `constructorParam` written after this call can still make that combination legal
+ * and an eager check here would reject valid Kotlin on writing order alone.
+ */
 internal fun TypeScope.applySuperclass(type: TypeName, args: Array<out Expr>) {
     check(kindName != "interface") {
         "superclass: an interface has no superclass. Use superinterface to extend another interface."
@@ -52,7 +58,6 @@ internal fun TypeScope.applySuperclass(type: TypeName, args: Array<out Expr>) {
     check(!hasSuperclass) {
         "superclass: a $kindName can only extend one class, and this one already does."
     }
-    check(args.isEmpty() || !hasSecondaryCtor) { superclassArgsPlusSecondary(kindName) }
     hasSuperclass = true
     builder.superclass(type)
     // One `CodeBlock` per argument, not one joined block: KotlinPoet joins them itself, and keeping
