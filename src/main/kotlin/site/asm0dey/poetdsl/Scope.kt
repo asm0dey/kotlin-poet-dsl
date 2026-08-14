@@ -252,6 +252,10 @@ public class TypeScope internal constructor(
      * `thisDelegatingSecondaryCtorCount`) with none.
      */
     internal fun finish(): TypeSpec {
+        // The classifier-kind family's one deferred question, here for the same reason the three
+        // below are: a `constructorParam` written at the end of the body still supplies the
+        // parameter, so asking eagerly would answer on writing order alone. See [Kinds].
+        if (KModifier.DATA in builder.modifiers && !hasCtor) dataClassNeedsAParameter(kindName)
         val secondaryCtors = builder.funSpecs.filter { it.isConstructor }
         check(builder.superclassConstructorParameters.isEmpty() || secondaryCtors.isEmpty() || hasCtor) {
             superclassArgsPlusSecondary(kindName)

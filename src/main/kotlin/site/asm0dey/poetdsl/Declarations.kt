@@ -311,6 +311,11 @@ internal fun TypeScope.addConstructorParam(kind: ParamKind?, spec: ParameterSpec
     if (propertyParamKind != null && kind != ParamKind.VAL) {
         propertyParamMustBeVal(name, kind, propertyParamKind)
     }
+    // The `data class` half of the same sentence, and a third kind-keyed refusal that comes before
+    // the container-keyed one below: a data class takes `val` *or* `var` — which is why it is not in
+    // [PROPERTY_PARAM_KINDS] — and refuses only the plain parameter. It **rendered**, in every
+    // container and at every depth. See [dataClassNeedsPropertyParameters].
+    if (kind == null && KModifier.DATA in builder.modifiers) dataClassNeedsPropertyParameters(name)
     // The second does depend on the container, but not on `kind`: an `expect` `enum class` has no
     // primary constructor of any sort — *expected enum class cannot have a constructor* on all three
     // frontends, with `val`, with a plain parameter and with an empty parameter list alike. So the

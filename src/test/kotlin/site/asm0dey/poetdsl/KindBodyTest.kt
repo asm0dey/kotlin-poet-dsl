@@ -14,6 +14,7 @@ import com.squareup.kotlinpoet.KModifier.SEALED
 import com.squareup.kotlinpoet.KModifier.VALUE
 import com.squareup.kotlinpoet.UNIT
 import site.asm0dey.poetdsl.ParamKind.VAL
+import site.asm0dey.poetdsl.ParamKind.VAR
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -331,6 +332,55 @@ class KindBodyTest {
         assertTrue("public fun f(): Int\n" in external, external)
         assertTrue("public fun g(): Int\n" in external, external)
         assertTrue("public fun h(): Int\n" in external, external)
+    }
+
+    // --- a `data class` and its primary constructor --------------------------------------------
+
+    @Test
+    fun `a data class refuses a plain primary-constructor parameter`() {
+        val m = message { `class`(DATA, "D") { constructorParam(null, "a", INT) } }
+        assertTrue("must only have property ('val' / 'var') parameters" in m, m)
+        // …at every depth, and through the signature form as well as the in-body one.
+        assertTrue(
+            "must only have property" in message {
+                `class`("O") { `class`(DATA, "D", param(null, "a", INT)) { _ -> } }
+            },
+        )
+        assertTrue(
+            "must only have property" in message {
+                `object`("O") {
+                    `class`(DATA, "D", param(VAL, "a", INT), param(null, "b", INT)) { _, _ -> }
+                }
+            },
+        )
+    }
+
+    @Test
+    fun `a data class with no primary-constructor parameter is refused`() {
+        val m = message { `class`(DATA, "D") { } }
+        assertTrue("data class must have at least one primary constructor parameter" in m, m)
+        // The detached builder answers for itself, exactly as it does for every other kind rule.
+        val detached = assertFailsWith<IllegalStateException> {
+            typeSpec(DATA.toModifiers(), name = "D") { }
+        }
+        assertTrue("at least one primary constructor parameter" in detached.message!!, detached.message!!)
+    }
+
+    /** The control rows: what a data class still is. */
+    @Test
+    fun `a data class still takes val and var parameters and ordinary members`() {
+        assertCompiles(
+            render {
+                `class`(DATA, "D", param(VAL, "a", INT), param(VAR, "b", INT)) { _, _ ->
+                    `fun`("f", returns = INT) { ret(1.lit) }
+                    `class`("N") { }
+                    companionObject { }
+                }
+                // A *plain* parameter is exactly what an ordinary class still takes.
+                `class`("C", param(null, "a", INT)) { _ -> }
+                `class`("K") { constructorParam(null, "a", INT) }
+            },
+        )
     }
 
     private companion object {

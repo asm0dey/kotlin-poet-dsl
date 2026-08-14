@@ -325,6 +325,46 @@ internal fun Scope.abstractNeedsAnAbstractContainer(construct: String, name: Str
     )
 
 /**
+ * A `data class`'s primary constructor is the whole declaration: it must exist, and every parameter
+ * in it must declare a property. Measured, one file per row, all three frontends identical, at every
+ * depth and through the signature form and the in-body [constructorParam] alike:
+ *
+ *     data class D(a: Int)                    primary constructor of data class must only have
+ *     data class D(val a: Int, b: Int)         property ('val' / 'var') parameters.
+ *     data class D                            data class must have at least one primary constructor
+ *     data class D { constructor(q: Int) }     parameter.
+ *
+ * and the controls, clean on all three:
+ *
+ *     data class D(val a: Int)                data class D(val a: Int, var b: Int)
+ *     data class D(val a: Int) { fun f(): Int = 1 ; class N ; companion object }
+ *     class C(a: Int)                         — a plain parameter is what an ordinary class takes
+ *
+ * The count is answered in [TypeScope.finish] rather than eagerly, for the reason every check there
+ * is: a `constructorParam` written at the end of the body still supplies the parameter, so an eager
+ * check would answer on writing order alone.
+ */
+internal fun dataClassNeedsPropertyParameters(name: String): Nothing = kindRefusal(
+    "constructorParam",
+    "'$name' declares no property on the primary constructor of a `data class`, and a data class " +
+        "derives `equals`, `hashCode`, `toString` and `copy` from its properties, so a parameter " +
+        "that declares none has nothing to contribute",
+    "primary constructor of data class must only have property ('val' / 'var') parameters",
+    "Declare it with constructorParam(VAL, \"$name\", …) or param(VAL, \"$name\", …) — or VAR — or " +
+        "drop the `data` modifier.",
+)
+
+/** See [dataClassNeedsPropertyParameters]. */
+internal fun dataClassNeedsAParameter(kindName: String): Nothing = kindRefusal(
+    "`$kindName`",
+    "this `data class` has no primary-constructor parameter, and a data class is defined by the " +
+        "properties it derives `equals`, `hashCode`, `toString` and `copy` from",
+    "data class must have at least one primary constructor parameter",
+    "Give it a parameter — `class`(DATA, …, param(VAL, …)) or constructorParam(VAL, …) — or drop " +
+        "the `data` modifier.",
+)
+
+/**
  * Whether a classifier may be declared *inside* this one.
  *
  * An `inner class` is the one container that holds no nested classifier at all, and the exception is
