@@ -263,10 +263,41 @@ private val BINDINGS: List<BindConstruct> = listOf(
     BindConstruct(listOf(Spelling("`var`")), mutable = true, keyword = "var"),
 )
 
+/**
+ * The accessor half of a binding's KDoc, repeated on every `` `val` ``/`` `var` `` overload because
+ * a generated declaration's KDoc is the only documentation its caller ever hovers over.
+ *
+ * It is where the two spellings E2a deliberately did *not* give constructs to are written down: the
+ * backing `field`, and an extension body's `this`.
+ */
+private val BINDING_ACCESSOR_DOC: String = """
+    |
+    |
+    |A property takes accessors: [getter] is the trailing lambda and [setter] a named argument ahead
+    |of it, since two lambdas cannot both be trailing. [setterParam] names the setter's parameter —
+    |per ADR 0005 the rendered name comes from the DSL, never from the Kotlin binding the body's
+    |handle happens to be assigned to.
+    |
+    |Inside either body the backing field is `expression("field")` and an extension receiver's `this`
+    |is `expression("this")`. Neither gets a construct of its own: a construct valid only inside an
+    |accessor body would need a `BlockScope` shadow it cannot have, because an accessor body *is* a
+    |`BlockScope`.
+    |
+    |An extension property — one with a [receiver] — has no backing field, so it needs a getter (or a
+    |delegate), needs a setter as well when it is a `var`, and cannot have an initializer.
+    |[typeVariables] are allowed only where the receiver type uses them, which is Kotlin's own rule
+    |for a property's type parameter.
+    |
+    |A local binding in a block body takes none of these.
+""".trimMargin()
+
 private fun BindConstruct.overloads(): List<Overload> = names.flatMap { nm ->
     VARIANTS.map { v ->
         Overload(
-            doc = docFor(nm, "`$keyword name: T = init`${v.doc}: a local in a block, a property otherwise."),
+            doc = docFor(
+                nm,
+                "`$keyword name: T = init`${v.doc}: a local in a block, a property otherwise.",
+            ) + BINDING_ACCESSOR_DOC,
             context = "context(s: Scope)",
             name = nm.value,
             params = v.params() + listOf(
@@ -375,7 +406,10 @@ private fun funOverloads(): List<Overload> = FUN_NAMES.flatMap { nm ->
     ARITIES.flatMap { arity ->
         VARIANTS.map { v ->
             Overload(
-                doc = docFor(nm, "`fun name(…) { … }`${v.doc}, with ${arityDoc(arity)}."),
+                doc = docFor(nm, "`fun name(…) { … }`${v.doc}, with ${arityDoc(arity)}.") +
+                    "\n\n[receiver] declares an extension — `fun String.shout()`. The body gets no " +
+                    "handle for `this`;\nwrite `expression(\"this\")`, the same escape hatch an " +
+                    "accessor body uses for `field`.",
                 context = "context(s: Scope)",
                 name = nm.value,
                 params = v.params() + listOf("name: String") + arityParams(arity) +
