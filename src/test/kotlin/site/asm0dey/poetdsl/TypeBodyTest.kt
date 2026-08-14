@@ -349,6 +349,81 @@ class TypeBodyTest {
         assertCompiles(rendered)
     }
 
+    /**
+     * The companion's `ScopeId` used to be rooted *unconditionally* — `ScopeId(null, "companion
+     * object")` — so **every** companion, at any depth including one directly inside a top-level
+     * class, lost access to file-level handles: this exact shape threw "Handle from scope 'file'
+     * does not enclose the current scope 'fun(f)'" while kotlinc compiles `val limit = 10` plus
+     * `class Top { companion object { fun f() { println(limit) } } }` cleanly. [TypeScope.fileId]
+     * closed it.
+     */
+    @Test
+    fun `a file-level handle is accepted inside a companion object of a top-level class`() {
+        var handle: Expr? = null
+        val rendered = file("com.example", "Api") {
+            handle = `val`("limit", INT, init = 10.lit)
+            `class`("Top") { companionObject { `fun`("f") { +call("println", handle) } } }
+        }.toString()
+        assertTrue("println(limit)" in rendered, rendered)
+        assertCompiles(rendered)
+    }
+
+    /** And through a nesting level as well: the file's id is threaded down unchanged. */
+    @Test
+    fun `a file-level handle is accepted inside a companion object of a nested class`() {
+        var handle: Expr? = null
+        val rendered = file("com.example", "Api") {
+            handle = `val`("limit", INT, init = 10.lit)
+            `class`("Outer") {
+                `class`("Inner") { companionObject { `fun`("f") { +call("println", handle) } } }
+            }
+        }.toString()
+        assertTrue("println(limit)" in rendered, rendered)
+        assertCompiles(rendered)
+    }
+
+    /** kotlinc's word on both shapes above. */
+    @Test
+    fun `kotlinc accepts a top-level declaration read from inside a companion object`() {
+        assertCompiles(
+            """
+            private val limit: Int = 10
+
+            public class Top {
+              public companion object {
+                public fun f() { println(limit) }
+              }
+            }
+
+            public class Outer {
+              public class Inner {
+                public companion object {
+                  public fun f() { println(limit) }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+    }
+
+    /**
+     * The ownership half at depth: re-parenting the companion at the file must not let it see the
+     * *nested* class it belongs to either. That class's id is a sibling under the same file id.
+     */
+    @Test
+    fun `an enclosing-instance handle is rejected inside a nested class's companion object`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "F") {
+                `class`("Outer") {
+                    `class`("Inner", param(VAL, "id", LONG)) { id ->
+                        companionObject { `fun`("show") { +call("println", id) } }
+                    }
+                }
+            }
+        }
+        assertTrue("does not enclose the current scope" in failure.message.orEmpty(), "${failure.message}")
+    }
+
     /** An object has no constructors, so the message names the companion as the kind. */
     @Test
     fun `a constructor inside a companion object is rejected`() {

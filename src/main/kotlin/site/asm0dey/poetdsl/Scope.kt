@@ -74,6 +74,30 @@ public class TypeScope internal constructor(
      * instead. Defaulted to `"class"` for the detached [typeSpec] builder, which only ever builds one.
      */
     internal val kindName: String = "class",
+    /**
+     * The [ScopeId] of the [FileScope] this type ultimately came from, threaded down unchanged
+     * through every level of [declareType] and [addCompanionObject] — a **second, separate**
+     * identity from [id], carried because the two things [id] was being asked to express are not
+     * the same thing:
+     *
+     * - **instance ownership**, which stops at a non-`inner` type or companion boundary, so
+     *   [checkOwned] refuses an enclosing type's property or constructor-parameter handle;
+     * - **lexical file visibility**, which a top-level declaration keeps at *any* nesting depth —
+     *   `val limit = 10` at file level is readable inside `class Outer { class Inner { … } }` and
+     *   inside a `companion object`, and kotlinc agrees.
+     *
+     * Rooting a nested type's [id] at `ScopeId(null, …)` killed both at once. Parenting it at
+     * `fileId.child(…)` instead keeps them apart: every intermediate type's own [id] is a
+     * *sibling* under [fileId], never an ancestor of the nested child's [id] (they are distinct
+     * [ScopeId] instances and [ScopeId.isAncestorOf] compares by identity), so an enclosing
+     * instance's handle is still refused at every depth — while a file-level handle's owner **is**
+     * [fileId], which is always an ancestor, so it stays accepted.
+     *
+     * Defaults to a fresh root for a type with no file above it — [typeSpec]'s detached builder and
+     * directly-constructed test scopes. Nothing carries that id, so nested types under it chain to
+     * a scope no handle can ever name, which is the strict answer those cases already had.
+     */
+    internal val fileId: ScopeId = ScopeId(null, "file"),
 ) : Scope(names, id), Annotatable {
     /**
      * Whether [superclass] already ran. KotlinPoet tracks the same fact but keeps it internal, and

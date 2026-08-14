@@ -16,6 +16,7 @@ import site.asm0dey.poetdsl.ParamKind.VAR
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCompilerApi::class)
@@ -146,9 +147,8 @@ class TypeScopeTest {
     }
 
     /**
-     * The other half of [declareType]'s conditional root: a *top-level* type still chains to the
-     * enclosing file's scope, because that direction is legitimate — a file-level declaration is
-     * visible in every type's body in the same file, nested or not, and kotlinc agrees.
+     * The direction [TypeScope.fileId] exists to keep: a file-level declaration is visible in every
+     * type's body in the same file, nested or not, and kotlinc agrees.
      */
     @Test
     fun `a file-level handle is accepted inside a top-level type's member body`() {
@@ -159,6 +159,129 @@ class TypeScopeTest {
         }.toString()
         assertTrue("println(limit)" in rendered, rendered)
         assertCompiles(rendered)
+    }
+
+    /**
+     * Depth is not a boundary for *file* visibility. [declareType] used to root a nested type's
+     * `ScopeId` at `ScopeId(null, "type")`, which cut a type nested two or more levels deep off from
+     * the file as well: this exact shape threw
+     * "Handle from scope 'file' does not enclose the current scope 'fun(f)'" while kotlinc compiled
+     * the identical hand-written Kotlin with zero errors. [TypeScope.fileId] closed it — the nested
+     * type's id is now a child of the *file's* id at every depth.
+     */
+    @Test
+    fun `a file-level handle is accepted inside a type nested two levels deep`() {
+        var handle: Expr? = null
+        val rendered = file("com.example", "Api") {
+            handle = `val`("limit", INT, init = 10.lit)
+            `class`("Outer") { `class`("Inner") { `fun`("f") { +call("println", handle) } } }
+        }.toString()
+        assertTrue("println(limit)" in rendered, rendered)
+        assertCompiles(rendered)
+    }
+
+    /** kotlinc's word on the shape the two tests above render: legal Kotlin at either depth. */
+    @Test
+    fun `kotlinc accepts a top-level declaration read from one and two levels of nesting`() {
+        assertCompiles(
+            """
+            private val limit: Int = 10
+
+            public class One {
+              public fun f() { println(limit) }
+            }
+
+            public class Outer {
+              public class Inner {
+                public fun f() { println(limit) }
+              }
+            }
+            """.trimIndent(),
+        )
+    }
+
+    /**
+     * The ownership half, one level further down than
+     * [an enclosing-instance handle is rejected inside a nested type's member body]: re-parenting at
+     * the file must not become "accept anything above". The intermediate type's own id is a
+     * *sibling* under the file's, never an ancestor of the innermost type's, so its instance state
+     * is still refused.
+     */
+    @Test
+    fun `an enclosing-instance handle is rejected two levels down`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "N3") {
+                `class`("N3") {
+                    `class`("Mid", param(VAL, "id", LONG)) { id ->
+                        `class`("Inner") { `init` { +call("println", id) } }
+                    }
+                }
+            }
+        }
+        assertTrue("does not enclose the current scope" in failure.message.orEmpty(), "${failure.message}")
+    }
+
+    /** The same, but skipping a level: the *outermost* type's instance state, two levels down. */
+    @Test
+    fun `the outermost type's instance handle is rejected two levels down`() {
+        val failure = assertFailsWith<IllegalStateException> {
+            file("com.example", "N3") {
+                `class`("N3", param(VAL, "id", LONG)) { id ->
+                    `class`("Mid") { `class`("Inner") { `init` { +call("println", id) } } }
+                }
+            }
+        }
+        assertTrue("does not enclose the current scope" in failure.message.orEmpty(), "${failure.message}")
+    }
+
+    /** kotlinc's word on both shapes the two guards above refuse to produce. */
+    @Test
+    fun `kotlinc refuses an enclosing-instance handle two levels down`() {
+        val fromMid = compile(
+            "class N3 { class Mid(val id: Long) { class Inner { init { println(id) } } } }",
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, fromMid.exitCode, fromMid.messages)
+        val fromOutermost = compile(
+            "class N4(val id: Long) { class Mid { class Inner { init { println(id) } } } }",
+        )
+        assertEquals(
+            KotlinCompilation.ExitCode.COMPILATION_ERROR,
+            fromOutermost.exitCode,
+            fromOutermost.messages,
+        )
+    }
+
+    /**
+     * The control that proves [TypeScope.fileId] re-parented the check rather than widening it: a
+     * handle owned by a genuinely unrelated scope — a local of a function in a *different* file,
+     * which is an unresolved reference in Kotlin however it is spliced — is still refused at every
+     * one of the positions the fix newly accepts file-level handles in.
+     */
+    @Test
+    fun `a handle from an unrelated scope is rejected at every depth and inside a companion`() {
+        var declared: Expr? = null
+        file("com.example", "Donor") { `fun`("donor") { declared = `val`("secret", INT, init = 1.lit) } }
+        val foreign = assertNotNull(declared)
+
+        val positions = listOf<FileScope.() -> Unit>(
+            { `class`("C") { `fun`("f") { +call("println", foreign) } } },
+            { `class`("Outer") { `class`("Inner") { `fun`("f") { +call("println", foreign) } } } },
+            { `class`("Top") { companionObject { `fun`("f") { +call("println", foreign) } } } },
+            {
+                `class`("Outer") {
+                    `class`("Inner") { companionObject { `fun`("f") { +call("println", foreign) } } }
+                }
+            },
+        )
+        positions.forEachIndexed { index, position ->
+            val failure = assertFailsWith<IllegalStateException>("position $index") {
+                file("com.example", "A", position)
+            }
+            assertTrue(
+                "does not enclose the current scope" in failure.message.orEmpty(),
+                "position $index: ${failure.message}",
+            )
+        }
     }
 
     @Test

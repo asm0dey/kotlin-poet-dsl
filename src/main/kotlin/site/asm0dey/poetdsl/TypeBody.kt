@@ -70,17 +70,25 @@ internal fun TypeScope.addInitializerBlock(body: BlockScope.() -> Unit) {
  * What both generated `companionObject` overloads run; [name] is null for the anonymous form,
  * which Kotlin renders as a bare `companion object` and refers to as `Companion`.
  *
- * The companion's own [TypeScope] is rooted on *both* axes — a fresh [NameScope] and a **root**
- * [ScopeId]`(null, …)`, the same shape [declareType] gives a nested type — and for the same reason:
- * a companion object is a *nested* object, so it cannot see the enclosing type's instance members,
- * and chaining either would carry them in. Chaining the names would rename the companion's own
- * members against members they can never shadow; chaining the [ScopeId] is worse — it would make
- * [checkOwned] *accept* an enclosing-instance handle (a constructor parameter or property of the
- * type the companion belongs to) inside the companion body, and Kotlin does not:
- * `class F(val id: Long) { companion object { fun show() { println(id) } } }` is
- * `e: Unresolved reference 'id'.` (measured). A root [ScopeId] rejects that exactly as it rejects a
- * handle smuggled in from any other unrelated scope — [ScopeId.isAncestorOf] walks up from the use
- * site and reaches neither.
+ * The companion's [NameScope] is a fresh root, and its [ScopeId] is re-parented at the *file* —
+ * [TypeScope.fileId]`.child("companion object")`, the same shape [declareType] gives a nested type,
+ * and for the same reason: a companion object is a *nested* object, so it cannot see the enclosing
+ * type's instance members, and chaining to that type would carry them in. Chaining the names would
+ * rename the companion's own members against members they can never shadow; chaining the [ScopeId]
+ * is worse — it would make [checkOwned] *accept* an enclosing-instance handle (a constructor
+ * parameter or property of the type the companion belongs to) inside the companion body, and Kotlin
+ * does not: `class F(val id: Long) { companion object { fun show() { println(id) } } }` is
+ * `e: Unresolved reference 'id'.` (measured). Parenting at [TypeScope.fileId] rejects that exactly
+ * as a bare root would — the enclosing type's own [ScopeId] is a *sibling* under the same
+ * [TypeScope.fileId], so [ScopeId.isAncestorOf] walks up from the use site and never reaches it,
+ * any more than it reaches a handle smuggled in from an unrelated scope.
+ *
+ * The [ScopeId] used to be a bare `ScopeId(null, "companion object")`, rooted **unconditionally** —
+ * which cost *every* companion, at any depth including one directly inside a top-level class, its
+ * access to file-level handles: `` `val`("limit", …) `` at file level used inside
+ * `` `class`("Top") { companionObject { `fun`("f") { +call("println", limit) } } } `` threw, while
+ * kotlinc compiles the equivalent Kotlin cleanly. [TypeScope.fileId] closed that; a file-level
+ * handle's owner *is* [TypeScope.fileId], which is always an ancestor of the companion's body.
  *
  * Its [TypeScope.kindName] is `"companion object"`, which is what makes the messages of the
  * constructs it does *not* support name it: an object has no constructors, so
@@ -106,8 +114,9 @@ internal fun TypeScope.addCompanionObject(name: String?, body: TypeScope.() -> U
     val scope = TypeScope(
         TypeSpec.companionObjectBuilder(name),
         NameScope(null),
-        ScopeId(null, "companion object"),
+        fileId.child("companion object"),
         "companion object",
+        fileId,
     )
     scope.body()
     builder.addType(scope.finish())

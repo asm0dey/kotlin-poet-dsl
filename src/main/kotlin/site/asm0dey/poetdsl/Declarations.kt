@@ -37,20 +37,23 @@ import com.squareup.kotlinpoet.TypeSpec
  * case ADR 0009's shadowing rationale actually describes — this only changes how a *type's own*
  * scope is rooted.
  *
- * A nested type's [ScopeId], not just its [NameScope], is rooted too — `ScopeId(null, "type")`
- * rather than `id.child("type")` — when the enclosing scope is itself a [TypeScope], for the
- * identical reason [addCompanionObject]'s is: chaining would let `checkOwned`
- * *accept* a handle from the enclosing type's own scope (a constructor parameter or property)
- * inside the nested type's member bodies, which Kotlin does not allow a non-`inner` nested class
- * — `class N2(val id: Long) { class Inner { init { println(id) } } }` is
- * `e: Unresolved reference 'id'.` (measured). A *top-level* type keeps chaining to the enclosing
- * [FileScope]'s [id], because that direction is legitimate: a top-level property or function is
- * visible in every type's body in the same file, chained or not, and Kotlin agrees. One
- * consequence of rooting only the [TypeScope] branch: a type nested two or more levels deep no
- * longer chains back to the file's own scope either, so a file-level handle used inside a
- * doubly-nested type's member body would now be rejected — code that is legal Kotlin. No test in
- * this suite reaches that depth, and it is a narrower, pre-existing gap of the same kind
- * `` `param(VAL, …)` `` documents for other rejections, not a new source of invalid output.
+ * A nested type's [ScopeId], not just its [NameScope], is re-parented too: it is
+ * [TypeScope.fileId]`.child("type")` — a child of the *file*, skipping every intermediate type —
+ * rather than `id.child("type")`, when the enclosing scope is itself a [TypeScope]. Chaining to the
+ * enclosing type would let `checkOwned` *accept* a handle from that type's own scope (a constructor
+ * parameter or property) inside the nested type's member bodies, which Kotlin does not allow a
+ * non-`inner` nested class — `class N2(val id: Long) { class Inner { init { println(id) } } }` is
+ * `e: Unresolved reference 'id'.` (measured). Re-parenting at the file rejects that just as a bare
+ * root would, because the enclosing type's own [id] is a *sibling* under the same [TypeScope.fileId]
+ * and never an ancestor — while keeping the direction that *is* legitimate at every depth: a
+ * top-level property or function is visible in every type's body in the same file however deeply
+ * nested, and Kotlin agrees. A *top-level* type takes the [FileScope]'s own [id] as its
+ * [TypeScope.fileId], which is the same `id.child("type")` it always had.
+ *
+ * This paragraph used to record the opposite trade-off — that rooting the [TypeScope] branch at
+ * `ScopeId(null, "type")` cost a type nested two or more levels deep its file-level handle access,
+ * an accepted narrower gap. [TypeScope.fileId] closed it; the gap no longer applies, in this
+ * construct or in [addCompanionObject], which had the same hole at *every* depth.
  */
 internal fun Scope.declareType(
     builder: TypeSpec.Builder,
@@ -74,11 +77,17 @@ internal fun Scope.declareType(
     }
     declaredTypeNames += name
 
+    // The file this type belongs to, threaded on unchanged: a nested type inherits the enclosing
+    // type's `fileId`, a top-level one takes the file's own `id`. (A `BlockScope` has no file above
+    // it — a local type is rejected below either way — so its own `id` stands in, which is the
+    // scope a local type would nest under if KotlinPoet could render one.)
+    val enclosingFileId = if (this is TypeScope) fileId else id
     val scope = TypeScope(
         builder.addModifiers(modifiers.toList()),
         NameScope(null),
-        if (this is TypeScope) ScopeId(null, "type") else id.child("type"),
+        enclosingFileId.child("type"),
         kindName,
+        enclosingFileId,
     )
     scope.addAll(annotations)
     // The primary-constructor parameters of D23's signature form go in before the body runs, so the
