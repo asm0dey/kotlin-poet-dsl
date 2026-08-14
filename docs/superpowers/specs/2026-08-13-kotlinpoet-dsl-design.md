@@ -335,7 +335,7 @@ Arguments are `Expr`, not strings, so `%T`/`%M` survive and imports resolve.
 
 KotlinPoet emits one annotation per line rather than Kotlin's bracketed `@set:[A B]` form. The output is semantically identical; no raw escape is provided.
 
-Type-position annotations come free from KotlinPoet: `param("x", INT.annotated<Positive>())`.
+Type-position annotations go through `annotated`, this DSL's bridge from `annotation`/`ann` to a `TypeName`: `param("x", INT.annotated(ann<Positive>("min" to 0.lit)))`. (The spelling this line carried originally — `INT.annotated<Positive>()` — matched no overload; KotlinPoet 2.3.0 has no reified form, and its `AnnotationSpec`-taking overloads cannot be reached from outside the module because `Annotations.list` is `@PublishedApi internal`. See the E1 fix round.)
 
 ### Aliases
 
@@ -363,8 +363,15 @@ Every backticked keyword has a full-word alias, so bulk codegen need not fight b
 | `statement` | `stmt` |
 | `constructorParam` | `ctorParam` |
 | `` `constructor` `` | `ctor` |
+| `typeReference` | `typeRef` |
+| `typeVariable` | `typeVar` |
+| `functionType` | `funType` |
+| `arrayLiteral` | `arrayLit` |
+| `parameterizedBy` | `of` |
 
 The convention is **full word is canonical, short form is the alias** — `annotation`/`ann`, `member`/`mem`, `expression`/`expr`, `reference`/`ref`, `literal`/`lit`, `statement`/`stmt`, `constructorParam`/`ctorParam`. Where the natural full name is a Kotlin keyword it is backticked and canonical (`` `return` ``/`ret`, `` `break` ``/`brk`, `` `continue` ``/`cont`, `` `constructor` ``/`ctor`). Full alias table is fixed during implementation; both spellings are supported permanently. Note that `property` (declaration) and `prop` (property *access* on an `Expr`) are deliberately different names — they live in different scopes but would read alike.
+
+**`parameterizedBy`/`of` is the one row that is not a short form but a different word**, and deliberately so: the nesting the construct exists for reads as `MAP.of(STRING, LIST.of(user))` and is unusable spelled out. Its KDoc says so. `className` has no alias at all, which the rule in the next paragraph already covers.
 
 **The table above is a fixed list, not a blanket rule: a construct with no natural short form gets no alias.** The operator names already show this — `eq`, `lt`, `and`, `not`, `elvis` are canonical with nothing to shorten — and D26's `superclass`/`superinterface` are the same case, decided by the human: the two candidates worth considering, `extends`/`implements`, import Java's spelling and read wrong inside an `` `interface` `` body, where `superinterface` means *extends*. An alias audit should not flag either as a gap.
 
