@@ -230,6 +230,13 @@ class DocumentationTest {
      * position, which is the one shape that can rebind *silently* rather than failing at the
      * caller's compile. It does not: Kotlin picks the more specific `String`. Measured at base and
      * at head — see D35 — and pinned here so a later reordering cannot quietly change it.
+     *
+     * Class `E` is the assertion that actually exercises the resolution, and the reason this test
+     * grew one: the two classes above it pass `kdoc` **by name**, which takes the anonymous overload
+     * out of the candidate set before overload resolution starts. `companionObject("Bare") { }` is
+     * the bare spelling where both overloads are applicable and the answer matters. (The behaviour
+     * has been pinned all along by `TypeBodyTest.a named companion object renders its name`; D35's
+     * row I1 credited this test, which is what prompted the correction.)
      */
     @Test
     fun `a companion object takes kdoc, and naming one still names it`() {
@@ -251,11 +258,46 @@ class DocumentationTest {
               public companion object
             }
 
+            public class E {
+              public companion object Bare
+            }
+
             """.trimIndent(),
             file("com.example", "A") {
                 `class`("C") { companionObject("Factory", kdoc = "The factory.") { } }
                 `class`("D") { companionObject(kdoc = "The anonymous one.") { } }
+                `class`("E") { companionObject("Bare") { } }
             }.toString(),
+        )
+    }
+
+    /**
+     * The one live foot-gun on that shared position, and the only way to trip over it: a `String?`
+     * passed **positionally** cannot bind to the named overload's `name: String`, so the anonymous
+     * overload is the only candidate and the value lands in `kdoc`. The result is an *anonymous*
+     * companion object documented `"Factory"`.
+     *
+     * Nothing rebinds silently here in D35's sense — the spelling did not compile at base at all,
+     * where the two overloads were `companionObject(body)` and `companionObject(name: String, body)`
+     * and a `String?` matched neither — so it is a new capability with a sharp edge rather than a
+     * changed meaning. Pinned so that the edge is a recorded fact.
+     */
+    @Test
+    fun `a nullable name passed positionally documents an anonymous companion object`() {
+        val maybe: String? = "Factory"
+        assertEquals(
+            """
+            package com.example
+
+            public class C {
+              /**
+               * Factory
+               */
+              public companion object
+            }
+
+            """.trimIndent(),
+            file("com.example", "A") { `class`("C") { companionObject(maybe) { } } }.toString(),
         )
     }
 
