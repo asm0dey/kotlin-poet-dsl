@@ -10,11 +10,20 @@ import kotlin.test.assertEquals
 
 /**
  * Compiles [source] as a standalone Kotlin file, with the DSL itself on the classpath and
- * compiler chatter discarded. The one kctfork invocation shared by [compile] and [compileDsl] —
- * they differed only in how the source text was assembled, not in how it was compiled.
+ * compiler chatter discarded. **The only kctfork invocation in this file** — every other entry
+ * point below differs from its neighbours in how the source text is assembled or which flag is
+ * set, never in how the compiler is configured, so the [jvmTarget] rationale below has exactly one
+ * place to live and the next harness change has exactly one place to land.
+ *
+ * @param multiplatform passes `-Xmulti-platform`; see [compileMultiplatform], the only caller that
+ *   sets it, for what that buys and what it does not.
  */
 @OptIn(ExperimentalCompilerApi::class)
-private fun compileKotlin(fileName: String, source: String): JvmCompilationResult = KotlinCompilation().apply {
+private fun compileKotlin(
+    fileName: String,
+    source: String,
+    multiplatform: Boolean = false,
+): JvmCompilationResult = KotlinCompilation().apply {
     sources = listOf(SourceFile.kotlin(fileName, source))
     inheritClassPath = true
     // kctfork defaults to JVM target 1.8, while this module is built against 17. That only shows
@@ -23,6 +32,7 @@ private fun compileKotlin(fileName: String, source: String): JvmCompilationResul
     // being built with JVM target 1.8". A consumer compiles against the same toolchain, so this is
     // what a snippet should have been compiled with all along.
     jvmTarget = "17"
+    this.multiplatform = multiplatform
     messageOutputStream = OutputStream.nullOutputStream()
 }.compile()
 
@@ -31,10 +41,8 @@ private fun compileKotlin(fileName: String, source: String): JvmCompilationResul
 internal fun compile(source: String): JvmCompilationResult = compileKotlin("Generated.kt", source)
 
 /**
- * Compiles rendered Kotlin with `-Xmulti-platform`, which is what `expect`/`actual` need before the
- * frontend will look at them at all: without it every `expect` declaration is answered with
- * *'expect' and 'actual' declarations can be used only in multiplatform projects* and no later rule
- * is ever reached.
+ * Compiles rendered Kotlin with `-Xmulti-platform`, so that a single-file `expect` declaration is
+ * judged as one rather than as a project-layout mistake.
  *
  * **The exit code is never OK here and is not what to assert on.** A single compilation unit has no
  * platform source set to put the `actual` in, so the result always carries *expected E has no actual
@@ -43,15 +51,20 @@ internal fun compile(source: String): JvmCompilationResult = compileKotlin("Gene
  * — the compiler runs the expect-specific rules (*expected property cannot have an initializer*) and
  * the ordinary ones (*property must be initialized or be abstract*) before it gets that far, so their
  * presence and absence is a measurement rather than an inference.
+ *
+ * **The flag is not what makes that measurable, and this KDoc used to claim it was.** It said that
+ * without `-Xmulti-platform` "no later rule is ever reached", which is false — measured on kotlinc
+ * 2.4.10, `expect class E { class N { val x: Int = 1 } }` reports *expected property cannot have an
+ * initializer* with the flag and **also** without it, where that error simply arrives alongside
+ * *'expect' and 'actual' declarations can be used only in multiplatform projects* instead of
+ * alongside the missing-`actual` one. All the flag does is swap which unavoidable error accompanies
+ * the interesting ones. Pinned by `the expect diagnostics do not depend on the multiplatform flag`,
+ * which runs the same source through [compile]; the D36 measurement is if anything stronger for
+ * holding under both settings. Kept because it states the intent and drops a misleading error line.
  */
 @OptIn(ExperimentalCompilerApi::class)
-internal fun compileMultiplatform(source: String): JvmCompilationResult = KotlinCompilation().apply {
-    sources = listOf(SourceFile.kotlin("Generated.kt", source))
-    inheritClassPath = true
-    jvmTarget = "17"
-    multiplatform = true
-    messageOutputStream = OutputStream.nullOutputStream()
-}.compile()
+internal fun compileMultiplatform(source: String): JvmCompilationResult =
+    compileKotlin("Generated.kt", source, multiplatform = true)
 
 /** Compiles [source] and asserts it succeeds, printing the compiler's messages if it does not. */
 @OptIn(ExperimentalCompilerApi::class)

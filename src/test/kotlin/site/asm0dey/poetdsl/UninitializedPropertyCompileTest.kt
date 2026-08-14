@@ -98,6 +98,35 @@ class UninitializedPropertyCompileTest {
     }
 
     /**
+     * The methodological correction the harness deduplication turned up: `-Xmulti-platform` is **not**
+     * what makes the test above a measurement, and [compileMultiplatform]'s KDoc used to say it was.
+     *
+     * The same two renders go through plain [compile] here, with no flag at all, and produce the same
+     * two answers. Without the flag the compiler adds *'expect' and 'actual' declarations can be used
+     * only in multiplatform projects*; with it, *expected E has no actual declaration*. Neither
+     * suppresses anything — the initializer rule fires either way, on the nested class's property,
+     * which is the observation D36 rests on.
+     *
+     * Found by falsification rather than by reading: flipping `multiplatform = true` to `false` in
+     * [compileMultiplatform] failed **no test**, which is exactly what a flag nothing depends on
+     * looks like.
+     */
+    @Test
+    fun `the expect diagnostics do not depend on the multiplatform flag`() {
+        fun render(inner: Expr?) = file("com.example", "Expected") {
+            `class`(EXPECT, "E") { `class`("N") { `val`("x", INT, init = inner) } }
+        }.toString()
+
+        val bare = compile(render(null)).messages
+        assertFalse("must be initialized" in bare, bare)
+        assertFalse("cannot have an initializer" in bare, bare)
+        assertTrue("only in multiplatform projects" in bare, bare)
+
+        val initialized = compile(render(1.lit)).messages
+        assertTrue("property cannot have an initializer" in initialized, initialized)
+    }
+
+    /**
      * The other direction, and the reason the guard exists: the exact text the DSL used to render
      * for each rejected container, compiled to show kotlinc refuses it. These are the renders
      * captured from the `assertFailsWith` failures in `UninitializedPropertyTest` before the guard
