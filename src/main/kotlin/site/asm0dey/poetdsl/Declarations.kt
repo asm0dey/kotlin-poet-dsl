@@ -709,6 +709,12 @@ public fun funSpec(
  * Like [funSpec] and [typeSpec], an unchecked boundary for ADR 0008: a [PropertySpec] cannot carry
  * the scopes [init] or [by] were built from, so adding it validates nothing. See ADR 0008's Task 21
  * amendment.
+ *
+ * E2a's slots track the attached `` `val` `` — same guards, same function — with one deliberate
+ * omission: there is no `setter`, because this builder has no `mutable` slot and therefore only ever
+ * builds a `val`, and `PropertySpec.build` is `require(mutable || setter == null)`. A setter here
+ * could never be anything but an error. A `var` with a setter is `` `var`(…) `` in a file or type
+ * body.
  */
 public fun propertySpec(
     modifiers: Modifiers? = null,
@@ -716,12 +722,19 @@ public fun propertySpec(
     type: TypeName,
     init: Expr? = null,
     by: Expr? = null,
+    typeVariables: List<TypeVariableName> = emptyList(),
+    receiver: TypeName? = null,
+    getter: (BlockScope.() -> Unit)? = null,
 ): PropertySpec {
     check(init == null || by == null) {
         "propertySpec: '$name' cannot have both an initializer and a delegate."
     }
+    checkProperty("`val`", name, mutable = false, init, by, typeVariables, receiver, setter = null, getter = getter)
     val spec = PropertySpec.builder(name, type, modifiers.toList())
+    spec.addTypeVariables(typeVariables)
+    receiver?.let { spec.receiver(it) }
     init?.let { spec.initializer("%L", it.code) }
     by?.let { spec.delegate("%L", it.code) }
+    spec.addAccessors(parent = null, name = name, type = type, setterParam = "value", setter = null, getter = getter)
     return spec.build()
 }

@@ -310,6 +310,39 @@ class AccessorsTest {
     }
 
     /**
+     * The detached builder tracks the attached construct, as it did for E1's `typeVariables` on
+     * [funSpec] — and under the same rules, because the guards are one function and cannot drift.
+     *
+     * No `setter` slot, deliberately: [propertySpec] builds a `val` and has no `mutable` slot at
+     * all (a gap that predates E2a), and `PropertySpec.build` is `require(mutable || setter ==
+     * null)`, so a setter here could never be anything but an error.
+     */
+    @Test
+    fun `propertySpec takes the same getter, receiver and type parameters`() {
+        val t = typeVariable("T")
+        assertEquals(
+            """
+            val <T> kotlin.collections.List<T>.second: T
+              get() = this.get(1)
+
+            """.trimIndent(),
+            propertySpec(
+                name = "second",
+                type = t,
+                receiver = LIST.of(t),
+                typeVariables = listOf(t),
+            ) { ret(expression("this").call("get", 1.lit)) }.toString(),
+        )
+        assertEquals(
+            "`val`: 'stray' is an extension property, which has no backing field, so it needs a " +
+                "getter (or a delegate).",
+            assertFailsWith<IllegalStateException> {
+                propertySpec(name = "stray", type = INT, receiver = STRING)
+            }.message,
+        )
+    }
+
+    /**
      * ADR 0008, inward: an accessor body is a nested scope reached through a *property* rather than
      * a function, which nothing before E2a exercised. A handle from an unrelated scope must be
      * rejected at splice time exactly as it is inside a `` `fun` `` body.

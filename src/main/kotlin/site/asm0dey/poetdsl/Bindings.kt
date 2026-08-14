@@ -117,31 +117,43 @@ private fun Scope.propertyOf(
             init?.let { initializer("%L", it.code) }
             by?.let { delegate("%L", it.code) }
             annotations?.list?.forEach { addAnnotation(it) }
-            // Both accessor bodies are built by `buildFun` against *this* scope as their parent, so
-            // an accessor is a nested block exactly like a member function's body: its names chain
-            // from the member level and its `ScopeId` is a child of it, which is what makes ADR
-            // 0008 judge a handle used inside one — in either direction — with no change to
-            // `checkOwned`. The accessor is passed the property's name rather than `get()`/`set()`:
-            // `FunSpec.getterBuilder()` names itself, and the name is what the rejection message
-            // needs to be able to say which property's accessor the handle turned up in.
-            getter?.let { body ->
-                getter(
-                    buildFun(
-                        name, FunKind.GETTER, null, null, emptyList(), emptyList(), null, null,
-                        this@propertyOf,
-                    ) { body() },
-                )
-            }
-            setter?.let { body ->
-                setter(
-                    buildFun(
-                        name, FunKind.SETTER, null, null, listOf(param(setterParam, type)), emptyList(), null, null,
-                        this@propertyOf,
-                    ) { (value) -> body(value) },
-                )
-            }
+            addAccessors(this@propertyOf, name, type, setterParam, setter, getter)
         }
         .build()
+}
+
+/**
+ * Builds whichever accessor bodies were passed, against [parent] as the enclosing scope.
+ *
+ * Both go through [buildFun], so an accessor body is a nested block exactly like a member
+ * function's: its names chain from the member level and its [ScopeId] is a child of it, which is
+ * what makes ADR 0008 judge a handle used inside one — in either direction, and reached through a
+ * *property* rather than a function — with no change to [checkOwned]. A null [parent] is
+ * [propertySpec]'s detached case, and [buildFun] gives it the same detached-root treatment it gives
+ * [funSpec].
+ *
+ * The accessor is passed the *property's* name rather than `get()`/`set()`:
+ * `FunSpec.getterBuilder()` names itself, and the name is what lets ADR 0008's rejection message say
+ * which property's accessor a smuggled handle turned up in.
+ */
+internal fun PropertySpec.Builder.addAccessors(
+    parent: Scope?,
+    name: String,
+    type: TypeName,
+    setterParam: String,
+    setter: (BlockScope.(Expr) -> Unit)?,
+    getter: (BlockScope.() -> Unit)?,
+) {
+    getter?.let { body ->
+        getter(buildFun(name, FunKind.GETTER, null, null, emptyList(), emptyList(), null, null, parent) { body() })
+    }
+    setter?.let { body ->
+        setter(
+            buildFun(
+                name, FunKind.SETTER, null, null, listOf(param(setterParam, type)), emptyList(), null, null, parent,
+            ) { (value) -> body(value) },
+        )
+    }
 }
 
 /**
@@ -155,7 +167,7 @@ private fun Scope.propertyOf(
  * a `BlockScope` shadow it could not have — the accessor body *is* a `BlockScope` — reopening ADR
  * 0002 for two words.
  */
-private fun checkProperty(
+internal fun checkProperty(
     keyword: String,
     name: String,
     mutable: Boolean,
