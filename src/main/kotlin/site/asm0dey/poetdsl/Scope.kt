@@ -116,6 +116,26 @@ public class TypeScope internal constructor(
      * [UninitializedPropertyCompileTest] pins on this DSL's own output.
      */
     internal val isExpect: Boolean = false,
+    /**
+     * Whether this type is `external` — **including implicitly**, by being declared inside one.
+     * Threaded down exactly the way [isExpect] and [fileId] are, and for the same kind of reason:
+     * the fact belongs to the whole nest.
+     *
+     * KotlinPoet threads the same fact down itself, and at *every* depth: `TypeSpec.emit` passes
+     * `kind.implicitFunctionModifiers(modifiers + implicitModifiers)` to every member function
+     * (`TypeSpec.kt:348`), so a function inside `external class C { class N { … } }` is emitted with
+     * an implicit `EXTERNAL` and **its body is omitted**. That is what makes
+     * `external class C { class N { fun f(): Int } }` a signature rather than an empty block, and it
+     * is clean on Kotlin/JS and Kotlin/Wasm at every depth (measured). The empty-body rule in
+     * [buildFun] has to know it or it would refuse output two frontends accept.
+     *
+     * **Deliberately not the same reading as [PropertyContainer.externalAllowed]**, which asks the
+     * *immediate* builder and must keep doing so: a **property**'s implicit modifiers come from
+     * `kind.implicitPropertyModifiers(modifiers)` (`TypeSpec.kt:313`), the immediate builder's alone,
+     * so the keyword survives one level down where a function's does not. Two questions about one
+     * keyword, and KotlinPoet answers them differently — see D37 and D40's suppression table.
+     */
+    internal val isExternal: Boolean = false,
 ) : Scope(names, id), Annotatable {
     /**
      * What [superclass] was given, or null if it has not run. KotlinPoet tracks the same fact —

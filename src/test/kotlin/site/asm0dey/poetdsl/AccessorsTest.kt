@@ -51,11 +51,16 @@ class AccessorsTest {
 
             import kotlin.String
 
-            public fun <T> f(): String {
-            }
+            public fun <T> f(): String = "x"
 
             """.trimIndent(),
-            file("com.example", "A") { `fun`("f", listOf(typeVariable("T")), STRING) { } }.toString(),
+            // The body is what E2c's empty-body rule made necessary — `fun f(): String { }` renders
+            // a block that returns nothing and is refused now. What this test pins is unchanged: a
+            // positional third argument binds to `returns`, and a *receiver* would have rendered
+            // `String.f()` instead.
+            file("com.example", "A") {
+                `fun`("f", listOf(typeVariable("T")), STRING) { ret("x".lit) }
+            }.toString(),
         )
     }
 

@@ -218,6 +218,64 @@ internal fun annotationHasNoSupertypes(construct: String): Nothing = kindRefusal
 )
 
 /**
+ * Whether a declaration written *in* this scope is `external` — the twin of [Scope.isExpectContainer],
+ * and read the same way: **one predicate, one reader**.
+ *
+ * [TypeScope.isExternal], not `EXTERNAL in builder.modifiers`: Kotlin makes every member of an
+ * `external` classifier external, writes no keyword on the nested ones, and KotlinPoet omits their
+ * bodies at every depth. A [FileScope] answers `false` — a *file* is not an `external` container, and
+ * a top-level declaration is `external` only by carrying the modifier itself.
+ */
+internal val Scope.isExternalContainer: Boolean
+    get() = this is TypeScope && isExternal
+
+/**
+ * A function whose return type is declared and whose body is empty renders `{ }` — and
+ * *missing return statement* is what all three frontends say about it, in **every** container. The
+ * one rule the matrix found that is not keyed on the classifier's kind at all: it fired in 13 of the
+ * 13 kinds at all four positions, 50 cells, which is what made it look like a kind rule until the
+ * rows were laid side by side.
+ *
+ * The exempt set is exactly the shapes whose body KotlinPoet **omits**, so that what renders is a
+ * signature (`FunSpec.emit`, `canNotHaveBody`/`canBodyBeOmitted`, `FunSpec.kt:137-148`):
+ *
+ * | shape | why the body is omitted |
+ * |---|---|
+ * | `ABSTRACT` in the function's own modifiers | `canNotHaveBody` |
+ * | `EXPECT` in its own modifiers, or in the container's at any depth | `canNotHaveBody`, and D36 |
+ * | `EXTERNAL` in its own modifiers, or in the container's at any depth | `canBodyBeOmitted` |
+ * | a constructor | `canBodyBeOmitted` |
+ * | no return type, or `Unit` | there is nothing to return |
+ *
+ * Measured, one file per row, all three frontends (the `external` rows on Kotlin/JS and
+ * Kotlin/Wasm, which is where `external` compiles at all — D37's platform rule):
+ *
+ *     fun f(): Unit { }                       clean      fun f() { }                        clean
+ *     interface I { abstract fun f(): Int }   clean      abstract class A { abstract fun f(): Int }
+ *     expect fun f(): Int                     clean      expect class E { fun f(): Int }    clean
+ *     external fun f(): Int                   clean      external class C { fun f(): Int }  clean
+ *     external class C { class N { fun f(): Int } }      clean — at every depth
+ *     external class C { object O { fun f(): Int } }     clean
+ *
+ *     fun f(): Int { }                        missing return statement.
+ *     fun f(): Nothing { }                    missing return statement.
+ *
+ * `UNIT` is the exemption that is about the *type* rather than the render: KotlinPoet writes
+ * `fun f(): Unit { }` and Kotlin accepts it. ADR 0007 already omits an inferred `Unit`, so this
+ * reaches only a caller who passed `returns = UNIT` by hand.
+ */
+internal fun missingReturnStatement(name: String, returnType: Any): Nothing = kindRefusal(
+    "`fun`",
+    "'$name' declares a return type of `$returnType` and has an empty body, so KotlinPoet renders " +
+        "`fun $name(): $returnType { }` — a block body that returns nothing",
+    "missing return statement",
+    "Return a value with ret(…), or declare '$name' ABSTRACT in a container that can hold an " +
+        "abstract member, or EXPECT or EXTERNAL — those three are the shapes whose body KotlinPoet " +
+        "omits, leaving a signature. Dropping returns = … makes it a `Unit` function, which needs " +
+        "no return at all.",
+)
+
+/**
  * Whether an **abstract member** may be declared in this scope — a function here, and a property
  * through [PropertyContainer.abstractAllowed], which reads this.
  *

@@ -8,6 +8,7 @@ import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeName
 import com.squareup.kotlinpoet.TypeSpec
 import com.squareup.kotlinpoet.TypeVariableName
+import com.squareup.kotlinpoet.UNIT
 
 // The public entry points of every construct in this file — `class`/`klass`, `object`,
 // `interface`, `constructorParam`/`ctorParam`, `fun`/`func` and `constructor`/`ctor` — are
@@ -138,6 +139,9 @@ internal fun Scope.declareType(
     // the day they stop being. Five rounds of this project's recurring defect say that is exactly
     // how it starts.
     val expected = KModifier.EXPECT in modifiers.toList() || isExpectContainer
+    // The same shape on the other keyword KotlinPoet makes implicit, and read through
+    // [Scope.isExternalContainer] for the same reason: this is the site that propagates it.
+    val externalized = KModifier.EXTERNAL in modifiers.toList() || isExternalContainer
     kdoc?.let { builder.addKdoc(docBlock(it)) }
     val scope = TypeScope(
         builder.addModifiers(modifiers.toList()).addTypeVariables(typeVariables),
@@ -146,6 +150,7 @@ internal fun Scope.declareType(
         kindName,
         enclosingFileId,
         expected,
+        externalized,
     )
     scope.addAll(annotations)
     // The primary-constructor parameters of D23's signature form go in before the body runs, so the
@@ -459,6 +464,9 @@ public fun typeSpec(
         // output that rendered before [TypeScope.isExpect] existed — throw, with an empty remedy list
         // for a message. See `a detached expect typeSpec exempts its own members`.
         isExpect = KModifier.EXPECT in modifiers.toList(),
+        // …and the same for `external`, at the same third-and-last construction site. Omitting it
+        // here is how [TypeScope.isExpect] came to reach two of its three sites (D36's fix round).
+        isExternal = KModifier.EXTERNAL in modifiers.toList(),
     )
     scope.body()
     return scope.finish()
@@ -943,6 +951,21 @@ internal fun buildFun(
             // type and a setter returns `Unit`.
             if (!kind.isAccessor) {
                 val inferred = inferReturnType(name, kind, returns, recorded)
+                // The matrix's largest group of invalid renders, and the one rule in it that is not
+                // keyed on the classifier's kind: an empty body under a declared return type renders
+                // `{ }`, which is *missing return statement* everywhere. Asked here because this is
+                // the only place that sees the inferred type *and* the body, and gated on the four
+                // shapes whose body KotlinPoet omits — a constructor never reaches this branch, since
+                // `inferReturnType` answers null for one. See [missingReturnStatement].
+                if (inferred != null && inferred != UNIT && scope.builder.build().isEmpty()) {
+                    val declaredModifiers = modifiers.toList()
+                    val bodyOmitted = KModifier.ABSTRACT in declaredModifiers ||
+                        KModifier.EXPECT in declaredModifiers ||
+                        KModifier.EXTERNAL in declaredModifiers ||
+                        parent?.isExpectContainer == true ||
+                        parent?.isExternalContainer == true
+                    if (!bodyOmitted) missingReturnStatement(name, inferred)
+                }
                 // The `@return` half of the receiverKdoc check above. `inferred == null` is the
                 // `Unit` case — ADR 0007 omits the type entirely — and a `Unit` function returns
                 // nothing to document.

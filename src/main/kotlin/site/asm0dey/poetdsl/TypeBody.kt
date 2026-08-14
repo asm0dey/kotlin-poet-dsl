@@ -143,6 +143,8 @@ internal fun TypeScope.addCompanionObject(name: String?, kdoc: String?, body: Ty
         // A companion object of an `expect class` is implicitly `expect` too, exactly as a nested
         // class is. See [TypeScope.isExpect].
         isExpect,
+        // …and of an `external class`, implicitly `external`. See [TypeScope.isExternal].
+        isExternal,
     )
     scope.body()
     builder.addType(scope.finish())
