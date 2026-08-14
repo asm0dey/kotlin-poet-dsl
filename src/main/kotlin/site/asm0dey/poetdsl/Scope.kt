@@ -98,6 +98,22 @@ public class TypeScope internal constructor(
      * a scope no handle can ever name, which is the strict answer those cases already had.
      */
     internal val fileId: ScopeId = ScopeId(null, "file"),
+    /**
+     * Whether this type is `expect` — **including implicitly**, by being declared inside one.
+     * Threaded down through [declareType] and [addCompanionObject] exactly the way [fileId] is, and
+     * for the same kind of reason: the fact belongs to the whole nest, and the immediate builder's
+     * own modifiers cannot answer it.
+     *
+     * Kotlin puts no `expect` keyword on a nested classifier of an `expect class` — writing one is
+     * itself rejected — yet applies every `expect` rule to it. Measured, kotlinc 2.4.10 with
+     * `-Xmulti-platform`: `expect class E { class N { val x: Int = 1 } }` is *expected property
+     * cannot have an initializer*, and so is the same shape with `companion object` in place of
+     * `class N`, while dropping the initializer leaves the compiler with nothing to say about
+     * initialization anywhere in the tree. So a property with no value is right there, and
+     * [PropertyContainer] reads this flag rather than `builder.modifiers` to know it — which
+     * [UninitializedPropertyCompileTest] pins on this DSL's own output.
+     */
+    internal val isExpect: Boolean = false,
 ) : Scope(names, id), Annotatable {
     /**
      * Whether [superclass] already ran. KotlinPoet tracks the same fact but keeps it internal, and

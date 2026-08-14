@@ -117,6 +117,9 @@ internal fun TypeScope.addCompanionObject(name: String?, kdoc: String?, body: Ty
         fileId.child("companion object"),
         "companion object",
         fileId,
+        // A companion object of an `expect class` is implicitly `expect` too, exactly as a nested
+        // class is. See [TypeScope.isExpect].
+        isExpect,
     )
     scope.body()
     builder.addType(scope.finish())

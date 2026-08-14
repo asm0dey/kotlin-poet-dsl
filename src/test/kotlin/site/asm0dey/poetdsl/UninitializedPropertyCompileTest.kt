@@ -2,12 +2,15 @@ package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.ABSTRACT
+import com.squareup.kotlinpoet.KModifier.EXPECT
 import com.squareup.kotlinpoet.KModifier.LATEINIT
 import com.squareup.kotlinpoet.STRING
 import com.tschuchort.compiletesting.KotlinCompilation
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * `kotlinc`'s verdict on **the DSL's own output** at both sides of E2b item 5's boundary.
@@ -24,11 +27,12 @@ class UninitializedPropertyCompileTest {
      * Everything the guard **accepts** with no initializer, delegate or getter, rendered by the DSL
      * and handed to kotlinc.
      *
-     * `EXPECT` is the one exempt case missing here, and it cannot be added: a single-platform
-     * compilation answers `'expect' and 'actual' declarations can be used only in multiplatform
-     * projects` before it ever reaches the initializer question, so the exemption is unmeasurable
-     * with this harness in either direction. See the note at the check in `Bindings.kt` for why it
-     * is exempted anyway.
+     * `EXPECT` is missing from *this* test and has one of its own, because it cannot be compiled to
+     * an OK exit code: a single compilation unit has no platform source set to hold the `actual`.
+     * It is not, as E2b recorded, unmeasurable — `-Xmulti-platform` gets the frontend past
+     * *'expect' and 'actual' declarations can be used only in multiplatform projects*, and the
+     * diagnostics that do and do not appear after that answer the question. See
+     * `an expect class exempts every classifier inside it`.
      */
     @Test
     fun `every exempt shape the guard lets through compiles`() {
@@ -48,6 +52,49 @@ class UninitializedPropertyCompileTest {
             `val`("h", INT) { ret(3.lit) }
         }
         assertCompiles(spec.toString())
+    }
+
+    /**
+     * The `expect` exemption, **measured** — which the E2b report and this round's brief both said
+     * was impossible. It is, with `-Xmulti-platform`; see [compileMultiplatform] for why the exit
+     * code is not the thing to read.
+     *
+     * Two compilations of DSL output, differing only in whether the innermost property carries an
+     * initializer, settle the whole question:
+     *
+     * - without one, the compiler says nothing about initialization anywhere in the tree — so a
+     *   property with no value inside an `expect class`, inside a class nested in one, and inside
+     *   the companion object of one, is all accepted;
+     * - with one, it answers *expected property cannot have an initializer* — which is the
+     *   `expect`-specific rule, and its firing on a **nested** class's property is the direct
+     *   evidence that a classifier inside an `expect class` is itself implicitly `expect`.
+     *
+     * The control at the bottom is the same shape with the `expect` taken off the outer class, where
+     * the ordinary rule fires instead.
+     */
+    @Test
+    fun `an expect class exempts every classifier inside it`() {
+        fun render(inner: Expr?) = file("com.example", "Expected") {
+            `class`(EXPECT, "E") {
+                `class`("N") { `val`("x", INT, init = inner) }
+                companionObject { `val`("y", INT, init = inner) }
+            }
+        }.toString()
+
+        val bare = compileMultiplatform(render(null)).messages
+        assertFalse("must be initialized" in bare, bare)
+        assertFalse("cannot have an initializer" in bare, bare)
+
+        val initialized = compileMultiplatform(render(1.lit)).messages
+        // kctfork capitalises the compiler's first word, so the assertion starts one word in.
+        assertTrue("property cannot have an initializer" in initialized, initialized)
+
+        val plain = compileMultiplatform(
+            file("com.example", "Plain") {
+                `class`("E") { `class`("N") { `val`("x", INT, init = 1.lit) } }
+            }.toString().replace("public val x: Int = 1", "public val x: Int"),
+        ).messages
+        assertTrue("must be initialized" in plain, plain)
     }
 
     /**

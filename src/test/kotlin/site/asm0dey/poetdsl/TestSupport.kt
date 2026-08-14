@@ -30,6 +30,29 @@ private fun compileKotlin(fileName: String, source: String): JvmCompilationResul
 @OptIn(ExperimentalCompilerApi::class)
 internal fun compile(source: String): JvmCompilationResult = compileKotlin("Generated.kt", source)
 
+/**
+ * Compiles rendered Kotlin with `-Xmulti-platform`, which is what `expect`/`actual` need before the
+ * frontend will look at them at all: without it every `expect` declaration is answered with
+ * *'expect' and 'actual' declarations can be used only in multiplatform projects* and no later rule
+ * is ever reached.
+ *
+ * **The exit code is never OK here and is not what to assert on.** A single compilation unit has no
+ * platform source set to put the `actual` in, so the result always carries *expected E has no actual
+ * declaration in module &lt;main&gt; for JVM*. What *is* decidable, and what the callers of this
+ * function assert, is whether a **different** diagnostic appears in [JvmCompilationResult.messages]
+ * — the compiler runs the expect-specific rules (*expected property cannot have an initializer*) and
+ * the ordinary ones (*property must be initialized or be abstract*) before it gets that far, so their
+ * presence and absence is a measurement rather than an inference.
+ */
+@OptIn(ExperimentalCompilerApi::class)
+internal fun compileMultiplatform(source: String): JvmCompilationResult = KotlinCompilation().apply {
+    sources = listOf(SourceFile.kotlin("Generated.kt", source))
+    inheritClassPath = true
+    jvmTarget = "17"
+    multiplatform = true
+    messageOutputStream = OutputStream.nullOutputStream()
+}.compile()
+
 /** Compiles [source] and asserts it succeeds, printing the compiler's messages if it does not. */
 @OptIn(ExperimentalCompilerApi::class)
 internal fun assertCompiles(source: String) {

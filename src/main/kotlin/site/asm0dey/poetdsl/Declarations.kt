@@ -119,6 +119,9 @@ internal fun Scope.declareType(
     // it — a local type is rejected below either way — so its own `id` stands in, which is the
     // scope a local type would nest under if KotlinPoet could render one.)
     val enclosingFileId = if (this is TypeScope) fileId else id
+    // `expect` is inherited by every classifier nested inside an `expect` one, and Kotlin puts no
+    // keyword on the nested declaration to say so. See [TypeScope.isExpect].
+    val expected = KModifier.EXPECT in modifiers.toList() || (this is TypeScope && isExpect)
     kdoc?.let { builder.addKdoc(docBlock(it)) }
     val scope = TypeScope(
         builder.addModifiers(modifiers.toList()).addTypeVariables(typeVariables),
@@ -126,6 +129,7 @@ internal fun Scope.declareType(
         enclosingFileId.child("type"),
         kindName,
         enclosingFileId,
+        expected,
     )
     scope.addAll(annotations)
     // The primary-constructor parameters of D23's signature form go in before the body runs, so the

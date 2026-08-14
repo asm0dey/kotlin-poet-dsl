@@ -126,6 +126,80 @@ class UninitializedPropertyTest {
         )
     }
 
+    /**
+     * The container exemption reaches every classifier *inside* an `expect class`, not just the one
+     * whose builder carries the modifier. A nested class, a companion object and a class nested two
+     * levels down are all implicitly `expect` and none of them may carry an initializer — measured
+     * in `UninitializedPropertyCompileTest`, not argued. There is no workaround either: writing
+     * `expect` on the member is itself rejected.
+     */
+    @Test
+    fun `a class nested in an expect class needs no value, at any depth`() {
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+
+            public expect class E {
+              public val direct: Int
+
+              public class N {
+                public val nested: Int
+
+                public class M {
+                  public val deep: Int
+                }
+              }
+            }
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `class`(EXPECT, "E") {
+                    `val`("direct", INT)
+                    `class`("N") {
+                        `val`("nested", INT)
+                        `class`("M") { `val`("deep", INT) }
+                    }
+                }
+            }.toString(),
+        )
+    }
+
+    /** The companion object is the second half, and reaches the flag by its own route. */
+    @Test
+    fun `a companion object of an expect class needs no value`() {
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+
+            public expect class E {
+              public companion object {
+                public val shared: Int
+              }
+            }
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `class`(EXPECT, "E") { companionObject { `val`("shared", INT) } }
+            }.toString(),
+        )
+    }
+
+    /** …and stops at the `expect class`: a sibling declared after it is judged on its own. */
+    @Test
+    fun `the expect exemption does not leak to a sibling`() {
+        val e = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") {
+                `class`(EXPECT, "E") { `class`("N") { `val`("x", INT) } }
+                `class`("Plain") { `class`("N") { `val`("x", INT) } }
+            }
+        }
+        assertEquals(valMessage(), e.message)
+    }
+
     /** The other side of the boundary: everything that already carried a value still renders. */
     @Test
     fun `a property with an initializer, a delegate or a getter is untouched`() {

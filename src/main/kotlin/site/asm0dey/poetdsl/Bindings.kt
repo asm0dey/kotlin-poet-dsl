@@ -255,7 +255,9 @@ private fun Scope.propertyContainer(): PropertyContainer {
     }
     val typeModifiers = builder.modifiers
     return PropertyContainer(
-        needsValue = !(kindName == "interface" || KModifier.EXPECT in typeModifiers),
+        // [TypeScope.isExpect], not `EXPECT in typeModifiers`: the modifier sits on the *outermost*
+        // `expect class` only, and every classifier nested inside one inherits the rule.
+        needsValue = !(kindName == "interface" || isExpect),
         // Exactly Kotlin's list, which is narrower than KotlinPoet's on one row: KotlinPoet accepts
         // an abstract property in an `abstract object`, and Kotlin has no such thing. `kindName`
         // separates the three builders this DSL uses — `classBuilder`, `objectBuilder`,
@@ -379,21 +381,20 @@ internal fun checkProperty(
     //
     // Two kinds of exemption, both measured rather than assumed:
     //
-    // - **container**: an interface body, where `val x: Int` and `var y: Int` are both OK. That is
-    //   the only container that exempts — a companion object inside an interface does not, nor does
-    //   an enum or a sealed class. [PropertyContainer.needsValue] carries the answer down from the
-    //   scope rather than being inferred from anything visible here.
+    // - **container**: an interface body, or an `expect` type's body — including every classifier
+    //   nested inside one, which Kotlin marks with no keyword of its own ([TypeScope.isExpect]).
+    //   Nothing else exempts: not a companion object inside an interface, not an enum, not a sealed
+    //   class. [PropertyContainer.needsValue] carries the answer down from the scope rather than
+    //   being inferred from anything visible here.
     // - **modifier**: ABSTRACT, LATEINIT and EXPECT.
     //
-    // The brief's list also named `external`, and that is **wrong**: `external val a: Int` is
-    // `Modifier 'external' is not applicable to 'property'` in Kotlin 2.4.10, initializer or not, so
-    // it is not an exemption but a different error. EXPECT is on the list without a measurement
-    // behind it, and cannot have one: a single-platform kctfork compile answers `'expect' and
-    // 'actual' declarations can be used only in multiplatform projects` whatever else is written, so
-    // the initializer question is unreachable there. It is exempted anyway, because an `expect`
-    // declaration has no initializer *by definition* and refusing one would reject valid generator
-    // code for a multiplatform target — the expensive direction — while exempting it costs at worst
-    // kotlinc's own clear message about the wrong project layout.
+    // The E2b brief's list also named `external`, and E2b's answer to it is revisited separately.
+    //
+    // Both `expect` rows *are* measured, contrary to E2b's report: `-Xmulti-platform` gets the
+    // frontend past `'expect' and 'actual' declarations can be used only in multiplatform projects`,
+    // and `expect val a: Int = 1` is then `expected property cannot have an initializer` while
+    // `expect val a: Int` draws no initialization diagnostic at all. `UninitializedPropertyCompileTest`
+    // runs that through kctfork's own `multiplatform` flag, on this DSL's output.
     //
     // Deliberately *after* the extension-property rules just above, not before them: an extension
     // property with no getter is refused there with a message that says why it can have no backing
