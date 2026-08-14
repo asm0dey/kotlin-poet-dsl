@@ -202,6 +202,76 @@ class UninitializedPropertyTest {
     }
 
     /**
+     * The third route to a [TypeScope], and the one [TypeScope.isExpect] missed: [typeSpec]'s
+     * detached builder has no enclosing scope to inherit from, so its **own** `modifiers` argument is
+     * the whole answer — the same fact `declareType` reads for a top-level `` `class`(EXPECT, …) ``.
+     *
+     * This is a **regression pin**, and it is the direct member that pins it. At `68f7fd3` the
+     * container fact was `KModifier.EXPECT in builder.modifiers`, read off the builder *after*
+     * `addModifiers(modifiers.toList())` had run, so this shape rendered. Replacing that read with
+     * [TypeScope.isExpect] while leaving [typeSpec] on the `false` default turned it into an
+     * `IllegalStateException` — and the message it carried was useless, since with `abstractAllowed`
+     * and `expectAllowed` both false the remedy list is empty and the only advice left is
+     * "Pass init = …", the one thing an `expect` declaration may not have.
+     */
+    @Test
+    fun `a detached expect typeSpec exempts its own members`() {
+        assertEquals(
+            """
+            public expect class E {
+              public val x: kotlin.Int
+
+              public var y: kotlin.Int
+            }
+
+            """.trimIndent(),
+            typeSpec(EXPECT.toModifiers(), name = "E") {
+                `val`("x", INT)
+                `var`("y", INT)
+            }.toString(),
+        )
+    }
+
+    /**
+     * The other two members of the same [typeSpec] reach the flag by the *other* two construction
+     * sites — a nested classifier through `declareType`, a companion object through
+     * `addCompanionObject` — and both were broken here for a different reason than the direct member
+     * above: they threw at `68f7fd3` **too**, because base had no inheritance mechanism at all. D36
+     * built one and wired it into the two attached sites; this is that same mechanism reaching the
+     * detached one, so it is a new capability rather than a restoration.
+     */
+    @Test
+    fun `a detached expect typeSpec exempts what is nested inside it`() {
+        assertEquals(
+            """
+            public expect class E {
+              public class N {
+                public val y: kotlin.Int
+              }
+
+              public companion object {
+                public val s: kotlin.Int
+              }
+            }
+
+            """.trimIndent(),
+            typeSpec(EXPECT.toModifiers(), name = "E") {
+                `class`("N") { `val`("y", INT) }
+                companionObject { `val`("s", INT) }
+            }.toString(),
+        )
+    }
+
+    /** …and a detached builder with no `EXPECT` of its own still needs a value, as it always did. */
+    @Test
+    fun `a detached plain typeSpec still needs a value`() {
+        val e = assertFailsWith<IllegalStateException> {
+            typeSpec(name = "E") { `val`("x", INT) }
+        }
+        assertEquals(valMessage(), e.message)
+    }
+
+    /**
      * `EXTERNAL` is the second modifier whose answer depends on a target this DSL cannot see, and
      * E2b got it exactly backwards: *"`external` is not an exempt case, and never could be."*
      *

@@ -323,6 +323,15 @@ public fun typeSpec(
             .apply { kdoc?.let { addKdoc(docBlock(it)) } },
         NameScope(null),
         ScopeId(null, "type"),
+        // The third and last construction site of a [TypeScope], and the only one with nothing above
+        // it: a detached builder has no enclosing scope, so `modifiers` is the whole answer, with no
+        // inherited term to add — `declareType`'s `|| (this is TypeScope && isExpect)` has nothing to
+        // read here. Omitting it defaulted the flag to false, which silently *narrowed* what
+        // [PropertyContainer] used to read straight off `builder.modifiers`, and made
+        // `typeSpec(EXPECT.toModifiers(), name = "E") { `val`("x", INT) }` — valid multiplatform
+        // output that rendered before [TypeScope.isExpect] existed — throw, with an empty remedy list
+        // for a message. See `a detached expect typeSpec exempts its own members`.
+        isExpect = KModifier.EXPECT in modifiers.toList(),
     )
     scope.body()
     return scope.finish()
