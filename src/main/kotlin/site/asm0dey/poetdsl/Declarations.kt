@@ -962,7 +962,15 @@ public fun propertySpec(
     }
     // "propertySpec", not `` `val` ``: Global Constraint 26 wants the construct the caller actually
     // wrote, and the caller wrote this one — the init/by check just above says so too.
-    checkProperty("propertySpec", name, mutable, init, by, typeVariables, receiver, setter, getter)
+    // `containerNeedsValue = false`: this builder returns a bare [PropertySpec] and has no idea
+    // where it will be spliced. An interface body is a legitimate destination, and there a property
+    // with no initializer, delegate or getter is exactly right — so the check the attached
+    // `` `val` ``/`` `var` `` runs would refuse valid output here. See this function's KDoc for the
+    // `modifiers = ABSTRACT` spelling that is correct in every container.
+    checkProperty(
+        "propertySpec", name, mutable, init, by, typeVariables, receiver, setter, getter,
+        modifiers, containerNeedsValue = false,
+    )
     val spec = PropertySpec.builder(name, type, modifiers.toList())
     spec.mutable(mutable)
     spec.addTypeVariables(typeVariables)

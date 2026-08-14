@@ -1,6 +1,7 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.CodeBlock
+import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.LambdaTypeName
 import com.squareup.kotlinpoet.ParameterizedTypeName
 import com.squareup.kotlinpoet.PropertySpec
@@ -132,7 +133,16 @@ private fun Scope.propertyOf(
         "Property '$name' requires an explicit type; KotlinPoet cannot infer it."
     }
     val construct = if (mutable) "`var`" else "`val`"
-    checkProperty(construct, name, mutable, init, by, typeVariables, receiver, setter, getter)
+    // The container fact, read off the scope rather than inferred: an interface body is the one
+    // place a property needs no value, and an `expect` type's members are the multiplatform case
+    // the same rule reaches. A `FileScope` — and a companion object, an object, an enum, a nested
+    // type, all of which are `TypeScope`s with some other `kindName` — always needs one.
+    val containerNeedsValue =
+        !(this is TypeScope && (kindName == "interface" || KModifier.EXPECT in builder.modifiers))
+    checkProperty(
+        construct, name, mutable, init, by, typeVariables, receiver, setter, getter,
+        modifiers, containerNeedsValue,
+    )
     // An extension property is keyed by receiver *and* name: `val String.size` and `val Int.size`
     // are two different declarations and both are legal in one file, while two of the same name on
     // the same receiver is the compile error D21 rejects. A plain property's key is its bare name,
@@ -239,6 +249,8 @@ internal fun checkProperty(
     receiver: TypeName?,
     setter: (BlockScope.(Expr) -> Unit)?,
     getter: (BlockScope.() -> Unit)?,
+    modifiers: Modifiers?,
+    containerNeedsValue: Boolean,
 ) {
     check(mutable || setter == null) {
         "$construct: '$name' is a `val` and has no setter. Declare it with `var`, or drop the setter."
@@ -285,6 +297,45 @@ internal fun checkProperty(
         check(!mutable || setter != null || by != null) {
             "$construct: '$name' is a mutable extension property, which has no backing field, so it " +
                 "needs a setter as well as a getter (or a delegate)."
+        }
+    }
+    // A property with no initializer, no delegate and no getter renders `val x: Int`, and kotlinc
+    // answers `Property must be initialized.` at file level and `Property must be initialized or be
+    // abstract.` in a class, an object, a companion object, a nested type, an enum and a sealed class
+    // — all measured with kctfork. It has rendered since Task 12 and predates E2a's accessors, which
+    // is what finally made the *decidable* half of it decidable: the getter is the third way to give
+    // a property a value, and until E2a there was no slot to check.
+    //
+    // Two kinds of exemption, both measured rather than assumed:
+    //
+    // - **container**: an interface body, where `val x: Int` and `var y: Int` are both OK. That is
+    //   the only container that exempts — a companion object inside an interface does not, nor does
+    //   an enum or a sealed class. [containerNeedsValue] carries the answer down from the scope
+    //   rather than being inferred from anything visible here.
+    // - **modifier**: ABSTRACT, LATEINIT and EXPECT.
+    //
+    // The brief's list also named `external`, and that is **wrong**: `external val a: Int` is
+    // `Modifier 'external' is not applicable to 'property'` in Kotlin 2.4.10, initializer or not, so
+    // it is not an exemption but a different error. EXPECT is on the list without a measurement
+    // behind it, and cannot have one: a single-platform kctfork compile answers `'expect' and
+    // 'actual' declarations can be used only in multiplatform projects` whatever else is written, so
+    // the initializer question is unreachable there. It is exempted anyway, because an `expect`
+    // declaration has no initializer *by definition* and refusing one would reject valid generator
+    // code for a multiplatform target — the expensive direction — while exempting it costs at worst
+    // kotlinc's own clear message about the wrong project layout.
+    //
+    // Deliberately *after* the extension-property rules just above, not before them: an extension
+    // property with no getter is refused there with a message that says why it can have no backing
+    // field, which is more useful than this one. By the time control reaches here a `receiver`
+    // implies a getter or a delegate, so the condition needs no term for it.
+    if (containerNeedsValue && init == null && by == null && getter == null) {
+        val exempt = listOf(KModifier.ABSTRACT, KModifier.LATEINIT, KModifier.EXPECT)
+        check(modifiers.toList().any { it in exempt }) {
+            "$construct: '$name' has no initializer, no delegate and no getter, so it renders " +
+                "`${if (mutable) "var" else "val"} $name: T` — \"Property must be initialized.\" " +
+                "Pass init = …, by = … or a getter, or declare it ABSTRACT, LATEINIT or EXPECT. " +
+                "A property in an interface body needs none of these, and this check does not fire " +
+                "there."
         }
     }
     // A property's type parameters take no declaration-site variance and no `reified`, for the same
