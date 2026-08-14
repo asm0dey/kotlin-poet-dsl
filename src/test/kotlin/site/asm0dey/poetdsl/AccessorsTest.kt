@@ -31,6 +31,30 @@ class AccessorsTest {
         )
     }
 
+    /**
+     * D33's dangerous case, pinned rather than argued. `receiver` and `returns` are both
+     * `TypeName?`, so a `receiver` slot inserted *before* `returns` would have silently rebound the
+     * one positional spelling E1 left resolving — the `STRING` below — from a return type to a
+     * receiver type, turning `fun <T> f(): String` into `fun <T> String.f()`. Rendered output, both
+     * valid Kotlin, no error anywhere. The slot is after `returns` instead, and this asserts the
+     * render that proves it: measured identical at `80fd83b` and at head.
+     */
+    @Test
+    fun `a positional argument after the type parameters is still the return type`() {
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.String
+
+            public fun <T> f(): String {
+            }
+
+            """.trimIndent(),
+            file("com.example", "A") { `fun`("f", listOf(typeVariable("T")), STRING) { } }.toString(),
+        )
+    }
+
     @Test
     fun `a val takes a getter`() {
         assertEquals(
