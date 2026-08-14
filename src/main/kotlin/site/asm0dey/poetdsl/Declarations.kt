@@ -121,7 +121,13 @@ internal fun Scope.declareType(
     val enclosingFileId = if (this is TypeScope) fileId else id
     // `expect` is inherited by every classifier nested inside an `expect` one, and Kotlin puts no
     // keyword on the nested declaration to say so. See [TypeScope.isExpect].
-    val expected = KModifier.EXPECT in modifiers.toList() || (this is TypeScope && isExpect)
+    //
+    // [Scope.isExpectContainer], not `this is TypeScope && isExpect` written out again. This is the
+    // site that *propagates* the fact to every nested scope, so it is the last place that should
+    // spell it privately — and because the two are value-identical today, no falsification can catch
+    // the day they stop being. Five rounds of this project's recurring defect say that is exactly
+    // how it starts.
+    val expected = KModifier.EXPECT in modifiers.toList() || isExpectContainer
     kdoc?.let { builder.addKdoc(docBlock(it)) }
     val scope = TypeScope(
         builder.addModifiers(modifiers.toList()).addTypeVariables(typeVariables),
@@ -388,7 +394,7 @@ public fun typeSpec(
         ScopeId(null, "type"),
         // The third and last construction site of a [TypeScope], and the only one with nothing above
         // it: a detached builder has no enclosing scope, so `modifiers` is the whole answer, with no
-        // inherited term to add — `declareType`'s `|| (this is TypeScope && isExpect)` has nothing to
+        // inherited term to add — `declareType`'s `|| isExpectContainer` has nothing to
         // read here. Omitting it defaulted the flag to false, which silently *narrowed* what
         // [PropertyContainer] used to read straight off `builder.modifiers`, and made
         // `typeSpec(EXPECT.toModifiers(), name = "E") { `val`("x", INT) }` — valid multiplatform
