@@ -400,15 +400,120 @@ class AccessorsTest {
         )
     }
 
+    /**
+     * The **pair** requirement's message shape, spelled once so both directions read the same way —
+     * the same missing/present shape the non-extension accessor pair uses.
+     */
+    private fun pairMessage(present: String, missing: String) =
+        "`var`: 'head' is a mutable extension property with a $present but no $missing, so Kotlin " +
+            "generates the $missing, which needs a backing field, and an extension property has " +
+            "none. Write the $missing as well, or drop the $present."
+
     @Test
     fun `a mutable extension property requires a setter as well`() {
         val failure = assertFailsWith<IllegalStateException> {
             file("com.example", "A") { `var`("head", INT, receiver = STRING) { ret(0.lit) } }
         }
+        assertEquals(pairMessage("getter", "setter"), failure.message)
+    }
+
+    /**
+     * The **control rows** for the pair requirement, which is what shows it is not over-broad
+     * against the language. It is one-directional no longer, so both neighbours of every refusal
+     * above have to be measured, at the top level *and* one level down — the depth where this
+     * project's last three over-broad guards inverted. All three frontends, one file per row:
+     *
+     * ```
+     * abstract class C { abstract var String.head: Int }              clean   (both accessors absent)
+     * interface I      { var String.head: Int }                       clean
+     * object O         { var String.head: Int get() = 1
+     *                                         set(value) { } }        clean   (both present)
+     * expect class E   { class N { var String.head: Int } }           clean   (the nested control)
+     * expect class E   { class N { val String.head: Int } }           clean
+     * expect class E   { class N { var String.head: Int
+     *                              set(value) { } } }                 expected declaration cannot
+     * expect class E   { class N { var String.head: Int               have a body.
+     *                              get() = 1
+     *                              set(value) { } } }
+     * ```
+     *
+     * The last two rows are why the `EXPECT` half of the abstract-or-expect exemption is safe to
+     * keep — every accessor shape an `expect` container can reach is refused by *something*.
+     * **Which** something is verified here rather than assumed, and the answer is not the one the
+     * brief predicted: the pair requirement lives inside the `receiver != null` block and the
+     * `expect` accessor rule a hundred lines below it, so a setter with no getter now trips the
+     * pair first and only the both-accessors shape reaches the `expect` rule. Both messages are
+     * true of their shape; the assertions below pin which is which so that a future reordering is a
+     * failure rather than a surprise.
+     */
+    @Test
+    fun `the accessor pair requirement keeps every shape both frontends and this DSL allow`() {
         assertEquals(
-            "`var`: 'head' is a mutable extension property, which has no backing field, so it needs " +
-                "a setter as well as a getter (or a delegate).",
-            failure.message,
+            """
+            package com.example
+
+            import kotlin.Int
+            import kotlin.String
+
+            public abstract class C {
+              public abstract var String.head: Int
+            }
+
+            public interface I {
+              public var String.head: Int
+            }
+
+            public object O {
+              public var String.head: Int
+                get() = 1
+                set(`value`) {
+                }
+            }
+
+            public expect class E {
+              public class N {
+                public var String.head: Int
+
+                public val String.tail: Int
+              }
+            }
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                `class`(ABSTRACT, "C") { `var`(ABSTRACT, "head", INT, receiver = STRING) }
+                `interface`("I") { `var`("head", INT, receiver = STRING) }
+                `object`("O") { `var`("head", INT, receiver = STRING, setter = { }) { ret(1.lit) } }
+                `class`(EXPECT, "E") {
+                    `class`("N") {
+                        `var`("head", INT, receiver = STRING)
+                        `val`("tail", INT, receiver = STRING)
+                    }
+                }
+            }.toString(),
+        )
+        assertEquals(
+            pairMessage("setter", "getter"),
+            assertFailsWith<IllegalStateException> {
+                file("com.example", "A") {
+                    `class`(EXPECT, "E") {
+                        `class`("N") { `var`("head", INT, receiver = STRING, setter = { }) }
+                    }
+                }
+            }.message,
+        )
+        assertEquals(
+            "`var`: 'head' is `expect` — by its own EXPECT modifier, or by the `expect` type it is " +
+                "declared in — and carries an accessor. An `expect` declaration is a signature — it " +
+                "carries no body and no value — so this is \"expected declaration cannot have a " +
+                "body\" on the JVM, on Kotlin/JS and on Kotlin/Wasm alike. Drop the accessor; it " +
+                "belongs on the `actual` declaration.",
+            assertFailsWith<IllegalStateException> {
+                file("com.example", "A") {
+                    `class`(EXPECT, "E") {
+                        `class`("N") { `var`("head", INT, receiver = STRING, setter = { }) { ret(1.lit) } }
+                    }
+                }
+            }.message,
         )
     }
 
@@ -529,10 +634,8 @@ class AccessorsTest {
         // `interface I { var String.a: Int get() = 1 }` — which the previous round's container
         // exemption let through — is *property in interface cannot have a backing field* on all
         // three. Both are refused; both drop their getter and render.
-        val pair = "`var`: 'head' is a mutable extension property, which has no backing field, so " +
-            "it needs a setter as well as a getter (or a delegate)."
         assertEquals(
-            pair,
+            pairMessage("getter", "setter"),
             assertFailsWith<IllegalStateException> {
                 file("com.example", "A") {
                     `class`(ABSTRACT, "C") { `var`(ABSTRACT, "head", INT, receiver = STRING) { ret(1.lit) } }
@@ -540,9 +643,36 @@ class AccessorsTest {
             }.message,
         )
         assertEquals(
-            pair,
+            pairMessage("getter", "setter"),
             assertFailsWith<IllegalStateException> {
                 file("com.example", "A") { `interface`("I") { `var`("head", INT, receiver = STRING) { ret(1.lit) } } }
+            }.message,
+        )
+        // …and the same shape written the other way round, which is what the one-directional form
+        // of this check let through. `check(!mutable || getter == null || setter != null)`
+        // short-circuits on `getter == null`, so a setter with no getter passed in every container,
+        // and `signature` let it past the requirement above as well. Measured, all three frontends:
+        //
+        //     abstract class C { abstract var String.head: Int set(value) { } }
+        //                                     property with setter implementation cannot be abstract.
+        //     interface I      { var String.head: Int set(value) { } }
+        //                                     property in interface cannot have a backing field.
+        //     class C          { var String.head: Int set(value) { } }
+        //                                     extension property must have accessors or be abstract.
+        //
+        // The first rendered at `68df28f` and was refused at `fa12efe`; the second rendered at both.
+        assertEquals(
+            pairMessage("setter", "getter"),
+            assertFailsWith<IllegalStateException> {
+                file("com.example", "A") {
+                    `class`(ABSTRACT, "C") { `var`(ABSTRACT, "head", INT, receiver = STRING, setter = { }) }
+                }
+            }.message,
+        )
+        assertEquals(
+            pairMessage("setter", "getter"),
+            assertFailsWith<IllegalStateException> {
+                file("com.example", "A") { `interface`("I") { `var`("head", INT, receiver = STRING, setter = { }) } }
             }.message,
         )
         // The two modifiers that are *not* exempt, and the plain file-level control beside them.

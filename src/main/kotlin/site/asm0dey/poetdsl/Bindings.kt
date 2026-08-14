@@ -538,26 +538,42 @@ internal fun checkProperty(
             }
         }
         // The **pair** requirement, and it is *not* the same question as the one above: an accessor
-        // is not required here, but once a `var` has a getter it gets the **default** setter, which
-        // writes a backing field an extension property does not have. That holds in every container,
-        // and exempting it along with the requirement above would have been a new false permission —
-        // measured while checking this round's own boundary, all three frontends:
+        // is not required here, but once a `var` has one of the two, Kotlin generates the **other**,
+        // and the generated one reads or writes a backing field an extension property does not have.
+        // That holds in every container, and exempting it along with the requirement above would
+        // have been a new false permission — measured, all three frontends:
         //
         //     abstract class C { abstract var String.a: Int get() = 1 }  property with getter
+        //     abstract class C { abstract var String.a: Int              implementation cannot be
+        //                            set(value) { } }                    abstract.  /  …with setter
         //                                                                implementation cannot be
         //                                                                abstract.
         //     interface I      { var String.a: Int get() = 1 }           property in interface
-        //                                                                cannot have a backing field.
-        //     abstract class C { abstract var String.a: Int }            OK  OK  OK — the control,
-        //     interface I      { var String.a: Int }                     both still render.
+        //     interface I      { var String.a: Int set(value) { } }      cannot have a backing field.
+        //     class C          { var String.a: Int set(value) { } }      extension property must
+        //                                                                have accessors or be
+        //                                                                abstract.
+        //     abstract class C { abstract var String.a: Int }            OK  OK  OK — the controls,
+        //     interface I      { var String.a: Int }                     all three still render.
+        //     object O         { var String.a: Int get() = 1
+        //                            set(value) { } }
+        //     expect class E   { class N { var String.a: Int } }         — and the nested one
         //
-        // The first row is the shape the exemption above would have let through; the second is one
-        // the *previous* round's container exemption already let through, and closing both is one
-        // condition rather than two. `by` needs no term: a delegated property takes no accessors at
-        // all, which the check near the top of this function has already settled.
-        check(!mutable || getter == null || setter != null) {
-            "$construct: '$name' is a mutable extension property, which has no backing field, " +
-                "so it needs a setter as well as a getter (or a delegate)."
+        // **Symmetric, because the pair is symmetric.** The first form of this check was
+        // `!mutable || getter == null || setter != null`, which short-circuits on `getter == null`
+        // and so let a setter with no getter through in every container — including the two rows
+        // above that render an *abstract* or *interface* property with a setter body. It is
+        // `(getter == null) == (setter == null)` now, the same shape the non-extension accessor pair
+        // uses a hundred lines up, with the same missing/present message.
+        //
+        // `by` needs no term: a delegated property takes no accessors at all, which the check near
+        // the top of this function has already settled, so both sides are null and the pair holds.
+        check(!mutable || (getter == null) == (setter == null)) {
+            val missing = if (getter == null) "getter" else "setter"
+            val present = if (getter == null) "setter" else "getter"
+            "$construct: '$name' is a mutable extension property with a $present but no $missing, " +
+                "so Kotlin generates the $missing, which needs a backing field, and an extension " +
+                "property has none. Write the $missing as well, or drop the $present."
         }
     }
     // The dual of [PropertyContainer.needsValue], and the reason it is a second field rather than a

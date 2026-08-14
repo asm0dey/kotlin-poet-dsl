@@ -126,6 +126,14 @@ class AccessorsCompileTest {
                 "val x: Int by lazy { 1 }\n  get() = 2",
             "a var with only a getter" to "var x: Int\n  get() = 1",
             "a var with only a setter" to "var x: Int\n  set(value) {}",
+            // The other direction of the extension pair, which the one-directional form of that
+            // check rendered in every container. `kotlinc-js` and `kotlinc-wasm` answer identically
+            // on all three rows; the diagnostics are in the KDoc of the accessor pair check.
+            "a mutable extension property with only a setter" to "var String.x: Int\n  set(value) {}",
+            "an abstract mutable extension property with only a setter" to
+                "abstract class C {\n  abstract var String.x: Int\n    set(value) {}\n}",
+            "an interface mutable extension property with only a setter" to
+                "interface I {\n  var String.x: Int\n    set(value) {}\n}",
         )
         for ((what, source) in invalid) {
             val result = compile("package com.example\n\n$source\n")
