@@ -173,6 +173,108 @@ class AnnotationsTest {
         assertFailsWith<IllegalStateException> { annotation(ClassName("p", "A"), null, handle) }
         assertFailsWith<IllegalStateException> { with(type) { annotate<SerialName>(null, handle) } }
         assertFailsWith<IllegalStateException> { with(type) { annotate<SerialName>("value" to handle) } }
+        // D27's two new entry points inherit the guard through `buildAnnotation`, like every other.
+        assertFailsWith<IllegalStateException> { annotation(ClassName("p", "A"), "value" to handle) }
+        assertFailsWith<IllegalStateException> { ann(ClassName("p", "A"), "value" to handle) }
+        // And so does an argument that merely *contains* a handle, joined by D28's helper.
+        assertFailsWith<IllegalStateException> {
+            annotation(ClassName("p", "A"), "value" to arrayLiteral(listOf(handle)))
+        }
+    }
+
+    /**
+     * Deviation D27: the [ClassName] form takes named arguments too. In real codegen the annotation
+     * type is usually not on the generator's classpath, which is exactly when the reified form —
+     * the only one that had them — is unavailable.
+     */
+    @Test
+    fun `the ClassName form takes named arguments`() {
+        val serialName = ClassName("kotlinx.serialization", "SerialName")
+        assertEquals(
+            """@kotlinx.serialization.SerialName(value = "user_name")""",
+            annotation(serialName, "value" to "user_name".lit).list.single().toString(),
+        )
+        assertEquals(
+            """@kotlinx.serialization.SerialName(value = "user_name")""",
+            ann(serialName, "value" to "user_name".lit).list.single().toString(),
+        )
+    }
+
+    /**
+     * `target` is named-only and comes last, the ordering D2 corrected: Kotlin binds positional
+     * arguments by declared order regardless of defaults, so a leading `target` would swallow the
+     * first pair. Several pairs render in the order written.
+     */
+    @Test
+    fun `the ClassName named form takes a use-site target and keeps argument order`() {
+        val column = ClassName("jakarta.persistence", "Column")
+        assertEquals(
+            "@get:jakarta.persistence.Column(name = \"user_name\", nullable = false)",
+            annotation(
+                column,
+                "name" to "user_name".lit,
+                "nullable" to false.lit,
+                target = UseSiteTarget.GET,
+            ).list.single().toString(),
+        )
+    }
+
+    /**
+     * The zero-argument call still resolves to the positional overload rather than failing overload
+     * resolution — the reason `first` is a required parameter and not part of the vararg (D2).
+     */
+    @Test
+    fun `a zero-argument ClassName annotation still resolves`() {
+        assertEquals("@p.A", annotation(ClassName("p", "A")).list.single().toString())
+    }
+
+    /**
+     * The shape D27 and D28 were both written for, compiled end to end: a JPA-style nested
+     * annotation whose type is only a [ClassName], with named arguments and an array of nested
+     * annotations built from a computed list.
+     */
+    @OptIn(ExperimentalCompilerApi::class)
+    @Test
+    fun `a nested annotation built from ClassNames with named arguments and an array compiles`() {
+        val neg = ClassName("com.example.jpa", "NamedEntityGraph")
+        val nan = ClassName("com.example.jpa", "NamedAttributeNode")
+        val nodes = listOf("orders", "address").map { expression("%T(%L)", nan, it.lit) }
+        val rendered = file("com.example.app", "Api") {
+            `class`(
+                annotation(neg, "name" to "User.detail".lit, "attributeNodes" to arrayLiteral(nodes)),
+                "User",
+            ) { }
+        }.toString()
+
+        assertTrue(
+            """@NamedEntityGraph(
+    |  name = "User.detail",
+    |  attributeNodes = [NamedAttributeNode("orders"), NamedAttributeNode("address")],
+    |)""".trimMargin() in rendered,
+            rendered,
+        )
+        assertTrue("import com.example.jpa.NamedAttributeNode" in rendered, rendered)
+
+        val jpa = SourceFile.kotlin(
+            "Jpa.kt",
+            """
+            package com.example.jpa
+
+            annotation class NamedAttributeNode(val value: String)
+
+            @Target(AnnotationTarget.CLASS)
+            annotation class NamedEntityGraph(
+                val name: String,
+                val attributeNodes: Array<NamedAttributeNode> = [],
+            )
+            """.trimIndent(),
+        )
+        val result = KotlinCompilation().apply {
+            sources = listOf(jpa, SourceFile.kotlin("Api.kt", rendered))
+            inheritClassPath = true
+            messageOutputStream = OutputStream.nullOutputStream()
+        }.compile()
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, "$rendered\n${result.messages}")
     }
 
     /**

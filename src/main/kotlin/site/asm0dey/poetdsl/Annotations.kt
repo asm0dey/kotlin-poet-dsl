@@ -140,6 +140,27 @@ public fun annotation(
     vararg args: Expr,
 ): Annotations = Annotations(listOf(buildAnnotation(cls, target, args.toList(), emptyList())))
 
+/**
+ * An annotation whose type is only known at generation time, with named arguments (deviation D27).
+ *
+ * The reified form has had both an argument shape and a named one from the start; this form had
+ * only the positional one, which D2 recorded as a fact without weighing it. It is the wrong way
+ * round: in real codegen the annotation type is usually *not* on the generator's classpath, so a
+ * [ClassName] is all there is — and that is exactly when named arguments were unavailable.
+ *
+ * Same shape as the reified named form, for the same reasons: [first] is a required parameter
+ * rather than part of the vararg, so a zero-argument `annotation(cls)` still resolves to the
+ * positional overload above; and [target] comes last and is named-only, because Kotlin binds
+ * positional arguments by declared order regardless of defaults, so a leading `target` would
+ * swallow the first `Pair` and fail to type-check.
+ */
+public fun annotation(
+    cls: ClassName,
+    first: Pair<String, Expr>,
+    vararg rest: Pair<String, Expr>,
+    target: UseSiteTarget? = null,
+): Annotations = Annotations(listOf(buildAnnotation(cls, target, emptyList(), listOf(first) + rest)))
+
 /** Alias for [annotation] with positional arguments. */
 public inline fun <reified T : Annotation> ann(target: UseSiteTarget? = null, vararg args: Expr): Annotations =
     annotation<T>(target, *args)
@@ -154,6 +175,17 @@ public inline fun <reified T : Annotation> ann(
 /** Alias for [annotation] with a runtime-known annotation type. */
 public fun ann(cls: ClassName, target: UseSiteTarget? = null, vararg args: Expr): Annotations =
     annotation(cls, target, *args)
+
+/**
+ * Alias for [annotation] with a runtime-known annotation type and named arguments (D27); see D2 on
+ * the parameter order.
+ */
+public fun ann(
+    cls: ClassName,
+    first: Pair<String, Expr>,
+    vararg rest: Pair<String, Expr>,
+    target: UseSiteTarget? = null,
+): Annotations = annotation(cls, first, *rest, target = target)
 
 /** Implemented by the scopes, so annotations can also be added from a trailing lambda. */
 public interface Annotatable {
