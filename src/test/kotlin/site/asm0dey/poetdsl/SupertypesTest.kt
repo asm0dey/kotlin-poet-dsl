@@ -253,7 +253,10 @@ class SupertypesTest {
         )) {
             val thrown = kotlin.runCatching { build() }.exceptionOrNull()
             assertTrue(thrown is IllegalStateException, "$kind: $thrown")
-            assertEquals("constructor: a $kind cannot declare a constructor; only a class can.", thrown.message)
+            assertEquals(
+                "constructor: ${article(kind)} $kind cannot declare a constructor; only a class can.",
+                thrown.message,
+            )
         }
     }
 

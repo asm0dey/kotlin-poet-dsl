@@ -145,6 +145,79 @@ internal fun Scope.innerNeedsAnEnclosingClass(kindName: String, name: String): N
 }
 
 /**
+ * Whether a **member** may be declared in this scope at all.
+ *
+ * An `annotation class` is a declaration of a shape, not of a thing with behaviour: it holds its
+ * primary-constructor parameters and nothing else. Measured, one file per row, all three frontends
+ * identical, and at every depth:
+ *
+ *     annotation class N { val p: Int = 1 }        members are prohibited in annotation classes.
+ *     annotation class N { var p: Int = 1 }
+ *     annotation class N { val p: Int get() = 1 }  — a getter is no escape; there is no member of
+ *     annotation class N { fun f(): Int = 1 }        any kind
+ *     annotation class N { fun f(): Int }
+ *     annotation class N { constructor(q: Int) }
+ *     annotation class N { init { } }
+ *
+ * and the controls, clean on all three:
+ *
+ *     annotation class N(val x: Int)               annotation class N { class Inner }
+ *     annotation class N                           annotation class N { companion object }
+ *     annotation class N { class Inner { fun f(): Int = 1 } }   — the nested class is an ordinary
+ *                                                                 class and holds ordinary members
+ *
+ * So the rule is about *members*, not about the body: a nested classifier and a companion object are
+ * both fine, which is why this is a separate question from [nestedTypesAllowed] and not a stronger
+ * form of it. Read off the immediate builder's own `ANNOTATION`, never inherited — the nested class
+ * in the last control row is what that buys.
+ *
+ * Four of these seven rows reached **KotlinPoet's own `IllegalArgumentException`** (*annotation class
+ * N cannot declare member function f*, `TypeSpec.kt:872-876`), Global Constraint 26's forbidden type,
+ * and the other three rendered.
+ */
+internal val Scope.membersAllowed: Boolean
+    get() = !(this is TypeScope && KModifier.ANNOTATION in builder.modifiers)
+
+/** See [membersAllowed]. */
+internal fun annotationHoldsNoMembers(construct: String, member: String): Nothing = kindRefusal(
+    construct,
+    "$member is declared in an `annotation class`, which declares a shape and holds nothing but " +
+        "its primary-constructor parameters",
+    "members are prohibited in annotation classes",
+    "Move it to a nested class or to the annotation's companion object, both of which an " +
+        "annotation class still holds, or declare it as a primary-constructor parameter with " +
+        "param(VAL, …).",
+)
+
+/**
+ * Whether this classifier may declare a supertype.
+ *
+ * An `annotation class` may not: it already extends `kotlin.Annotation` and Kotlin lets nothing be
+ * added to that. Measured, all three frontends identical, at every depth:
+ *
+ *     annotation class N : Iface     annotation class cannot have supertypes.
+ *     annotation class N : Base      — refused by KotlinPoet first, as `IllegalStateException: only
+ *                                      classes can have super classes, not CLASS`, which names
+ *                                      neither the construct nor the kind
+ *     annotation class N             clean — the control
+ *
+ * The `superinterface` row **rendered**. The `superclass` row did not, and what changes for it is
+ * the exception's message rather than the refusal.
+ */
+internal val TypeScope.supertypesAllowed: Boolean
+    get() = KModifier.ANNOTATION !in builder.modifiers
+
+/** See [supertypesAllowed]. */
+internal fun annotationHasNoSupertypes(construct: String): Nothing = kindRefusal(
+    construct,
+    "this `annotation class` is given a supertype, and an annotation class already extends " +
+        "`kotlin.Annotation` and takes nothing else",
+    "annotation class cannot have supertypes",
+    "Drop the supertype. An annotation is data about a declaration, not a participant in a " +
+        "hierarchy; if the shared shape is what is wanted, put it in a nested class.",
+)
+
+/**
  * Whether a classifier may be declared *inside* this one.
  *
  * An `inner class` is the one container that holds no nested classifier at all, and the exception is

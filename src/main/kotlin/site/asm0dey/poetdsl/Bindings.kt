@@ -269,6 +269,11 @@ internal fun PropertySpec.Builder.addAccessors(
  *   `expect class E { class N { expect val a: Int } }` — it *is* printed, and all three frontends
  *   answer *modifier 'expect' is not applicable to 'member property without backing field or
  *   delegate'*.
+ * @property membersAllowed whether a property may be declared here **at all** — false in an
+ *   `annotation class`, which declares a shape and holds nothing but its primary-constructor
+ *   parameters. Its own field rather than a reading of [backingFieldAllowed], because it is a
+ *   different question with a different answer: an interface forbids the *storage* and takes a
+ *   getter, an annotation class forbids the *declaration* and takes nothing. See [Kinds].
  * @property externalAllowed whether `EXTERNAL` is legal on a property here, on the same
  *   immediate-builder rule and for the same measured reason: `external class C { val a: Int }` — the
  *   render KotlinPoet produces once it drops the member's keyword — compiles clean on Kotlin/JS and
@@ -282,6 +287,7 @@ internal class PropertyContainer(
     val abstractAllowed: Boolean,
     val expectAllowed: Boolean,
     val externalAllowed: Boolean,
+    val membersAllowed: Boolean,
 ) {
     internal companion object {
         /**
@@ -304,6 +310,7 @@ internal class PropertyContainer(
             abstractAllowed = true,
             expectAllowed = true,
             externalAllowed = true,
+            membersAllowed = true,
         )
     }
 }
@@ -323,6 +330,9 @@ private fun Scope.propertyContainer(): PropertyContainer {
             // The file level is the only place an `external` property renders the keyword and still
             // has a target that accepts it, and this branch *is* the file level. See D37.
             externalAllowed = true,
+            // [Scope.membersAllowed], which is true here: a *file* is not an annotation class. Read
+            // through the shared predicate for the same reason `isExpectContext` is.
+            membersAllowed = membersAllowed,
         )
     }
     val typeModifiers = builder.modifiers
@@ -361,6 +371,10 @@ private fun Scope.propertyContainer(): PropertyContainer {
         // the direction D37's standing rule exists to prevent.
         expectAllowed = KModifier.EXPECT in typeModifiers,
         externalAllowed = KModifier.EXTERNAL in typeModifiers,
+        // [Scope.membersAllowed] — the same predicate `declareFun`, `beginSecondaryConstructor`,
+        // `addInitializerBlock` and the two supertype constructs read, so the kind family has one
+        // reader here as the `expect` family has one in `isExpectContainer`.
+        membersAllowed = membersAllowed,
     )
 }
 
@@ -404,6 +418,11 @@ internal fun checkProperty(
     container: PropertyContainer,
 ) {
     val declared = modifiers.toList()
+    // Before every other question, because there is no property here to ask them about: an
+    // `annotation class` holds no member of any kind, so its `val`, its `var` and its `val … get()`
+    // are one refusal and not three. All three **rendered** — *members are prohibited in annotation
+    // classes* on all three frontends. See [Kinds].
+    if (!container.membersAllowed) annotationHoldsNoMembers(construct, "'$name'")
     check(mutable || KModifier.LATEINIT !in declared) {
         "$construct: '$name' is a `val` and cannot be LATEINIT; Kotlin allows the modifier only on " +
             "a mutable property (\"'lateinit' modifier is allowed only on mutable properties.\"). " +

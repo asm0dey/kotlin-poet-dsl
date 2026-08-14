@@ -50,6 +50,11 @@ internal fun TypeScope.addInitializerBlock(body: BlockScope.() -> Unit) {
         "`init`: an interface cannot have an initializer block; it has no state to initialize. " +
             "Move the code to a property initializer or a function."
     }
+    // …and an `annotation class` has no state either, but for a different reason and with a
+    // different sentence: it holds no member of any kind. KotlinPoet answers this one with
+    // `IllegalStateException: CLASS can't have initializer blocks`, which names neither the
+    // construct nor the kind. See [Kinds].
+    if (!membersAllowed) annotationHoldsNoMembers("`init`", "this initializer block")
     // The third member of the `expect` family, refused before the block is built rather than after.
     // KotlinPoet answers the *direct* case with `IllegalStateException: expect CLASS can't have
     // initializer blocks` — the right exception type, with a message naming neither construct — and

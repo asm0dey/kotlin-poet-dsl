@@ -57,8 +57,13 @@ internal fun TypeScope.applySuperclass(type: TypeName, args: Array<out Expr>) {
         "superclass: an interface has no superclass. Use superinterface to extend another interface."
     }
     check(superclassType == null) {
-        "superclass: a $kindName can only extend one class, and this one already does."
+        "superclass: ${article(kindName)} $kindName can only extend one class, and this one already " +
+            "does."
     }
+    // The classifier-kind family's supertype side. KotlinPoet refuses this one from `build()` as
+    // `IllegalStateException: only classes can have super classes, not CLASS` — the right exception
+    // type with a message about its own `Kind` enum. See [Kinds].
+    if (!supertypesAllowed) annotationHasNoSupertypes("superclass")
     // The other thing `TypeSpec.kt:235`'s `filter { it != ANY }` does, found while giving
     // [TypeScope.finish] the term that filter demands. `ANY` never reaches the supertype list at
     // all, so `superclass(ANY, 1.lit)` renders `public class N` and the argument reaches **no
@@ -199,6 +204,10 @@ internal fun nestedSupertypeRenderGap(kindName: String, type: TypeName): Nothing
 
 /** What the generated `superinterface` runs. */
 internal fun TypeScope.applySuperinterface(type: TypeName) {
+    // The row that **rendered**: `annotation class N : Iface` is *annotation class cannot have
+    // supertypes* on all three frontends, where the `superclass` twin was at least refused. See
+    // [Kinds].
+    if (!supertypesAllowed) annotationHasNoSupertypes("superinterface")
     check(type !in builder.superinterfaces) {
         "superinterface: this $kindName already implements $type."
     }

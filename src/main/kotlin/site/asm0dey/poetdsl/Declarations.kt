@@ -1009,6 +1009,12 @@ private fun inferReturnType(
  * scope breaks the build here rather than falling through silently (D17).
  */
 internal fun Scope.declareFun(spec: FunSpec) {
+    // The classifier-kind family's function side, asked at the one place every `` `fun` `` — attached,
+    // generated or spliced through `declareFun` — passes through. KotlinPoet answers the annotation
+    // row itself, with `IllegalArgumentException: annotation class N cannot declare member function f`
+    // (Global Constraint 26's forbidden type, naming neither construct), and the abstract row with
+    // `IllegalArgumentException: non-abstract type N cannot declare abstract function f`. See [Kinds].
+    if (!membersAllowed) annotationHoldsNoMembers("`fun`", "'${spec.name}'")
     when (this) {
         is FileScope -> builder.addFunction(spec)
         is TypeScope -> builder.addFunction(spec)
@@ -1096,8 +1102,13 @@ internal const val LONE_SECONDARY_DELEGATING_TO_ITSELF: String =
  */
 internal fun TypeScope.beginSecondaryConstructor() {
     check(kindName == "class") {
-        "constructor: a $kindName cannot declare a constructor; only a class can."
+        // [article], not a hard-coded "a": this printed *a interface* until this round, the same
+        // grammar bug the previous round fixed at `addConstructorParam` and left here.
+        "constructor: ${article(kindName)} $kindName cannot declare a constructor; only a class can."
     }
+    // An `annotation class` passes the check above — its `kindName` is `"class"` — and holds no
+    // member of any kind, a secondary constructor included. See [Kinds].
+    if (!membersAllowed) annotationHoldsNoMembers("`constructor`", "this secondary constructor")
 }
 
 /**

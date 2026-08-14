@@ -147,6 +147,76 @@ class KindBodyTest {
         )
     }
 
+    // --- an `annotation class` has no members and no supertypes --------------------------------
+
+    @Test
+    fun `every member of an annotation class is refused`() {
+        val shapes: List<Pair<String, TypeScope.() -> Unit>> = listOf(
+            "val" to { `val`("p", INT, init = 1.lit) },
+            "var" to { `var`("p", INT, init = 1.lit) },
+            "val with a getter" to { `val`("p", INT, getter = { ret(1.lit) }) },
+            "fun" to { `fun`("f", returns = INT) { ret(1.lit) } },
+            "constructor" to { `constructor`(param("q", INT)) { } },
+            "init" to { `init` { } },
+        )
+        shapes.forEach { (label, member) ->
+            val m = message { `class`(ANNOTATION, "A") { member() } }
+            assertTrue("members are prohibited in annotation classes" in m, "$label: $m")
+        }
+    }
+
+    @Test
+    fun `an annotation class takes neither a superclass nor a superinterface`() {
+        assertTrue(
+            "annotation class cannot have supertypes" in
+                message { `class`(ANNOTATION, "A") { superinterface(iface) } },
+        )
+        assertTrue(
+            "annotation class cannot have supertypes" in
+                message { `class`(ANNOTATION, "A") { superclass(base) } },
+        )
+    }
+
+    /** The control rows: an annotation class keeps its parameters, its nested types, its companion. */
+    @Test
+    fun `an annotation class still holds parameters, nested types and a companion object`() {
+        val rendered = render {
+            `class`(ANNOTATION, "A", param(VAL, "x", INT)) {
+                `class`("Inner") { `val`("p", INT, init = 1.lit) }
+                companionObject { `val`("q", INT, init = 2.lit) }
+            }
+        }
+        assertTrue("public annotation class A(" in rendered, rendered)
+        assertTrue("public val x: Int" in rendered, rendered)
+        assertTrue("public class Inner" in rendered, rendered)
+        assertTrue("public companion object" in rendered, rendered)
+        assertCompiles(rendered)
+    }
+
+    /** …and the rule is the *kind's*, so it fires at every depth and nowhere else. */
+    @Test
+    fun `the annotation rule fires at every depth and leaves neighbouring kinds alone`() {
+        assertTrue(
+            "members are prohibited" in message {
+                `class`("O") { `class`(ANNOTATION, "A") { `val`("p", INT, init = 1.lit) } }
+            },
+        )
+        assertTrue(
+            "members are prohibited" in message {
+                `object`("O") { `class`(ANNOTATION, "A") { `val`("p", INT, init = 1.lit) } }
+            },
+        )
+        // The neighbour one level in: a class nested inside an annotation class is an ordinary
+        // class and holds whatever a class holds.
+        assertCompiles(
+            render {
+                `class`(ANNOTATION, "A") {
+                    `class`("M") { `fun`("f", returns = INT) { ret(1.lit) } }
+                }
+            },
+        )
+    }
+
     private companion object {
         @Suppress("unused")
         val unusedRefs: List<Any> = emptyList()
