@@ -55,5 +55,12 @@ scope-emitting `constructorParam`; see its KDoc for why the two cannot be one de
 
 - `buildSrc/ArityGenerator.kt` emits `FunArity.kt`, `CtorArity.kt`, and the ADR 0002
   shadow members, all from the same variant table, so the three cannot drift apart.
+- **Amended by the D26 review.** `` `constructor` ``/`ctor` needs a shadow per overload after all
+  (its `context(t: TypeScope)` does not stop a call in a block body — see ADR 0002's amendment), so
+  the shadow count went 16 → **138**, and D26's `superclass`/`superinterface` joined the table so
+  that their two shadows derive from the same list as their declarations. Generated totals:
+  **396 real overloads + 138 shadows = 534 declarations.** The shadow set now scales with the
+  variant table, which is the price of the table: 120 of those 138 exist because
+  `` `constructor` ``/`ctor` is 10 shapes × 6 variants × 2 spellings.
 - A generator that emits a 12-parameter function reads `ps[0]`, `ps[11]` instead of named
   handles. Documented in the README next to the list form.

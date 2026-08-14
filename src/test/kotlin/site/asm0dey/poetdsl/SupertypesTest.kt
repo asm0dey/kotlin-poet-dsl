@@ -162,7 +162,48 @@ class SupertypesTest {
         }.exceptionOrNull()
         for (thrown in listOf(argsFirst, ctorFirst)) {
             assertTrue(thrown is IllegalStateException, "$thrown")
-            assertEquals(SUPERCLASS_ARGS_PLUS_SECONDARY, thrown.message)
+            assertEquals(superclassArgsPlusSecondary("class"), thrown.message)
+        }
+    }
+
+    /**
+     * The same message on an `object` says "a named object", not "a class": it interpolates
+     * `kindName` like its two neighbouring `superclass` messages, which is the whole reason it is a
+     * function and not a constant. Unreachable through `` `constructor` ``'s half of the guard now
+     * that an object is refused a constructor outright, so `superclass`'s half is where it shows.
+     */
+    @Test
+    fun `the header-arguments message names the kind it fired on`() {
+        val thrown = kotlin.runCatching {
+            file("com.example", "A") {
+                `object`("O") {
+                    superclass(base, 1.lit)
+                    superclass(runnable)
+                }
+            }
+        }.exceptionOrNull()
+        assertEquals(
+            "superclass: a named object can only extend one class, and this one already does.",
+            (thrown as IllegalStateException).message,
+        )
+        assertTrue("a named object cannot pass superclass" in superclassArgsPlusSecondary("named object"))
+    }
+
+    /**
+     * Global Constraint 26: neither an object nor an interface has a constructor, so
+     * `` `constructor` `` in one is rejected instead of rendering `public object O { public
+     * constructor(x: Int) }`, which `kotlinc` refuses. Pre-existing, and cheap to close now that
+     * `beginSecondaryConstructor` is the single place every overload passes through.
+     */
+    @Test
+    fun `only a class can declare a constructor`() {
+        for ((kind, build) in listOf<Pair<String, () -> Unit>>(
+            "named object" to { file("com.example", "A") { `object`("O") { `constructor`(param("x", INT)) { _ -> } } } },
+            "interface" to { file("com.example", "A") { `interface`("I") { `constructor`(param("x", INT)) { _ -> } } } },
+        )) {
+            val thrown = kotlin.runCatching { build() }.exceptionOrNull()
+            assertTrue(thrown is IllegalStateException, "$kind: $thrown")
+            assertEquals("constructor: a $kind cannot declare a constructor; only a class can.", thrown.message)
         }
     }
 

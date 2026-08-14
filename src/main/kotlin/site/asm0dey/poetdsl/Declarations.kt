@@ -303,9 +303,10 @@ internal fun buildFun(
     // secondary constructor either. Dropping the tag silently would render a parameter the caller
     // asked to be a property as a plain one; this says so instead.
     params.forEach { p ->
-        check(p.tag(ParamKind::class) == null) {
+        val kind = p.tag(ParamKind::class)
+        check(kind == null) {
             "param: \"${p.name}\" is a `val`/`var` parameter, which is only valid in a class's " +
-                "primary constructor. Declare it with `class`(…, param(${p.tag(ParamKind::class)}, " +
+                "primary constructor. Declare it with `class`(…, param($kind, " +
                 "\"${p.name}\", …)) or constructorParam, or drop the kind here."
         }
     }
@@ -450,10 +451,19 @@ internal const val PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE: String =
  * constructor *and* a delegating secondary one become legal, and so does a header
  * `superclass(Bar, x)` alongside them; a secondary constructor with no primary one still cannot
  * carry header arguments, because that is precisely what its own `: super(…)` is for.
+ *
+ * The kind check is the third: only a class has constructors at all. `object O { constructor(x: Int) }`
+ * and the same in an `interface` are both `IllegalStateException` here rather than rendered output
+ * the Kotlin compiler refuses (Global Constraint 26) — this is the one central place every
+ * `` `constructor` `` overload passes through, and [TypeScope.kindName] is what makes the message
+ * name the kind as well as the construct.
  */
 internal fun TypeScope.beginSecondaryConstructor() {
+    check(kindName == "class") {
+        "constructor: a $kindName cannot declare a constructor; only a class can."
+    }
     check(!hasCtor) { PRIMARY_PLUS_SECONDARY_IS_UNREPRESENTABLE }
-    check(builder.superclassConstructorParameters.isEmpty()) { SUPERCLASS_ARGS_PLUS_SECONDARY }
+    check(builder.superclassConstructorParameters.isEmpty()) { superclassArgsPlusSecondary(kindName) }
     hasSecondaryCtor = true
 }
 

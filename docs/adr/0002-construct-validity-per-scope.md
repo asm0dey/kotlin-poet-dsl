@@ -71,9 +71,12 @@ with no shadow needed.
 
 | Scope | Needs shadows for |
 |---|---|
-| `BlockScope` | `object`, `interface`, `constructorParam` (and their aliases), one per overload variant |
+| `BlockScope` | `object`, `interface`, `constructorParam`, `` `constructor` ``, `superclass`, `superinterface` (and their aliases), one per overload variant |
 | `TypeScope` | none — every file-level construct is also valid on a type |
 | `FileScope` | none — it is the outermost scope |
+
+The set is *fixed*, not *small*: every `TypeScope`-only construct is on it. See the amendment below —
+three of these six were added after they shipped unshadowed on a premise that measurement refuted.
 
 ## Verified (Task 20)
 
@@ -108,6 +111,44 @@ Two amendments to the table above, both from Task 20's deviations:
   `VAL`/`VAR`; a shadow with the plan's signature would not match the real overload, would not
   be applicable, and resolution would fall through — the exact silent-fallthrough failure this
   ADR was written about.
+
+### Amendment (D26 review): `context(t: TypeScope)` is not itself a guard
+
+`` `constructor` ``/`ctor`, `superclass` and `superinterface` shipped without shadows on the
+rationale that *"both are `context(t: TypeScope)`, so a call in a block body does not resolve at all
+and no ADR 0002 shadow is needed"*. **That rationale is false, and measured false on Kotlin 2.4.10.**
+A `` `fun` `` body nested in a type body still has the enclosing type's context parameter in scope,
+so the call resolves and does exactly the silent thing this ADR exists to prevent:
+
+```kotlin
+`class`("C") { `fun`("f") { superclass(b); superinterface(runnable) } }
+// renders: public class C : Base(), Runnable { public fun f() { } }
+```
+
+Only the **file-level** direction fails on its own, with `no context argument for 't: TypeScope'
+found` — which is the outward direction the "shadow set is small" paragraph above already covers.
+The inward direction needs a shadow for every `TypeScope`-only construct, with no exceptions:
+`constructorParam` was never special. All four now behave alike, and the human's decision is that
+they must: a compile error naming the construct, never a silent attachment to the enclosing type.
+
+Two shapes were measured before settling on one shadow per overload, since `` `constructor` ``/`ctor`
+have 120 overloads between them:
+
+- **A variant-collapsed `vararg` shadow** — `fun BlockScope.constructor(vararg head: Any?, body:
+  BlockScope.(Expr) -> Unit)`, one per body arity instead of one per variant, 15 declarations instead
+  of 60. It *does* outrank the context function, including for the annotated-plus-modifier variants,
+  which measured a second useful fact: the extension wins at its receiver level, so vararg
+  specificity never enters into it. But two collapsed shadows are both applicable to a `{ }` body —
+  a lambda with no declared parameters satisfies `() -> Unit` and `(Expr) -> Unit` alike — so
+  `` `constructor` `` and `` `constructor`(p) { } ``, the two commonest shapes, degrade to
+  `Overload resolution ambiguity between candidates`. Still an error, but one that no longer says
+  *why*, and the exact-match rule this ADR was written around exists to prevent that drift.
+- **One shadow per real public overload** — 120 for `` `constructor` ``/`ctor`, 1 each for
+  `superclass`/`superinterface`. Chosen. Every shape names the construct and the rule.
+
+`superclass` and `superinterface` were moved into the generator for this: their real declarations now
+come off the same list as their shadows (D7), because a shadow list maintained beside the declarations
+rather than derived from them is the second list this ADR measured going wrong.
 
 ### Known limitation: the same leak produces a false positive inside a detached `TypeScope`
 

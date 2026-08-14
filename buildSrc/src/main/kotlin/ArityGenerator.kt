@@ -4,8 +4,10 @@ import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 
 // Generates the mechanical part of the DSL's public surface: ADR 0004's six declaration variants
-// for every declaration construct, arities 0-MAX_ARITY for the two parameter-taking ones, and
-// ADR 0002's @Deprecated(ERROR) shadow members.
+// for every declaration construct, arities 0-MAX_ARITY for the three parameter-taking ones, and
+// ADR 0002's @Deprecated(ERROR) shadow members. D26's two supertype constructs are here for the
+// shadows alone — one overload each, no variants — because a shadow that is not derived from the
+// declaration it mirrors is the hand-maintained second list this generator exists to prevent.
 //
 // Everything comes out of one `Overload` list. The shadows are *filtered* from that same list
 // rather than written out a second time, which is the whole point of generating them here: a
@@ -93,9 +95,24 @@ private data class Overload(
     val shadow: String? = null,
 )
 
+/**
+ * The KDoc block. One line stays on one line; a multi-paragraph doc — which only the supertypes
+ * have — is written out as a real KDoc block rather than crammed into `/** … */`.
+ */
+private fun renderDoc(doc: String): String =
+    if ('\n' !in doc) {
+        "/** $doc */\n"
+    } else {
+        buildString {
+            appendLine("/**")
+            doc.trimEnd().lines().forEach { appendLine(if (it.isEmpty()) " *" else " * $it") }
+            appendLine(" */")
+        }
+    }
+
 /** The real declaration. `returns == null` means a `Unit` block body. */
 private fun Overload.render(): String = buildString {
-    appendLine("/** $doc */")
+    append(renderDoc(doc))
     appendLine(context)
     appendLine("public fun $name(")
     params.forEach { appendLine("    $it,") }
@@ -367,6 +384,13 @@ private fun ctorOverloads(): List<Overload> = CTOR_NAMES.flatMap { nm ->
                     |    ),
                     |)
                 """.trimMargin(),
+                // Measured, and it is why every one of these 120 overloads carries a shadow: the
+                // `context(t: TypeScope)` does *not* stop a call inside a `fun` body — the enclosing
+                // type's context parameter is still in scope there, so the call resolves and the
+                // constructor silently attaches to the enclosing type. Only the file-level direction
+                // fails on its own ("no context argument for 't: TypeScope' found").
+                shadow = "${nm.value} is only valid inside a class body. Written in a block it " +
+                    "would silently attach to the enclosing type.",
             )
         }
     }
@@ -400,6 +424,57 @@ private fun ctorParamOverloads(): List<Overload> = CTOR_PARAM_NAMES.flatMap { nm
         )
     }
 }
+
+/**
+ * D26's `superclass` / `superinterface`. One overload each — no variants, no arities — and generated
+ * here anyway, for the shadows: a shadow list written by hand beside the declarations it mirrors is
+ * the second list ADR 0002 measured going wrong, and the rule is one shadow per real public overload,
+ * off the same list that emitted it (D7). The bodies are a single call into `Supertypes.kt`, which
+ * keeps the guards and the reasoning for them.
+ *
+ * Both need a shadow for the same measured reason `` `constructor` `` does: `context(t: TypeScope)`
+ * does not stop a call in a block body — the enclosing type's context parameter is still in scope, so
+ * `` `fun`("f") { superclass(b) } `` resolves and attaches the supertype to the enclosing type.
+ */
+private val SUPERTYPES: List<Overload> = listOf(
+    Overload(
+        doc = """
+            |`: Base(args)` — the class this type extends, and the arguments its constructor is
+            |called with.
+            |
+            |With no [args] the supertype is written `: Base()`, which is what a no-argument
+            |superclass call looks like. Arguments may name this type's own primary-constructor
+            |parameters — `class User(val id: Long) : Entity(id)` — which is why the parameters D23
+            |puts in the `class` signature are declared before the body runs.
+            |
+            |An interface has no superclass; extending one is [superinterface]'s job, in an
+            |interface body exactly as in a class body.
+        """.trimMargin(),
+        context = "context(t: TypeScope)",
+        name = "superclass",
+        params = listOf("type: TypeName", "vararg args: Expr"),
+        returns = null,
+        body = "t.applySuperclass(type, args)",
+        shadow = "superclass is only valid inside a class or object body, on the type itself. " +
+            "Written in a block it would silently attach to the enclosing type.",
+    ),
+    Overload(
+        doc = """
+            |`: Runnable` — an interface this type implements, or, in an interface body, one it
+            |extends.
+            |
+            |Called once per interface; a second call naming the same one is rejected rather than
+            |silently dropped, which is what KotlinPoet's map of superinterfaces would do with it.
+        """.trimMargin(),
+        context = "context(t: TypeScope)",
+        name = "superinterface",
+        params = listOf("type: TypeName"),
+        returns = null,
+        body = "t.applySuperinterface(type)",
+        shadow = "superinterface is only valid inside a class, object or interface body, on the " +
+            "type itself. Written in a block it would silently attach to the enclosing type.",
+    ),
+)
 
 // --- files ----------------------------------------------------------------------------------------
 
@@ -439,7 +514,8 @@ public open class ArityGeneratorTask : DefaultTask() {
 
         val declarations = TYPES.flatMap { it.overloads() } +
             BINDINGS.flatMap { it.overloads() } +
-            ctorParamOverloads()
+            ctorParamOverloads() +
+            SUPERTYPES
         val funs = funOverloads()
         val ctors = ctorOverloads()
 

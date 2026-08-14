@@ -364,7 +364,9 @@ Every backticked keyword has a full-word alias, so bulk codegen need not fight b
 | `constructorParam` | `ctorParam` |
 | `` `constructor` `` | `ctor` |
 
-The convention is **full word is canonical, short form is the alias**, applied without exception — `annotation`/`ann`, `member`/`mem`, `expression`/`expr`, `reference`/`ref`, `literal`/`lit`, `statement`/`stmt`, `constructorParam`/`ctorParam`. Where the natural full name is a Kotlin keyword it is backticked and canonical (`` `return` ``/`ret`, `` `break` ``/`brk`, `` `continue` ``/`cont`, `` `constructor` ``/`ctor`). Full alias table is fixed during implementation; both spellings are supported permanently. Note that `property` (declaration) and `prop` (property *access* on an `Expr`) are deliberately different names — they live in different scopes but would read alike.
+The convention is **full word is canonical, short form is the alias** — `annotation`/`ann`, `member`/`mem`, `expression`/`expr`, `reference`/`ref`, `literal`/`lit`, `statement`/`stmt`, `constructorParam`/`ctorParam`. Where the natural full name is a Kotlin keyword it is backticked and canonical (`` `return` ``/`ret`, `` `break` ``/`brk`, `` `continue` ``/`cont`, `` `constructor` ``/`ctor`). Full alias table is fixed during implementation; both spellings are supported permanently. Note that `property` (declaration) and `prop` (property *access* on an `Expr`) are deliberately different names — they live in different scopes but would read alike.
+
+**The table above is a fixed list, not a blanket rule: a construct with no natural short form gets no alias.** The operator names already show this — `eq`, `lt`, `and`, `not`, `elvis` are canonical with nothing to shorten — and D26's `superclass`/`superinterface` are the same case, decided by the human: the two candidates worth considering, `extends`/`implements`, import Java's spelling and read wrong inside an `` `interface` `` body, where `superinterface` means *extends*. An alias audit should not flag either as a gap.
 
 ## Naming and scope
 

@@ -136,6 +136,173 @@ class ShadowsTest {
     }
 
     /**
+     * The three `TypeScope`-only constructs that shipped without shadows, on the false premise that
+     * `context(t: TypeScope)` alone stops a call in a block body. It does not: the enclosing type's
+     * context parameter is still in scope inside a `` `fun` `` body, so the call resolved and the
+     * construct silently attached to the enclosing type — `` `class`("C") { `fun`("f") {
+     * superclass(b) } } `` rendered `public class C : Base() { public fun f() { } }`. Only the
+     * *file-level* direction fails on its own, with "no context argument for 't: TypeScope' found".
+     */
+    @Test
+    fun `superclass in a function body is a compile error naming the shadow`() {
+        val result = compileDsl(
+            """
+            fun build() = file("com.example", "A") {
+                `class`("C") {
+                    `fun`("f") {
+                        superclass(ClassName("com.example", "Base"))
+                    }
+                }
+            }
+            """.trimIndent(),
+            extraImports = listOf("com.squareup.kotlinpoet.ClassName"),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+        assertTrue(
+            "'fun BlockScope.superclass(type: TypeName, vararg args: Expr): Nothing' is deprecated" in
+                result.messages,
+            result.messages,
+        )
+        assertTrue("superclass is only valid inside a class or object body" in result.messages, result.messages)
+    }
+
+    @Test
+    fun `superinterface in a function body is a compile error naming the shadow`() {
+        val result = compileDsl(
+            """
+            fun build() = file("com.example", "A") {
+                `class`("C") {
+                    `fun`("f") {
+                        superinterface(ClassName("com.example", "Greeter"))
+                    }
+                }
+            }
+            """.trimIndent(),
+            extraImports = listOf("com.squareup.kotlinpoet.ClassName"),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+        assertTrue(
+            "'fun BlockScope.superinterface(type: TypeName): Nothing' is deprecated" in result.messages,
+            result.messages,
+        )
+        assertTrue(
+            "superinterface is only valid inside a class, object or interface body" in result.messages,
+            result.messages,
+        )
+    }
+
+    /** The control for both: the same two calls one scope out are the intended use. */
+    @Test
+    fun `superclass and superinterface in a type body compile`() {
+        val result = compileDsl(
+            """
+            fun build() = file("com.example", "A") {
+                `class`("C") {
+                    superclass(ClassName("com.example", "Base"))
+                    superinterface(ClassName("com.example", "Greeter"))
+                }
+            }
+            """.trimIndent(),
+            extraImports = listOf("com.squareup.kotlinpoet.ClassName"),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+    }
+
+    /**
+     * `` `constructor` `` had the identical gap. Three shapes, because its shadow set is the one
+     * that had to grow to 120 to cover ADR 0004's variants against D23/D24's arities: the bare
+     * form, a parameter-taking one, and a variant carrying both annotations and a modifier — the
+     * corners where a partial shadow set would fall through to the context function.
+     */
+    @Test
+    fun `constructor in a function body is a compile error, in every shape`() {
+        val bare = compileDsl(
+            """
+            fun build() = file("com.example", "A") {
+                `class`("C") {
+                    `fun`("f") {
+                        `constructor` { }
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, bare.exitCode, bare.messages)
+        assertTrue(
+            "'fun BlockScope.constructor(body: BlockScope.() -> Unit): Nothing' is deprecated" in bare.messages,
+            bare.messages,
+        )
+        assertTrue("`constructor` is only valid inside a class body" in bare.messages, bare.messages)
+
+        val withParam = compileDsl(
+            """
+            fun build() = file("com.example", "A") {
+                `class`("C") {
+                    `fun`("f") {
+                        `constructor`(param("x", INT)) { _ -> }
+                    }
+                }
+            }
+            """.trimIndent(),
+            extraImports = listOf("com.squareup.kotlinpoet.INT"),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, withParam.exitCode, withParam.messages)
+        assertTrue("`constructor` is only valid inside a class body" in withParam.messages, withParam.messages)
+
+        val variant = compileDsl(
+            """
+            annotation class Marker
+
+            fun build() = file("com.example", "A") {
+                `class`("C") {
+                    `fun`("f") {
+                        `constructor`(annotation<Marker>(), PRIVATE, listOf(param("x", INT))) { _ -> }
+                    }
+                }
+            }
+            """.trimIndent(),
+            extraImports = listOf("com.squareup.kotlinpoet.INT", "com.squareup.kotlinpoet.KModifier.PRIVATE"),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, variant.exitCode, variant.messages)
+        assertTrue("`constructor` is only valid inside a class body" in variant.messages, variant.messages)
+    }
+
+    /** The alias is a separate declaration and gets its own 60 shadows, off the same list. */
+    @Test
+    fun `the ctor alias is shadowed too`() {
+        val result = compileDsl(
+            """
+            fun build() = file("com.example", "A") {
+                `class`("C") {
+                    `fun`("f") {
+                        ctor(param("x", INT)) { _ -> }
+                    }
+                }
+            }
+            """.trimIndent(),
+            extraImports = listOf("com.squareup.kotlinpoet.INT"),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+        assertTrue("ctor is only valid inside a class body" in result.messages, result.messages)
+    }
+
+    /** The control for `` `constructor` ``: in a class body it is the intended use. */
+    @Test
+    fun `constructor in a type body compiles`() {
+        val result = compileDsl(
+            """
+            fun build() = file("com.example", "A") {
+                `class`("C") {
+                    `constructor`(param("x", INT)) { _ -> }
+                }
+            }
+            """.trimIndent(),
+            extraImports = listOf("com.squareup.kotlinpoet.INT"),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+    }
+
+    /**
      * The counterpart to the shadows: `class` deliberately has none, because a local class is
      * valid Kotlin and only KotlinPoet 2.3.0's renderer stands in the way (deviation D20). It
      * therefore has to keep *compiling* — the runtime guard in `declareType` is what rejects it,
