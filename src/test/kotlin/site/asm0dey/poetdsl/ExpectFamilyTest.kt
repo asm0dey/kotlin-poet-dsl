@@ -135,6 +135,19 @@ class ExpectFamilyTest {
             "initialize the supertype on the `actual` declaration.",
     )
 
+    private fun nestedSupertypeMessage(kindName: String) = refusal(
+        "superclass",
+        "com.example.Base is extended by a $kindName declared in an `expect` type, and KotlinPoet " +
+            "2.3.0 renders that as `: com.example.Base()` — it emits `%T(%L)` for a supertype and " +
+            "drops the parentheses only when the type's own modifiers carry EXPECT, which Kotlin " +
+            "forbids on a nested classifier, or when the type has secondary constructors and no " +
+            "primary one (`TypeSpec.kt:238-239`)",
+        "expected classes cannot initialize supertypes",
+        "Use superinterface if com.example.Base is an interface; or give this $kindName a secondary " +
+            "`constructor` and no constructorParam, which is the one shape KotlinPoet renders as " +
+            "`: com.example.Base`; or drop the supertype and declare it on the `actual` declaration.",
+    )
+
     private fun refused(message: String, body: FileScope.() -> Unit) {
         val e = assertFailsWith<IllegalStateException> { file("com.example", "A", body = body) }
         assertEquals(message, e.message)
@@ -376,6 +389,119 @@ class ExpectFamilyTest {
     }
 
     /**
+     * The sixth member of the family, and the one the previous round verified at the top level while
+     * the answer inverts one level down. `applySuperclass` fires on `args.isNotEmpty()`, which is
+     * the whole rule for a builder that carries `EXPECT` itself — KotlinPoet drops the parentheses
+     * there. One level down it does not: `TypeSpec.emit` writes `%T(%L)` for a supertype and falls
+     * back to a bare `%T` only when `areNestedExternal || EXPECT in modifiers`
+     * (`TypeSpec.kt:239` — the *immediate* builder's own modifiers, which Kotlin forbids a nested
+     * classifier to carry) or when the type has secondary constructors and no primary one
+     * (`TypeSpec.kt:238`). So an **empty** argument list still produces `: Base()`. Measured, one
+     * file per row, all three frontends identical:
+     *
+     * ```
+     * expect class E { class N : Base() }              supertype initialization is impossible
+     * expect class E { class N { class M : Base() } }  without a primary constructor.  +  expected
+     * expect class E { companion object : Base() }     classes cannot initialize supertypes.
+     * expect class E { class N(z: Int) : Base() }      expected classes cannot initialize supertypes.
+     * ```
+     *
+     * And the control rows — the nearest *valid* neighbours, which is what says the refusal is not
+     * over-broad. Every one of them is clean on all three:
+     *
+     * ```
+     * expect class E { class N : Base }                            — the shape this cannot render
+     * expect class E { class N(z: Int) : Base }
+     * expect class E { class N : Iface }                           — superinterface, never parenthesized
+     * expect class E { class N : Base { constructor(p: Int) } }    — the one shape it *can* render
+     * expect class E : Base                                        — the direct case, unchanged
+     * class Outer { class N : Base() }                             — outside `expect`, unchanged
+     * ```
+     *
+     * The check lives in [TypeScope.finish] rather than in `applySuperclass` for the reason
+     * [superclassArgsPlusSecondary] does: whether the parentheses are emitted depends on constructors
+     * that may be written after the supertype, so an eager check would answer on writing order.
+     */
+    @Test
+    fun `an expect container refuses a nested supertype it can only render with parentheses`() {
+        refused(nestedSupertypeMessage("class")) { `class`(EXPECT, "E") { `class`("N") { superclass(base) } } }
+        refused(nestedSupertypeMessage("class")) {
+            `class`(EXPECT, "E") { `class`("N") { `class`("M") { superclass(base) } } }
+        }
+        refused(nestedSupertypeMessage("companion object")) {
+            `class`(EXPECT, "E") { companionObject { superclass(base) } }
+        }
+        refused(nestedSupertypeMessage("class")) {
+            `class`(EXPECT, "E") {
+                `class`("N") {
+                    constructorParam(null, "z", INT)
+                    superclass(base)
+                }
+            }
+        }
+        // Writing order does not decide it: the constructor parameter can come after the supertype.
+        refused(nestedSupertypeMessage("class")) {
+            `class`(EXPECT, "E") {
+                `class`("N") {
+                    superclass(base)
+                    constructorParam(null, "z", INT)
+                }
+            }
+        }
+        assertEquals(
+            nestedSupertypeMessage("class"),
+            assertFailsWith<IllegalStateException> {
+                typeSpec(EXPECT.toModifiers(), name = "E") { `class`("N") { superclass(base) } }
+            }.message,
+        )
+    }
+
+    /** The control rows for the refusal above, rendered rather than described. */
+    @Test
+    fun `an expect container keeps every supertype it can render without parentheses`() {
+        assertEquals(
+            """
+            package com.example
+
+            import kotlin.Int
+
+            public expect class E : Base {
+              public class N : Iface
+
+              public class P(
+                z: Int,
+              ) : Iface
+
+              public class R : Base {
+                public constructor(p: Int)
+              }
+            }
+
+            public class Outer {
+              public class N : Base()
+            }
+
+            """.trimIndent(),
+            file("com.example", "A") {
+                val iface = ClassName("com.example", "Iface")
+                `class`(EXPECT, "E") {
+                    superclass(base)
+                    `class`("N") { superinterface(iface) }
+                    `class`("P") {
+                        constructorParam(null, "z", INT)
+                        superinterface(iface)
+                    }
+                    `class`("R") {
+                        superclass(base)
+                        `constructor`(param("p", INT)) { }
+                    }
+                }
+                `class`("Outer") { `class`("N") { superclass(base) } }
+            }.toString(),
+        )
+    }
+
+    /**
      * The boundary, in one render: a member of an `expect` type is a **signature**, and every
      * signature this round could have refused by accident still comes out. A bodiless function, a
      * bodiless secondary constructor, a plain primary-constructor parameter, a supertype with no
@@ -546,6 +672,13 @@ class ExpectFamilyTest {
             "public expect class E {\n  public class N : Base(1)\n}" to "cannot initialize supertypes",
             "public expect class E : Base {\n  public constructor(p: Int) : super(p)\n}" to
                 "delegation call for constructor of expected class is prohibited",
+            // The render this round removed, with an **empty** argument list — the shape the
+            // `args.isNotEmpty()` guard was verified against at the top level and misses at depth.
+            "public expect class E {\n  public class N : Base()\n}" to "cannot initialize supertypes",
+            "public expect class E {\n  public class N(\n    z: Int,\n  ) : Base()\n}" to
+                "cannot initialize supertypes",
+            "public expect class E {\n  public companion object : Base()\n}" to
+                "cannot initialize supertypes",
         ).forEach { (source, diagnostic) ->
             val messages = compileMultiplatform(
                 "package com.example\n\nimport kotlin.Int\n\npublic open class Base(\n  q: Int,\n)\n\n$source\n",
@@ -556,14 +689,23 @@ class ExpectFamilyTest {
 
     /**
      * The same frontend, on the signature side: the render the test above's controls produce draws
-     * **none** of those four diagnostics. This is what makes the round a measurement of where the
+     * **none** of those diagnostics. This is what makes the round a measurement of where the
      * boundary is rather than of the language alone — the source below is this DSL's own output, and
      * every line of it is a member kind the rule refuses in some other shape.
+     *
+     * **Every control row this round added is in here**, rendered by the DSL rather than typed by
+     * hand: the nested `annotation class` and `value class` with `val` parameters, a nested
+     * superinterface with and without a primary constructor, and the one supertype shape KotlinPoet
+     * renders without parentheses (secondary constructors, no primary). Only the JVM frontend is
+     * reachable from kctfork; the `kotlinc-js` and `kotlinc-wasm` runs of the same rows are hand-run
+     * and recorded in [Expect], in [nestedSupertypeRenderGap] and in D40.
      */
     @Test
     fun `every signature the expect rule keeps is one kotlinc keeps`() {
         val rendered = file("com.example", "Signatures") {
+            val iface = ClassName("com.example", "Iface")
             `class`("Base") { constructorParam(null, "q", INT) }
+            `interface`("Iface") { }
             `class`(EXPECT, "E") {
                 superclass(ClassName("com.example", "Base"))
                 constructorParam(null, "x", INT)
@@ -573,6 +715,17 @@ class ExpectFamilyTest {
                 `class`("N") {
                     constructorParam(null, "z", INT)
                     `fun`("h", returns = INT) { }
+                }
+                `class`(ANNOTATION, "Ann") { constructorParam(ParamKind.VAL, "a", INT) }
+                `class`(VALUE, "V") { constructorParam(ParamKind.VAL, "b", INT) }
+                `class`("Impl") { superinterface(iface) }
+                `class`("ImplWithCtor") {
+                    constructorParam(null, "c", INT)
+                    superinterface(iface)
+                }
+                `class`("Sub") {
+                    superclass(ClassName("com.example", "Base"))
+                    `constructor`(param("d", INT)) { }
                 }
                 companionObject { `fun`("of", returns = INT) { } }
             }
@@ -584,8 +737,11 @@ class ExpectFamilyTest {
             "cannot have a property parameter",
             "cannot have a body",
             "cannot initialize supertypes",
+            "supertype initialization is impossible",
             "delegation call",
             "must be initialized",
+            "'val' keyword is missing",
+            "final read-only",
         ).forEach { diagnostic -> assertFalse(diagnostic in messages, "$diagnostic\n$rendered\n$messages") }
     }
 }

@@ -55,7 +55,7 @@ internal fun TypeScope.applySuperclass(type: TypeName, args: Array<out Expr>) {
     check(kindName != "interface") {
         "superclass: an interface has no superclass. Use superinterface to extend another interface."
     }
-    check(!hasSuperclass) {
+    check(superclassType == null) {
         "superclass: a $kindName can only extend one class, and this one already does."
     }
     // The member of the `expect` family nothing had filed, and the only one whose failure was
@@ -65,8 +65,16 @@ internal fun TypeScope.applySuperclass(type: TypeName, args: Array<out Expr>) {
     // which Global Constraint 26 forbids as loudly as invalid output. One level down nothing is
     // dropped and `expect class E { class N : Base(1) }` renders, which all three frontends answer
     // with *expected classes cannot initialize supertypes* — as they do for the header form, with or
-    // without a primary constructor. Refusing the *supertype* would be wrong in both directions:
-    // `expect class E : Base` is valid everywhere. See [Expect].
+    // without a primary constructor. See [Expect].
+    //
+    // **`args.isNotEmpty()` is the whole rule only here, where the builder carries `EXPECT` itself.**
+    // One level down KotlinPoet emits `%T(%L)` and an *empty* argument list still renders the
+    // parentheses, so `expect class E { class N : Base }` has no spelling and `expect class E {
+    // class N : Base() }` draws the same diagnostic this one does. That is
+    // [nestedSupertypeRenderGap], checked in [TypeScope.finish] because the parentheses depend on
+    // constructors that can be written after this call. This comment used to say "refusing the
+    // *supertype* would be wrong in both directions: `expect class E : Base` is valid everywhere",
+    // which is true of the direct case and the opposite of the truth one level down.
     if (isExpectContainer && args.isNotEmpty()) {
         expectRefusal(
             "superclass",
@@ -76,13 +84,63 @@ internal fun TypeScope.applySuperclass(type: TypeName, args: Array<out Expr>) {
                 "initialize the supertype on the `actual` declaration.",
         )
     }
-    hasSuperclass = true
+    superclassType = type
     builder.superclass(type)
     // One `CodeBlock` per argument, not one joined block: KotlinPoet joins them itself, and keeping
     // them separate is what lets it wrap a long supertype list. `%L` of the expression's own code
     // keeps `%T`/`%M` placeholders intact, so imports still resolve.
     args.forEach { builder.addSuperclassConstructorParameter(CodeBlock.of("%L", it.code)) }
 }
+
+/**
+ * The member of the `expect` family that only exists **one level down**, and the reason this round
+ * exists: a guard verified at the top level whose answer inverts below it.
+ *
+ * `TypeSpec.emit` renders a superclass as `%T(%L)` and falls back to a bare `%T` in exactly two
+ * cases (KotlinPoet 2.3.0, `TypeSpec.kt:234-245`):
+ *
+ *     if (primaryConstructor != null || funSpecs.none(FunSpec::isConstructor)) {   // :238
+ *       if (!areNestedExternal && !modifiers.contains(EXPECT)) {                   // :239
+ *         CodeBlock.of("%T(%L)", it, superclassConstructorParametersBlock)
+ *       } else { CodeBlock.of("%T", it) }
+ *     } else { CodeBlock.of("%T", it) }
+ *
+ * `modifiers` there is the **immediate** builder's own — and Kotlin puts no `expect` keyword on a
+ * classifier nested inside an `expect` one (D36), so at depth the fallback is unreachable through
+ * that branch and an *empty* argument list still renders `: Base()`. Measured, one file per row,
+ * `kotlinc` / `kotlinc-js` / `kotlinc-wasm` 2.4.10, all three identical:
+ *
+ *     expect class E { class N : Base() }               supertype initialization is impossible
+ *     expect class E { class N { class M : Base() } }    without a primary constructor.  and
+ *     expect class E { companion object : Base() }       expected classes cannot initialize
+ *                                                        supertypes.
+ *     expect class E { class N(z: Int) : Base() }       expected classes cannot initialize supertypes.
+ *
+ * The control rows, clean on all three, are what keeps the refusal from being over-broad — and three
+ * of them are shapes this DSL still renders:
+ *
+ *     expect class E { class N : Base }                          — no spelling reaches this
+ *     expect class E { class N(z: Int) : Base }                  — nor this
+ *     expect class E { class N : Iface }                         superinterface, never parenthesized
+ *     expect class E { class N : Base { constructor(p: Int) } }  the `:238` fallback, reachable
+ *     expect class E : Base                                      the direct case
+ *     class Outer { class N : Base() }                           outside `expect`
+ *
+ * So this is half language rule and half **render gap**, and the message says both: the Kotlin the
+ * DSL would emit is refused everywhere, *and* the Kotlin the author wanted is unreachable through
+ * KotlinPoet in the common shape. The remedy names the one shape that does reach it.
+ */
+internal fun nestedSupertypeRenderGap(kindName: String, type: TypeName): Nothing = expectRefusal(
+    "superclass",
+    "$type is extended by a $kindName declared in an `expect` type, and KotlinPoet 2.3.0 renders " +
+        "that as `: $type()` — it emits `%T(%L)` for a supertype and drops the parentheses only " +
+        "when the type's own modifiers carry EXPECT, which Kotlin forbids on a nested classifier, " +
+        "or when the type has secondary constructors and no primary one (`TypeSpec.kt:238-239`)",
+    "expected classes cannot initialize supertypes",
+    "Use superinterface if $type is an interface; or give this $kindName a secondary `constructor` " +
+        "and no constructorParam, which is the one shape KotlinPoet renders as `: $type`; or drop " +
+        "the supertype and declare it on the `actual` declaration.",
+)
 
 /** What the generated `superinterface` runs. */
 internal fun TypeScope.applySuperinterface(type: TypeName) {

@@ -4,6 +4,7 @@ import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeName
 import com.squareup.kotlinpoet.TypeSpec
@@ -116,11 +117,16 @@ public class TypeScope internal constructor(
     internal val isExpect: Boolean = false,
 ) : Scope(names, id), Annotatable {
     /**
-     * Whether [superclass] already ran. KotlinPoet tracks the same fact but keeps it internal, and
-     * its own `check` message ("superclass already set to …") names neither this DSL's construct nor
-     * the type it happened in.
+     * What [superclass] was given, or null if it has not run. KotlinPoet tracks the same fact —
+     * `TypeSpec.Builder.superclass` — but keeps the field `internal` (`TypeSpec.kt:529`), so it can
+     * be neither read back for a message nor read back by [finish]'s parenthesis check; and its own
+     * `check` message ("superclass already set to …") names neither this DSL's construct nor the
+     * type it happened in.
+     *
+     * The [TypeName] rather than a bare flag, because [finish] needs to *name* it: the one member of
+     * the `expect` family whose refusal is decided after the whole body has run reads this.
      */
-    internal var hasSuperclass: Boolean = false
+    internal var superclassType: TypeName? = null
 
     /**
      * Where a **plain** primary-constructor parameter — `param(null, …)` / `constructorParam(null, …)`,
@@ -232,6 +238,23 @@ public class TypeScope internal constructor(
         val delegatesToPrimary = { spec: FunSpec -> spec.delegateConstructor == DelegationTarget.THIS.keyword }
         check(hasCtor || secondaryCtors.size != 1 || !delegatesToPrimary(secondaryCtors.single())) {
             LONE_SECONDARY_DELEGATING_TO_ITSELF
+        }
+        // The `expect` family's sixth member, and the third check here that can only be answered once
+        // the whole body has run — for the same reason as the two above, and one more. Whether
+        // KotlinPoet writes `: Base` or `: Base()` depends on the constructors this type ends up
+        // with (`TypeSpec.kt:238`), and those can be written after the `superclass(…)` call, so an
+        // eager check in `applySuperclass` would answer on writing order alone.
+        //
+        // `EXPECT`/`EXTERNAL` are read off this builder's **own** modifiers because that is exactly
+        // what `TypeSpec.emit` reads at `:239` — [isExpect] is the inherited fact, which is what
+        // makes the *frontends* apply the rule, and the two together are the render gap. See
+        // [nestedSupertypeRenderGap].
+        val ownModifiers = builder.modifiers
+        val parenthesized = hasCtor || secondaryCtors.isEmpty()
+        if (isExpect && parenthesized && KModifier.EXPECT !in ownModifiers &&
+            KModifier.EXTERNAL !in ownModifiers
+        ) {
+            superclassType?.let { nestedSupertypeRenderGap(kindName, it) }
         }
         if (hasCtor) builder.primaryConstructor(ctor.build())
         return builder.build()
