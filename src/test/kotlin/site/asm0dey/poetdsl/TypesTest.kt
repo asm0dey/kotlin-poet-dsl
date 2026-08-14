@@ -14,6 +14,7 @@ import com.squareup.kotlinpoet.UNIT
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import site.asm0dey.poetdsl.ParamKind.VAL
 
@@ -56,14 +57,33 @@ class TypesTest {
         val e = assertFailsWith<IllegalStateException> { reference<List<String>>() }
         assertTrue("reference:" in e.message!!, e.message!!)
         assertTrue("typeReference<T>()" in e.message!!, e.message!!)
+        // The two routes the message may name, and the one it must not: recommending
+        // `reference<List<*>>()` steered the caller straight back into the erasure this rejects.
+        assertTrue("className(" in e.message!!, e.message!!)
+        assertFalse("<*>>()" in e.message!!, e.message!!)
     }
 
-    /** A star projection loses nothing, so it is the spelling for "the raw class, deliberately". */
+    /**
+     * A star projection erases exactly as badly: `reference<List<*>>()` used to hand back bare
+     * `kotlin.collections.List`, which is not a Kotlin type in either position —
+     * `fun f(xs: List)` and `class C : List` are both compile errors. So the guard covers any type
+     * argument at all, star or concrete.
+     */
     @Test
-    fun `reference accepts a star projection and returns the raw class name`() {
-        assertEquals("kotlin.collections.List", reference<List<*>>().toString())
-        assertEquals("kotlin.collections.Map", ref<Map<*, *>>().toString())
+    fun `reference refuses a star projection too`() {
+        val onList = assertFailsWith<IllegalStateException> { reference<List<*>>() }
+        assertTrue("reference:" in onList.message!!, onList.message!!)
+        assertTrue("typeReference<T>()" in onList.message!!, onList.message!!)
+        val onMap = assertFailsWith<IllegalStateException> { ref<Map<*, *>>() }
+        assertTrue("reference:" in onMap.message!!, onMap.message!!)
+        // A type with no arguments at all is untouched — that is what `reference` is for.
         assertEquals("kotlin.String", reference<String>().toString())
+    }
+
+    /** The escape hatch the message offers instead: the raw class, named out loud. */
+    @Test
+    fun `className still names a raw generic class explicitly`() {
+        assertEquals("kotlin.collections.List", className("kotlin.collections", "List").toString())
     }
 
     // --- composing ------------------------------------------------------------------------------

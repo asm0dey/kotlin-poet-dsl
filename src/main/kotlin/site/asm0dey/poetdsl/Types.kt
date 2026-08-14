@@ -52,9 +52,10 @@ public fun className(packageName: String, simpleName: String, vararg nested: Str
  * `List<String>` from a type on the generator's own classpath, **type arguments intact**.
  *
  * [reference] cannot do this and never could: it is built on `T::class`, which is the erased runtime
- * class, so `reference<List<String>>()` is `kotlin.collections.List` and nothing else. This is built
- * on `typeOf<T>()` instead, which the compiler fills in at the call site, so nullability, nesting,
- * star projections and use-site variance all survive:
+ * class, so `reference<List<String>>()` could only ever have named `kotlin.collections.List` and
+ * nothing else — which is why it now rejects a type carrying any arguments instead of erasing them.
+ * This is built on `typeOf<T>()` instead, which the compiler fills in at the call site, so
+ * nullability, nesting, star projections and use-site variance all survive:
  *
  *     typeReference<Map<String, List<Int?>>>()   // Map<String, List<Int?>>, fully qualified
  *     typeReference<List<*>>()                   // kotlin.collections.List<*>

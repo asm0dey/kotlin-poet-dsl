@@ -116,22 +116,28 @@ public val TypeName.nullable: TypeName get() = copy(nullable = true)
  * Returns [ClassName] by ADR 0010, which is what `member(enclosing, …)`, `annotation(cls, …)` and
  * `superclass(…)` want and what [parameterizedBy] applies type arguments to.
  *
- * **Type arguments are rejected, not erased** (D31). `T::class` is the runtime class, so
- * `reference<List<String>>()` could only ever have produced bare `kotlin.collections.List` — silently
- * dropping the `<String>` the caller wrote, which is a generated public API changed behind their
- * back. The reified [typeOf] the compiler fills in at the call site can see the difference, so this
- * says so instead of guessing. A **star** projection is accepted, because `List<*>` really does name
- * the raw class and there is nothing to lose: `reference<List<*>>()` is `kotlin.collections.List`.
+ * **Type arguments are rejected, not erased** (D31, tightened in the E1 fix round). `T::class` is the
+ * runtime class, so `reference<List<String>>()` could only ever have produced bare
+ * `kotlin.collections.List` — silently dropping the `<String>` the caller wrote, which is a generated
+ * public API changed behind their back. The reified [typeOf] the compiler fills in at the call site
+ * can see the difference, so this says so instead of guessing.
  *
- * Use [typeReference] for the full type, or compose it with [parameterizedBy].
+ * A **star** projection is rejected on exactly the same grounds, and this used to claim otherwise.
+ * Bare `List` is not a Kotlin type: `fun f(xs: List)` and `class C : List` are both
+ * `COMPILATION_ERROR` (measured), so the raw name this would have produced from `reference<List<*>>()`
+ * does not compile in either of the positions a [ClassName] is used in. The DSL will not produce it
+ * from a generic reference. Any type arguments at all — concrete or star — make this throw.
+ *
+ * Use [typeReference] for the whole type, or [className] when the raw class really is what is wanted:
+ * `className("kotlin.collections", "List")` names it explicitly, which puts the erasure in the source
+ * where a reader can see it rather than hiding it behind a generic.
  */
 public inline fun <reified T> reference(): ClassName {
-    val arguments = typeOf<T>().arguments
-    check(arguments.all { it.type == null }) {
+    check(typeOf<T>().arguments.isEmpty()) {
         "reference: ${typeOf<T>()} has type arguments, and reference<T>() names the erased class " +
-            "only — it would silently drop them. Use typeReference<T>() for the whole type, " +
-            "reference<${T::class.simpleName}<*>>() if the raw class is what you meant, or compose it " +
-            "with parameterizedBy."
+            "only — it would silently drop them, and a raw `${T::class.simpleName}` is not a Kotlin " +
+            "type. Use typeReference<T>() for the whole type, or className(packageName, simpleName) " +
+            "if the raw class is genuinely what you meant."
     }
     return T::class.asClassName()
 }
