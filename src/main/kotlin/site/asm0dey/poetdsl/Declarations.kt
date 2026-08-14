@@ -97,6 +97,12 @@ internal fun Scope.declareType(
             "A local $kindName is not valid Kotlin. Declare it at file or type level."
         }
     }
+    // The modifier family, first of all: *may this declaration form carry this modifier at all?* is
+    // container-independent, so it is answered before any question that reads the scope, and its
+    // sentence is the one the frontends print — `inner interface I` is *modifier 'inner' is not
+    // applicable to 'interface'* in every container, including a file, where the container rule
+    // below would have said "not applicable inside 'file'". See [Applicability] and D42.
+    checkModifiers("`$kindName`", declarationForm(kindName), "'$name'", modifiers.toList())
     // The two rules of the classifier-kind family that are about *this* declaration's placement
     // rather than about its body, asked before the name is registered so that a refused declaration
     // does not burn a name — the same ordering Task 12 gave a rejected binding. See [Kinds] for the
@@ -445,6 +451,12 @@ public fun typeSpec(
     kdoc: String? = null,
     body: TypeScope.() -> Unit,
 ): TypeSpec {
+    // The modifier family reaches the detached builder too, and that is the point of it being
+    // container-independent: `typeSpec(SUSPEND.toModifiers(), name = "M")` is `suspend class M`
+    // wherever it is spliced. The container-keyed rules stay off here — see
+    // [PropertyContainer.UNKNOWN] — so `typeSpec(INNER.toModifiers(), …)` still builds, because a
+    // class body is a legitimate destination for it.
+    checkModifiers("typeSpec", DeclarationForm.CLASS, "'$name'", modifiers.toList())
     checkTypeVariables(
         "typeSpec",
         name,
@@ -762,6 +774,35 @@ internal fun buildFun(
         FunKind.GETTER -> "get() of '$name'"
         FunKind.SETTER -> "set() of '$name'"
         FunKind.FUNCTION, FunKind.CONSTRUCTOR -> "fun($name)"
+    }
+    // Before anything else, and before anything that reads the scope: the modifier family. A
+    // function and a secondary constructor take different sets — a constructor takes a visibility
+    // and `actual` and nothing else at all — and the noun Kotlin prints for a function depends on
+    // where it is, so the scope supplies it where there is one. See [Applicability] and D42.
+    //
+    // The two accessors are passed `modifiers = null` at every call site (`addAccessors`), so
+    // nothing reaches this through them; they are grouped with the function anyway rather than
+    // given a form of their own, because the day an accessor gains a modifier slot is the day this
+    // has to answer for it.
+    if (kind != FunKind.GETTER && kind != FunKind.SETTER) {
+        val form = if (kind == FunKind.CONSTRUCTOR) DeclarationForm.CONSTRUCTOR else DeclarationForm.FUNCTION
+        checkModifiers(
+            construct = if (kind == FunKind.CONSTRUCTOR) "`constructor`" else "`fun`",
+            form = form,
+            subject = if (kind == FunKind.CONSTRUCTOR) "this secondary constructor" else "'$name'",
+            modifiers = modifiers.toList(),
+            noun = if (form == DeclarationForm.CONSTRUCTOR) {
+                form.noun
+            } else if (parent is TypeScope) {
+                "member function"
+            } else {
+                // A file, and the detached [funSpec], which has no scope to read: Kotlin prints
+                // *'member function'* where such a spec is spliced into a type, and the modifier is
+                // refused either way, so the top-level noun is quoted and the other is named in the
+                // remedy rather than guessed at.
+                "top level function"
+            },
+        )
     }
     // Before anything is built: a function's type parameters take no declaration-site variance, and
     // take `reified` only when the function is `inline`. Both render happily in KotlinPoet and

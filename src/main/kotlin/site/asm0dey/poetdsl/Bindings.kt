@@ -445,6 +445,16 @@ internal fun checkProperty(
     container: PropertyContainer,
 ) {
     val declared = modifiers.toList()
+    // The modifier family, before anything that reads the container: nineteen of the thirty-two
+    // `KModifier` values are not applicable to a property in any container, and every one of them
+    // reached **KotlinPoet's own `IllegalArgumentException`** — *unexpected modifier SUSPEND for
+    // PROPERTY* — which Global Constraint 26 forbids and which names neither the construct nor the
+    // property. 152 cells of D42's matrix, all from this one row. See [Applicability].
+    checkModifiers(construct, DeclarationForm.PROPERTY, "'$name'", declared)
+    // `const` is a `val`'s modifier and this is the only place that knows which one this is. Its
+    // *container* rule — top level, a named object or a companion object — is a different question
+    // and is asked separately.
+    if (KModifier.CONST in declared && mutable) constNeedsAVal(construct, name)
     // Before every other question, because there is no property here to ask them about: an
     // `annotation class` holds no member of any kind, so its `val`, its `var` and its `val … get()`
     // are one refusal and not three. All three **rendered** — *members are prohibited in annotation
