@@ -928,11 +928,20 @@ public fun funSpec(
  * the scopes [init] or [by] were built from, so adding it validates nothing. See ADR 0008's Task 21
  * amendment.
  *
- * E2a's slots track the attached `` `val` `` — same guards, same function — with one deliberate
- * omission: there is no `setter`, because this builder has no `mutable` slot and therefore only ever
- * builds a `val`, and `PropertySpec.build` is `require(mutable || setter == null)`. A setter here
- * could never be anything but an error. A `var` with a setter is `` `var`(…) `` in a file or type
- * body.
+ * E2a's slots track the attached `` `val` ``/`` `var` `` — same guards, the same [checkProperty] and
+ * the same [addAccessors] — and E2b closed the one gap they left: [mutable], with [setterParam] and
+ * [setter] beside it. Until then this builder had no `mutable` slot, so it only ever produced a
+ * `val`, and `PropertySpec.build` is `require(mutable || setter == null)` — which meant a setter slot
+ * here could only ever have been an error. That is an argument *from* the gap, not a reason for it:
+ * nothing about a detached property is read-only, and a `var` built here is the same declaration
+ * `` `var`(…) `` builds in a file or type body.
+ *
+ * The one thing this builder cannot check is the one thing it cannot see: whether the property will
+ * be spliced into an interface. So it does not run the missing-value check `` `val` ``/`` `var` ``
+ * run — see [checkProperty]'s `needsValue` — and `propertySpec(name = "x", type = INT)` still yields
+ * `public val x: Int`, which compiles only in an interface body. Pass `modifiers = ABSTRACT` for the
+ * declaration that says so in every container (measured: `public abstract val a: Int` compiles in an
+ * interface and in an abstract class alike).
  */
 public fun propertySpec(
     modifiers: Modifiers? = null,
@@ -942,6 +951,9 @@ public fun propertySpec(
     by: Expr? = null,
     typeVariables: List<TypeVariableName> = emptyList(),
     receiver: TypeName? = null,
+    mutable: Boolean = false,
+    setterParam: String = "value",
+    setter: (BlockScope.(Expr) -> Unit)? = null,
     kdoc: String? = null,
     getter: (BlockScope.() -> Unit)? = null,
 ): PropertySpec {
@@ -950,13 +962,14 @@ public fun propertySpec(
     }
     // "propertySpec", not `` `val` ``: Global Constraint 26 wants the construct the caller actually
     // wrote, and the caller wrote this one — the init/by check just above says so too.
-    checkProperty("propertySpec", name, mutable = false, init, by, typeVariables, receiver, setter = null, getter)
+    checkProperty("propertySpec", name, mutable, init, by, typeVariables, receiver, setter, getter)
     val spec = PropertySpec.builder(name, type, modifiers.toList())
+    spec.mutable(mutable)
     spec.addTypeVariables(typeVariables)
     kdoc?.let { spec.addKdoc(docBlock(it)) }
     receiver?.let { spec.receiver(it) }
     init?.let { spec.initializer("%L", it.code) }
     by?.let { spec.delegate("%L", it.code) }
-    spec.addAccessors(parent = null, name = name, type = type, setterParam = "value", setter = null, getter = getter)
+    spec.addAccessors(parent = null, name = name, type = type, setterParam = setterParam, setter = setter, getter = getter)
     return spec.build()
 }
