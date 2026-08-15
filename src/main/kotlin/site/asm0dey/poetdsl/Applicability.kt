@@ -13,9 +13,16 @@ import com.squareup.kotlinpoet.ParameterSpec
 // rendered `public abstract object O`, and `` `class`(FUN, "M") `` rendered `public fun class M`,
 // which is not a declaration at all (*function declaration must have a name*).
 //
-// The enumeration is the **matrix**: 32 `KModifier` values × 7 declaration forms × 4 positions
-// (file level, in a class, in a nested class, detached) = 768 cells, each rendered through the DSL
-// and each judged on `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10. Recorded in full as **D42**.
+// The enumeration is the **matrix**: 32 `KModifier` values × **24 (form, position) pairs** = 768
+// cells, each rendered through the DSL and each judged on `kotlinc`, `kotlinc-js` and `kotlinc-wasm`
+// 2.4.10. Recorded in full as **D42**. Seven forms and four positions (file level, in a class, in a
+// nested class, detached) do not multiply to 24: an interface and an object have no detached
+// builder, and a secondary constructor exists only inside a type. `32 × 7 × 4` is 896, which this
+// comment used to claim, and no run of the probe ever produced that many cells.
+//
+// Two container positions are **outside** the matrix and hold rules of their own — an interface body
+// and a companion object. See [internalAllowed], [finalAllowed] and [companionAllowed], and note
+// that the companion object cost [protectedAllowed] a false rejection for a round.
 //
 // **What is here and what is deliberately not.** A modifier can be wrong for three different
 // reasons, and only the first is this file's:
@@ -24,13 +31,18 @@ import com.squareup.kotlinpoet.ParameterSpec
 // |---|---|---|
 // | the **form** cannot carry it, ever | `suspend class M`, `vararg object O`, `data fun f()` | here |
 // | the **container** cannot carry it here | `protected` at file level, `const val` in a class, `expect` on a nested class | the container families — [PropertyContainer], [innerAllowed], [abstractMemberAllowed] |
-// | the **signature or the supertypes** decide | `override fun f()` in a class, `infix fun f()`, `operator fun f()` | nowhere: not decidable from what this DSL is given |
+// | the **declaration's own shape** decides | `override fun f()`, `infix fun f()`, `operator fun f()` | the fourth axis, below — for the two of the three that are decidable |
 //
-// The third row is why `OVERRIDE`, `INFIX` and `OPERATOR` are **absent from every denial below**
-// even though the matrix shows all three producing invalid renders. `override fun f()` is *'f'
-// overrides nothing* only because the probe's class had no supertype; `infix fun f(x: Int)` and
-// `operator fun plus(o: T)` are valid Kotlin, and a guard keyed on the modifier alone would refuse
-// them. A guard that also refuses something valid is worse than the invalid render it fixes.
+// The third row is why `OVERRIDE`, `INFIX` and `OPERATOR` are **absent from every denial in
+// [DeclarationForm]** even though the matrix shows all three producing invalid renders: `infix fun
+// f(x: Int)` and `operator fun plus(o: T)` are valid Kotlin, so a guard keyed on the **modifier
+// alone** would refuse them, and a guard that also refuses something valid is worse than the invalid
+// render it fixes.
+//
+// That is an argument against keying on the modifier alone, and E2d read it as an argument against
+// guarding at all. Keyed on **modifier + arity** and **modifier + name** the first two *are*
+// decidable, and they are guarded below; `override` is the supertypes' answer and is the one that
+// really is not.
 //
 // `EXTERNAL` is absent from the classifier denials for D37's reason, re-measured here: `external
 // class C`, `external interface I` and `external object O` are all clean on Kotlin/JS and
@@ -414,7 +426,8 @@ internal fun Scope.protectedNeedsAClass(construct: String, subject: String, noun
  * its container's — *modifier 'protected' is not applicable to 'local class'*, measured, all three
  * frontends — so [declareType] and [buildFun] both pass that noun in, and a local `object` is
  * refused before this by [declareType]'s `localAllowed` check. The branch answers with the form
- * anyway, for the day one of those changes: *'block'* is a noun no frontend has ever printed.
+ * anyway, for the day one of those changes: *'block'*, which it used to answer, is a noun no
+ * frontend has ever printed.
  */
 private fun Scope.containerNoun(): String = when (this) {
     is FileScope -> "file"
@@ -736,7 +749,15 @@ internal fun infixOrOperatorNeedsAMemberOrExtension(
         "drop $modifier.",
 )
 
-/** See [MEMBER_INHERITANCE_MODIFIERS]. */
+/**
+ * See [MEMBER_INHERITANCE_MODIFIERS].
+ *
+ * A **block** reaches this too, and it is not a file: kotlinc says *modifier 'final' is not
+ * applicable to **'local function'*** there, measured on all three frontends, and the message said
+ * *"declared at file level … 'top level function'"* — a noun no frontend prints for that shape. No
+ * position of D42's matrix is a block, which is why nothing caught it; `buildFun`'s `protected`
+ * branch had the same `when` ten lines earlier and had it right.
+ */
 internal fun memberModifierNeedsAType(
     construct: String,
     subject: String,
@@ -744,9 +765,13 @@ internal fun memberModifierNeedsAType(
     noun: String,
 ): Nothing = kindRefusal(
     construct,
-    "$subject is $modifier and is declared at file level, where there is no hierarchy for it to " +
-        "be part of",
+    "$subject is $modifier and is declared " +
+        // The noun the caller read off its own container decides this too, so the two cannot
+        // disagree. A property never reaches here from a block — a local binding takes no modifier
+        // at all — so the only `local` noun that arrives is a function's.
+        (if (noun.startsWith("local")) "in a block" else "at file level") +
+        ", where there is no hierarchy for it to be part of",
     "modifier '${modifier.name.lowercase()}' is not applicable to '$noun'",
-    "Drop $modifier — a top-level declaration is final and overrides nothing — or move the " +
+    "Drop $modifier — a declaration outside a type is final and overrides nothing — or move the " +
         "declaration into a class.",
 )

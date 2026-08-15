@@ -561,10 +561,26 @@ internal fun checkProperty(
             "\" on the JVM, on Kotlin/JS and on Kotlin/Wasm alike. Drop LATEINIT, or drop the " +
             (if (init != null) "initializer" else "delegate") + "."
     }
-    // Before every other question, because there is no property here to ask them about: an
-    // `annotation class` holds no member of any kind, so its `val`, its `var` and its `val … get()`
-    // are one refusal and not three. All three **rendered** — *members are prohibited in annotation
-    // classes* on all three frontends. See [Kinds].
+    // An `annotation class` holds no member of any kind, so its `val`, its `var` and its
+    // `val … get()` are one refusal and not three. All three **rendered** — *members are prohibited
+    // in annotation classes* on all three frontends. See [Kinds].
+    //
+    // This used to say *"Before every other question, because there is no property here to ask them
+    // about"*, and it was the first check in this function when it did. It is not any more — the
+    // modifier family and its container half were added above it — and the ordering is right either
+    // way, because the frontends report **both** sentences. Measured, kotlinc 2.4.10:
+    //
+    //     annotation class A { internal val p: Int = 1 }  modifier 'internal' is not applicable
+    //                                                     inside 'annotation class'.
+    //                                                     members are prohibited in annotation
+    //                                                     classes.
+    //     annotation class A { suspend val p: Int = 1 }   modifier 'suspend' is not applicable to
+    //                                                     'member property with backing field'.
+    //                                                     members are prohibited in annotation
+    //                                                     classes.
+    //
+    // So whichever of the two fires first quotes a sentence the caller's own compiler would print.
+    // The behaviour is unchanged; only the claim of primacy was false.
     if (!container.membersAllowed) annotationHoldsNoMembers(construct, "'$name'")
     check(mutable || KModifier.LATEINIT !in declared) {
         "$construct: '$name' is a `val` and cannot be LATEINIT; Kotlin allows the modifier only on " +

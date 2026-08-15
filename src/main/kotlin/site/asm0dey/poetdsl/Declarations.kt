@@ -108,7 +108,15 @@ internal fun Scope.declareType(
     // [MEMBER_INHERITANCE_MODIFIERS] is a member's question and is asked in [buildFun] and
     // [checkProperty], not here.
     if (KModifier.PROTECTED in modifiers.toList() && !protectedAllowed) {
-        protectedNeedsAClass("`$kindName`", "'$name'", noun = null)
+        // A **block** names the declaration's own form rather than its container: kotlinc says
+        // *modifier 'protected' is not applicable to 'local class'*, never *inside 'block'*, which
+        // is a noun no frontend prints. Only a class reaches here from a block — a local interface
+        // and a local object are refused before this — so the form is known. Measured, all three.
+        protectedNeedsAClass(
+            "`$kindName`",
+            "'$name'",
+            noun = if (this is BlockScope) "local $kindName" else null,
+        )
     }
     // …and the interface body's own two, which reach a nested classifier exactly as they reach a
     // function and a property: an interface member is public or private, and it is open. See
@@ -873,7 +881,15 @@ internal fun buildFun(
         }
         if (parent !is TypeScope) {
             declaredModifiers.firstOrNull { it in MEMBER_INHERITANCE_MODIFIERS }?.let {
-                memberModifierNeedsAType("`fun`", "'$name'", it, "top level function")
+                // The same `when` the `protected` branch above makes, and for the same measured
+                // reason: kotlinc says *not applicable to 'local function'* in a block and *'top
+                // level function'* at file level. This said *'top level function'* in both.
+                memberModifierNeedsAType(
+                    "`fun`",
+                    "'$name'",
+                    it,
+                    if (parent is BlockScope) "local function" else "top level function",
+                )
             }
             // …and the container half of the fourth axis: `infix` and `operator` are both rules
             // about how a **call** is written, so both need a member or an extension. The receiver

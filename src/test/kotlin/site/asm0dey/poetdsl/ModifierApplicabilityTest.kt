@@ -814,6 +814,43 @@ class ModifierApplicabilityTest {
         assertTrue("modifier 'companion' is not applicable to 'class'" in detached, detached)
     }
 
+    /**
+     * **The noun a block prints**, which two of this family's refusals got wrong because no position
+     * of the matrix is a block. Measured, all three frontends identical:
+     *
+     *     fun outer() { final fun h() { } }      modifier 'final' is not applicable to 'local
+     *     fun outer() { open fun h() { } }       function'.
+     *     fun outer() { override fun h() { } }
+     *     fun outer() { protected class M }      modifier 'protected' is not applicable to 'local
+     *     fun outer() { private class M }        class'.
+     *
+     * Neither shape renders — this DSL renders no local function and no local class at all — but the
+     * sentence a caller gets is this family's, because the modifier is checked before the render is
+     * attempted. *'top level function'* and *'block'* are the two nouns it used to print, and no
+     * frontend prints either one here.
+     */
+    @Test
+    fun `a block names the local form, not the file and not itself`() {
+        listOf(FINAL, OPEN, OVERRIDE).forEach { modifier ->
+            val m = message { `fun`("outer") { `fun`(modifier, "h") { } } }
+            assertTrue(
+                "modifier '${modifier.name.lowercase()}' is not applicable to 'local function'" in m,
+                "$modifier: $m",
+            )
+            assertTrue("file level" !in m, "$modifier still says file level: $m")
+        }
+        val protectedClass = message { `fun`("outer") { `class`(PROTECTED, "M") { } } }
+        assertTrue(
+            "modifier 'protected' is not applicable to 'local class'" in protectedClass,
+            protectedClass,
+        )
+        // …and the same two refusals at file level, which is where the nouns came from.
+        val topLevel = message { `fun`(FINAL, "f") { } }
+        assertTrue("modifier 'final' is not applicable to 'top level function'" in topLevel, topLevel)
+        val topLevelClass = message { `class`(PROTECTED, "M") { } }
+        assertTrue("modifier 'protected' is not applicable inside 'file'" in topLevelClass, topLevelClass)
+    }
+
     /** A `const val` belongs to the file or to an object, never to an instance. */
     @Test
     fun `const needs a file or an object around it`() {
