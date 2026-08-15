@@ -1,6 +1,7 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.KModifier
+import com.squareup.kotlinpoet.ParameterSpec
 
 // The **modifier** family, as one unit — the third of the three axes that govern what this DSL may
 // render, beside [Expect]'s (*what does a container forbid its members?*) and [Kinds]'s (*what does
@@ -397,6 +398,142 @@ private fun Scope.protectedContainerNoun(): String = when (this) {
  */
 internal val MEMBER_INHERITANCE_MODIFIERS: List<KModifier> =
     listOf(KModifier.FINAL, KModifier.OPEN, KModifier.OVERRIDE)
+
+// --------------------------------------------------------------------------------------------
+// The **fourth axis**, and the two thirds of its `override`/`infix`/`operator` corner that turn out
+// to be decidable after all.
+//
+// D42 filed all three of them under *"the signature or the supertypes decide, therefore not
+// decidable from what this DSL is given"*, and that is true of exactly one:
+//
+// | modifier | what decides it | cells in D42 | here? |
+// |---|---|---|---|
+// | `override` | the **supertypes** — *'f' overrides nothing* | 9 | no: this DSL is handed a supertype's `ClassName` and never its members |
+// | `infix` | the **parameter list**, which [buildFun] holds | 4 | yes |
+// | `operator` | the **name**, which is a language constant | 4 | yes |
+//
+// The header at the top of this file argues only that a guard keyed on *the modifier alone* would
+// refuse `infix fun f(x: Int)` and `operator fun plus(o: T)`, which are valid Kotlin. True, and not
+// an argument against a guard keyed on **modifier + arity** or **modifier + name**.
+//
+// The `operator` check is a **necessary** condition and deliberately nothing more: a name outside
+// Kotlin's set can never carry the modifier, in any container, at any arity, with or without a
+// receiver — so it cannot over-refuse. The per-operator conventions (`get` needs a parameter,
+// `compareTo` must return `Int`, `inc` must return a supertype of its receiver) are the frontend's,
+// and each would need its own measurement before it could be written here.
+
+/**
+ * Kotlin's operator names. Measured one file per row on `kotlinc`, `kotlinc-js` and `kotlinc-wasm`
+ * 2.4.10 as `class C { operator fun <name>(x: Int) { } }`, and split on whether the diagnostic is
+ * *'operator' modifier is not applicable to function: **illegal function name*** — every name below
+ * draws one of the *other* sentences (*must return 'Int'*, *must have no value parameters*, …), which
+ * is the frontend judging a shape rather than a name.
+ *
+ * `mod` and `modAssign` are **not** here: they were operator names once and on 2.4.10 they are
+ * *illegal function name* like any other, on all three frontends.
+ */
+private val OPERATOR_NAMES: Set<String> = setOf(
+    "plus", "minus", "times", "div", "rem",
+    "plusAssign", "minusAssign", "timesAssign", "divAssign", "remAssign",
+    "inc", "dec", "unaryPlus", "unaryMinus", "not",
+    "equals", "compareTo", "contains", "invoke", "iterator", "next", "hasNext",
+    "get", "set", "rangeTo", "rangeUntil",
+    "getValue", "setValue", "provideDelegate",
+)
+
+/** `component1`, `component2`, … — measured accepted as a *name* for every digit string, `component0` included. */
+private val COMPONENT_NAME = Regex("component\\d+")
+
+/** See [OPERATOR_NAMES]. */
+internal fun isOperatorName(name: String): Boolean =
+    name in OPERATOR_NAMES || COMPONENT_NAME.matches(name)
+
+/** See [OPERATOR_NAMES]. */
+internal fun operatorNeedsAnOperatorName(construct: String, name: String): Nothing = kindRefusal(
+    construct,
+    "'$name' is OPERATOR, and Kotlin's operator names are a closed set that '$name' is not in — the " +
+        "modifier says which operator a function implements, so the name is the whole of it",
+    "'operator' modifier is not applicable to function: illegal function name",
+    "Name '$name' after the operator it implements — plus, minus, times, div, rem and their " +
+        "…Assign forms, inc, dec, unaryPlus, unaryMinus, not, equals, compareTo, contains, invoke, " +
+        "iterator, next, hasNext, get, set, rangeTo, rangeUntil, getValue, setValue, " +
+        "provideDelegate, componentN — or drop OPERATOR, which leaves an ordinary function.",
+)
+
+/**
+ * `infix` needs **exactly one value parameter**, and it may not be `vararg`. Measured, all three
+ * frontends identical, one file per row:
+ *
+ *     class C { infix fun f() { } }                 'infix' modifier is inapplicable to this
+ *     class C { infix fun f(x: Int, y: Int) { } }   function.
+ *     class C { infix fun f(vararg x: Int) { } }
+ *
+ * and the controls, clean on all three:
+ *
+ *     class C { infix fun f(x: Int) { } }
+ *     class C { infix fun f(x: Int = 1) { } }       ← **a default value is not part of the rule**
+ *     class C { infix fun <T> f(x: T) { } }
+ *     class C { infix suspend fun f(x: Int) { } }
+ *
+ * The default-value row is the one worth stating: the language documentation says an infix
+ * function's parameter "must not have a default value", and on 2.4.10 that shape compiles clean on
+ * the JVM, on Kotlin/JS and on Kotlin/Wasm, with no warning. A guard written from the documentation
+ * rather than from the compiler would refuse it.
+ */
+internal fun infixNeedsOneParameter(construct: String, name: String, params: List<ParameterSpec>): Nothing {
+    val vararged = params.singleOrNull()?.modifiers?.contains(KModifier.VARARG) == true
+    kindRefusal(
+        construct,
+        if (vararged) {
+            "'$name' is INFIX and its one parameter is VARARG, and an infix call passes exactly one " +
+                "argument on the right-hand side"
+        } else {
+            "'$name' is INFIX and declares " +
+                (if (params.isEmpty()) "no value parameter" else "${params.size} value parameters") +
+                ", where an infix call has exactly one right-hand side"
+        },
+        "'infix' modifier is inapplicable to this function",
+        "Give '$name' exactly one value parameter that is not VARARG, or drop INFIX.",
+    )
+}
+
+/**
+ * `infix` and `operator` both need a **member or an extension**: a top-level function with no
+ * receiver is neither, and neither is a local one. Measured, all three frontends identical:
+ *
+ *     infix fun f(x: Int) { }                        'infix' modifier is inapplicable to this
+ *     fun outer() { infix fun h(x: Int) { } }        function.
+ *     operator fun plus(x: Int) { }                  'operator' modifier is not applicable to
+ *     fun outer() { operator fun plus(x: Int) { } }  function: must be a member or an extension
+ *                                                    function.
+ *
+ * and the controls, clean on all three: `infix fun Int.f(x: Int) { }`,
+ * `operator fun Int.times(o: String): Int = 1`, and the same functions declared in a class, an
+ * interface, an object or a companion object.
+ *
+ * Two sentences for one rule, because the two modifiers draw different ones. The **block** row has
+ * no control that compiles: this DSL renders no local function at all (see `localFunIsUnrenderable`),
+ * so `fun outer() { infix fun Int.h(x: Int) { } }` — clean on all three frontends — is refused there
+ * by the render gap and not by this. Which is why the remedy names moving the function rather than
+ * adding a receiver where it would not help.
+ */
+internal fun infixOrOperatorNeedsAMemberOrExtension(
+    construct: String,
+    name: String,
+    modifier: KModifier,
+    container: String,
+): Nothing = kindRefusal(
+    construct,
+    "'$name' is $modifier and is declared $container with no extension receiver, so it is neither a " +
+        "member nor an extension, and $modifier is a rule about how a call is written against one",
+    if (modifier == KModifier.INFIX) {
+        "'infix' modifier is inapplicable to this function"
+    } else {
+        "'operator' modifier is not applicable to function: must be a member or an extension function"
+    },
+    "Declare '$name' in a class, an interface or an object, or give it an extension receiver — or " +
+        "drop $modifier.",
+)
 
 /** See [MEMBER_INHERITANCE_MODIFIERS]. */
 internal fun memberModifierNeedsAType(

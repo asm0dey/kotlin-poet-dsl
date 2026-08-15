@@ -811,6 +811,21 @@ internal fun buildFun(
             },
         )
     }
+    // The fourth axis — what the declaration's **own shape** decides — for the two of its three
+    // function modifiers that are decidable from what this function is handed. `infix` is the
+    // parameter list's answer and `operator` is the name's; `override` is the supertypes' and is
+    // deliberately absent. Both of these are **container-independent**, so they run at the detached
+    // [funSpec] too: a spec's name and parameter list travel with it wherever it is spliced.
+    // See [Applicability] and D42.
+    if (kind == FunKind.FUNCTION) {
+        val declaredModifiers = modifiers.toList()
+        if (KModifier.OPERATOR in declaredModifiers && !isOperatorName(name)) {
+            operatorNeedsAnOperatorName("`fun`", name)
+        }
+        if (KModifier.INFIX in declaredModifiers && params.singleOrNull()?.let { KModifier.VARARG !in it.modifiers } != true) {
+            infixNeedsOneParameter("`fun`", name, params)
+        }
+    }
     // …and the container half, for a function only: a **secondary constructor** is inside a class by
     // construction, and its own modifier set is already down to a visibility and `actual`. `parent
     // == null` is the detached [funSpec], where every container-keyed rule is off for
@@ -831,6 +846,20 @@ internal fun buildFun(
         if (parent !is TypeScope) {
             declaredModifiers.firstOrNull { it in MEMBER_INHERITANCE_MODIFIERS }?.let {
                 memberModifierNeedsAType("`fun`", "'$name'", it, "top level function")
+            }
+            // …and the container half of the fourth axis: `infix` and `operator` are both rules
+            // about how a **call** is written, so both need a member or an extension. The receiver
+            // is the other half of the answer and is right here. Off at the detached [funSpec] —
+            // this whole branch is — because a spec is neither until it is spliced.
+            if (receiver == null) {
+                declaredModifiers.firstOrNull { it == KModifier.INFIX || it == KModifier.OPERATOR }?.let {
+                    infixOrOperatorNeedsAMemberOrExtension(
+                        "`fun`",
+                        name,
+                        it,
+                        container = if (parent is BlockScope) "in a block" else "at file level",
+                    )
+                }
             }
         }
     }
