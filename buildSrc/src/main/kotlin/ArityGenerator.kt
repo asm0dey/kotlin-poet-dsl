@@ -85,6 +85,12 @@ private fun docFor(nm: Spelling, body: String): String =
  * The half of every ADR 0002 shadow message that is about *resolution* rather than about the
  * construct, spelled once because it is the same fact at all 126 of them.
  *
+ * **126, not 124.** The E3 fix round wrote this constant and reached 124 shadows with it: the named
+ * `companionObject` and `enumEntry` overloads below spell their own sentence rather than composing
+ * this one, so both kept the wording the same round had just declared false, and an out-of-project
+ * consumer compile printed the stale `enumEntry` text verbatim as its deprecation error. The count
+ * is grepped from the generated `Shadows.kt` now rather than counted off the edits.
+ *
  * E3's wording — "Written in a block it would silently attach to the enclosing type" — is true of a
  * **direct** block call and false of the case E3 itself created. A shadow is a `BlockScope`
  * extension, and an extension receiver beats a context parameter in Kotlin's resolution, so a call
@@ -756,8 +762,7 @@ private val TYPE_BODY: List<Overload> = listOf(
         params = listOf("name: String") + KDOC_PARAM + listOf("body: TypeScope.() -> Unit"),
         returns = null,
         body = "t.addCompanionObject(name, kdoc, body)",
-        shadow = "companionObject is only valid inside a class or interface body. Written in a " +
-            "block it would silently attach a companion object to the enclosing type.",
+        shadow = "companionObject is only valid inside a class or interface body. " + SHADOW_CAPTURE,
     ),
     Overload(
         doc = """
@@ -786,8 +791,7 @@ private val TYPE_BODY: List<Overload> = listOf(
             listOf("body: (TypeScope.() -> Unit)? = null"),
         returns = null,
         body = "t.addEnumEntry(name, args, kdoc, body)",
-        shadow = "enumEntry is only valid inside an enum class body. Written in a block it would " +
-            "silently attach an entry to the enclosing enum.",
+        shadow = "enumEntry is only valid inside an enum class body. " + SHADOW_CAPTURE,
     ),
 )
 

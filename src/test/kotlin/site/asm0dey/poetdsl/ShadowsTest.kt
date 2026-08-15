@@ -16,6 +16,67 @@ import kotlin.test.assertTrue
  */
 @OptIn(ExperimentalCompilerApi::class)
 class ShadowsTest {
+    /**
+     * The **whole** shadow set, read off the compiled declarations rather than off the generator's
+     * source — which is the difference that matters, because the E3 fix round corrected the capture
+     * sentence in one shared constant, said so, and left the two overloads that spell their own
+     * message untouched. It reached 124 of 126, and nothing failed.
+     *
+     * `kotlin.Deprecated` keeps RUNTIME retention, so the messages a consumer will see are readable
+     * from `ShadowsKt`'s methods. This asserts the count of shadows, the count carrying the capture
+     * clause, and that the sentence the fix round declared false — "Written in a block it would
+     * silently attach *x* to the enclosing type", for a call that in fact lands in a genuine
+     * `TypeScope` — appears in none of them. The corrected wording opens "Written **directly** in a
+     * block", so the stale form is a substring test that cannot pass by accident.
+     */
+    @Test
+    fun `every shadow message is the corrected one, all 126 of them`() {
+        val messages = Class.forName("site.asm0dey.poetdsl.ShadowsKt")
+            .declaredMethods
+            .mapNotNull { it.getAnnotation(Deprecated::class.java)?.message }
+        assertEquals(142, messages.size, "the shadow count moved; the surface Task 22 locks is 142")
+        assertEquals(
+            126,
+            messages.count { "an extension receiver beats a context parameter (ADR 0002)" in it },
+            messages.toSet().joinToString("\n"),
+        )
+        val stale = messages.filter { "Written in a block it would silently attach" in it }
+        assertTrue(stale.isEmpty(), "these still claim the call would have attached:\n$stale")
+    }
+
+    /**
+     * The two the sweep above missed, through the route a consumer actually takes: a call in a block
+     * body, compiled, with the deprecation message read out of the compiler's own output. An
+     * out-of-project consumer compile printed the stale `enumEntry` text verbatim, which is what says
+     * a generator-source assertion would not have been enough.
+     */
+    @Test
+    fun `enumEntry and the named companionObject carry the corrected message too`() {
+        for ((call, expected) in listOf(
+            """enumEntry("A")""" to "enumEntry is only valid inside an enum class body",
+            """companionObject("Factory") { }""" to "companionObject is only valid inside a class or interface body",
+        )) {
+            val result = compileDsl(
+                """
+                fun build() = file("com.example", "A") {
+                    `class`("C") {
+                        `fun`("f") {
+                            $call
+                        }
+                    }
+                }
+                """.trimIndent(),
+            )
+            assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
+            assertTrue(expected in result.messages, result.messages)
+            assertTrue("lexically in a block" in result.messages, result.messages)
+            assertTrue(
+                "Written in a block it would silently attach" !in result.messages,
+                result.messages,
+            )
+        }
+    }
+
     @Test
     fun `a named object in a function body is a compile error naming the shadow`() {
         val result = compileDsl(
