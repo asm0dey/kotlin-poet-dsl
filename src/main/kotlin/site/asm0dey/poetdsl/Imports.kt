@@ -14,11 +14,28 @@ import com.squareup.kotlinpoet.MemberName
 //   - an explicit import of something the file never names through a placeholder — an extension
 //     function brought into scope so that `expression("xs.sorted()")` resolves, say.
 //
-// **Star imports are blocked and are not offered**, which the E3 feasibility note established and
-// this round confirms at the API boundary: every `addImport` overload carries
-// `require("*" !in names)`, `Import`'s constructor is `internal`, and the one route left renders
-// `` import com.foo.`*` ``, which is *unresolved reference '*'* on all three frontends and becomes an
-// error in Kotlin 2.5. Same class as D20. `ImportsTest` carries the canary.
+// **Star imports are blocked and are not offered.** E3 justified the block by claiming KotlinPoet
+// enforces it too — "every `addImport` overload carries `require(\"*\" !in names)`" — and that is
+// **false**, which the fix round found by disassembling the jar rather than by reading two of the
+// six overloads. `javap -c` on `FileSpec$Builder`, KotlinPoet 2.3.0:
+//
+//   | overload                             | carries `Wildcard imports are not allowed` |
+//   |--------------------------------------|--------------------------------------------|
+//   | `addImport(String, Iterable<String>)`   | yes                                      |
+//   | `addImport(ClassName, Iterable<String>)`| yes                                      |
+//   | `addImport(MemberName)`                 | **no**                                   |
+//   | `addAliasedImport(ClassName, String)`   | **no**                                   |
+//   | `addAliasedImport(MemberName, String)`  | **no**                                   |
+//   | `addImport(Import)`                     | no — its constructor is `internal`       |
+//
+// So the three routes E3 left unchecked were exactly the three with nothing behind them, and
+// `` `import`(member("kotlin.math", "*")) `` rendered `` import kotlin.math.`*` `` — *unresolved
+// reference '*'* on all three frontends 2.4.10, and an error rather than a warning in Kotlin 2.5.
+// Same class as D20. The block is now this DSL's own, asked of **every segment that is emitted**
+// rather than of the `names` vararg alone, since a `MemberName`'s simple name, a `ClassName`'s
+// simple names and a package name all reach the output. `ImportsTest` carries the canary, and the
+// canary is written against the *rendered output* of the three unchecked overloads, because there
+// is no exception to catch — that is the finding.
 //
 // **No shadow, and it is the first construct in this DSL where `context(f: FileScope)` reaching into
 // a nested type or a block body is the *right* answer.** The 141 shadows exist because a
@@ -29,17 +46,34 @@ import com.squareup.kotlinpoet.MemberName
 // `funSpec` and `propertySpec` builders have no [FileScope] at all, so a call there is *no context
 // argument for 'f: FileScope' found* at the caller's own compile.
 
-/** Rejects a wildcard before KotlinPoet's own `require` does (Global Constraint 26). */
-private fun checkNotStar(construct: String, names: List<String>) {
-    check(names.none { "*" in it }) {
-        "$construct: a star import is not available. KotlinPoet 2.3.0 refuses one from every " +
-            "`addImport` overload (`require(\"*\" !in names)`) and keeps `Import`'s constructor " +
-            "internal, so the only route left renders `` import x.`*` ``, which is \"unresolved " +
-            "reference '*'\" on the JVM, on Kotlin/JS and on Kotlin/Wasm alike. Name the members " +
-            "you need, or let `%T`/`%M` import them — `reference<T>()`, `className(…)` and " +
-            "`member(…)` all resolve their own imports."
+/**
+ * Rejects a wildcard in **anything that will be emitted** — Global Constraint 26 where KotlinPoet
+ * has a `require` of its own to get in front of, and the only check at all on the three overloads
+ * where it has none. See this file's header for which are which.
+ *
+ * [segments] is every string that reaches the rendered import line: the package name, a
+ * `ClassName`'s or `MemberName`'s own names, and the `names` vararg. Checking the vararg alone was
+ * E3's shape and it left `` `import`(member("kotlin.math", "*")) `` rendering.
+ */
+private fun checkNotStar(construct: String, segments: List<String>) {
+    check(segments.none { "*" in it }) {
+        "$construct: a star import is not available. It renders `` import x.`*` ``, which is " +
+            "\"unresolved reference '*'\" on the JVM, on Kotlin/JS and on Kotlin/Wasm alike. " +
+            "KotlinPoet 2.3.0 refuses one from `addImport(packageName, names)` and " +
+            "`addImport(className, names)` (`require(\"*\" !in names)`) and keeps `Import`'s " +
+            "constructor internal — but `addImport(memberName)` and both `addAliasedImport` " +
+            "overloads carry no such check, so this one is ours. Name the members you need, or let " +
+            "`%T`/`%M` import them — `reference<T>()`, `className(…)` and `member(…)` all resolve " +
+            "their own imports."
     }
 }
+
+/** Every segment of a [MemberName] that reaches the rendered import line. See [checkNotStar]. */
+private fun MemberName.importSegments(): List<String> =
+    listOf(packageName, simpleName) + (enclosingClassName?.simpleNames ?: emptyList())
+
+/** Every segment of a [ClassName] that reaches the rendered import line. See [checkNotStar]. */
+private fun ClassName.importSegments(): List<String> = listOf(packageName) + simpleNames
 
 /**
  * `import kotlin.math.PI` — one or more members of a package, by name.
@@ -50,7 +84,7 @@ private fun checkNotStar(construct: String, names: List<String>) {
  */
 context(f: FileScope)
 public fun `import`(packageName: String, vararg names: String) {
-    checkNotStar("`import`", names.toList())
+    checkNotStar("`import`", listOf(packageName) + names)
     f.builder.addImport(packageName, *names)
 }
 
@@ -62,13 +96,14 @@ public fun `import`(packageName: String, vararg names: String) {
  */
 context(f: FileScope)
 public fun `import`(type: ClassName, vararg names: String) {
-    checkNotStar("`import`", names.toList())
+    checkNotStar("`import`", type.importSegments() + names)
     f.builder.addImport(type, *names)
 }
 
 /** `import kotlin.math.min` — a top-level function or property, as [member] names it. */
 context(f: FileScope)
 public fun `import`(member: MemberName) {
+    checkNotStar("`import`", member.importSegments())
     f.builder.addImport(member)
 }
 
@@ -86,6 +121,7 @@ public fun `import`(member: MemberName) {
  */
 context(f: FileScope)
 public fun aliasedImport(type: ClassName, alias: String) {
+    checkNotStar("aliasedImport", type.importSegments())
     f.checkAlias(alias)
     f.builder.addAliasedImport(type, alias)
 }
@@ -93,6 +129,7 @@ public fun aliasedImport(type: ClassName, alias: String) {
 /** `import kotlin.math.abs as absolute` — the [MemberName] twin of the [aliasedImport] above. */
 context(f: FileScope)
 public fun aliasedImport(member: MemberName, alias: String) {
+    checkNotStar("aliasedImport", member.importSegments())
     f.checkAlias(alias)
     f.builder.addAliasedImport(member, alias)
 }

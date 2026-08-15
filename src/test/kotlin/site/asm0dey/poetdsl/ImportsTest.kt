@@ -194,6 +194,83 @@ class ImportsTest {
     }
 
     /**
+     * …and the routes E3 left open, which are exactly the ones its own report identified as the
+     * hazard.
+     *
+     * The report says the block "is confirmed at the API boundary rather than accepted on trust:
+     * every `addImport` overload carries `require(\"*\" !in names)`". Read off the KotlinPoet 2.3.0
+     * class file with `javap -c`, **three of the six do not**:
+     *
+     * | `FileSpec.Builder` overload | `Wildcard imports are not allowed` in its bytecode |
+     * |---|---|
+     * | `addImport(String, Iterable<String>)` | yes |
+     * | `addImport(ClassName, Iterable<String>)` | yes |
+     * | `addImport(MemberName)` | **no** |
+     * | `addAliasedImport(ClassName, String)` | **no** |
+     * | `addAliasedImport(MemberName, String)` | **no** |
+     * | `addImport(Import)` | no — and its constructor is `internal`, which is the one that holds |
+     *
+     * So the single route the report named as rendering the invalid import was the route left open.
+     * Measured, all three frontends 2.4.10, with the control beside each:
+     *
+     *     import kotlin.math.`*`          unresolved reference '*'.
+     *     import kotlin.math.`*` as m     unresolved reference '*'.
+     *     import kotlin.math.PI           clean
+     */
+    @Test
+    fun `a star import is refused through the member and aliased routes too`() {
+        val star = member("kotlin.math", "*")
+        val starType = ClassName("kotlin.math", "*")
+        for (build in listOf<FileScope.() -> Unit>(
+            { `import`(star) },
+            { aliasedImport(star, "m") },
+            { aliasedImport(starType, "m") },
+            { `import`(starType, "PI") },
+            { `import`("kotlin.math.*", "PI") },
+        )) {
+            val e = assertFailsWith<IllegalStateException> { render(build) }
+            assertTrue("star import is not available" in e.message!!, e.message!!)
+        }
+        // The language rows the refusals stand on, compiled by hand — the DSL has no route to them
+        // now, so the expectation cannot come from the DSL's own message.
+        assertTrue(
+            "nresolved reference '*'" in compile("import kotlin.math.`*`\nval v: Int = 1\n").messages,
+        )
+        assertTrue(
+            "nresolved reference '*'" in
+                compile("import kotlin.math.`*` as m\nval v: Int = 1\n").messages,
+        )
+        // The controls: the same member, the same type and the same package, named rather than starred.
+        assertCompiles(render { `import`(member("kotlin.math", "min")); `val`("v", INT, init = 1.lit) })
+        assertCompiles(
+            render { aliasedImport(member("kotlin.math", "abs"), "ab"); `val`("v", INT, init = 1.lit) },
+        )
+        assertCompiles(
+            render { aliasedImport(ClassName("kotlin.collections", "List"), "L"); `val`("v", INT, init = 1.lit) },
+        )
+        assertCompiles(render { `import`("kotlin.math", "PI"); `val`("v", INT, init = 1.lit) })
+    }
+
+    /**
+     * The canary for the three overloads that have no `require`: it fails the day KotlinPoet adds
+     * one, which is the day this DSL's own check stops being the only thing standing there.
+     *
+     * Written against the **rendered output**, not against an exception, because there is nothing to
+     * catch — that is the whole finding.
+     */
+    @Test
+    fun `KotlinPoet still renders a star through the three unchecked overloads`() {
+        val star = com.squareup.kotlinpoet.MemberName("kotlin.math", "*")
+        val rendered = FileSpec.builder("com.example", "A").addImport(star).build().toString()
+        assertTrue("import kotlin.math.`*`" in rendered, rendered)
+        val aliased = FileSpec.builder("com.example", "A").addAliasedImport(star, "m").build().toString()
+        assertTrue("import kotlin.math.`*` as m" in aliased, aliased)
+        val aliasedType = FileSpec.builder("com.example", "A")
+            .addAliasedImport(ClassName("kotlin.math", "*"), "m").build().toString()
+        assertTrue("`*`" in aliasedType, aliasedType)
+    }
+
+    /**
      * `context(f: FileScope)` reaching into a nested type and a block body is the **right** answer
      * here, unlike every construct that has a shadow: an import has one container and a call from
      * anywhere in the file means the same thing. Pinned, because it is a deliberate departure from
