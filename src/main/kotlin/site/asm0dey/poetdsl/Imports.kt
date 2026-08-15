@@ -78,13 +78,26 @@ private fun ClassName.importSegments(): List<String> = listOf(packageName) + sim
 /**
  * `import kotlin.math.PI` — one or more members of a package, by name.
  *
- * [names] may be empty, which imports nothing and is the shape `` `import`(className) `` uses; pass
- * at least one to be useful. Every name is a *simple* name in [packageName], so a nested type is
- * reached through the [ClassName] overload rather than by writing `Outer.Inner` here.
+ * **[names] may not be empty.** Its KDoc said it may, "which imports nothing", and the code raised
+ * KotlinPoet's `IllegalArgumentException: names array is empty` — so the documented shape was one
+ * the construct never had. There is no output to give it either: `import kotlin.math` is *packages
+ * cannot be imported* on the JVM, on Kotlin/JS and on Kotlin/Wasm alike, so this is a refusal rather
+ * than a widening. To import a *type*, use the [ClassName] overload with no [names].
+ *
+ * Every name is a *simple* name in [packageName], so a nested type is reached through the
+ * [ClassName] overload rather than by writing `Outer.Inner` here.
  */
 context(f: FileScope)
 public fun `import`(packageName: String, vararg names: String) {
     checkNotStar("`import`", listOf(packageName) + names)
+    check(names.isNotEmpty()) {
+        "`import`: \"$packageName\" is imported with no names, and there is no such import in " +
+            "Kotlin — `import $packageName` is \"packages cannot be imported\" on the JVM, on " +
+            "Kotlin/JS and on Kotlin/Wasm alike, and KotlinPoet raises \"names array is empty\" " +
+            "before it gets that far. Name the members you want — `import`(\"$packageName\", " +
+            "\"first\", \"second\") — or, to import a type itself, pass its ClassName: " +
+            "`import`(className(\"$packageName\", \"Thing\"))."
+    }
     f.builder.addImport(packageName, *names)
 }
 
@@ -93,11 +106,22 @@ public fun `import`(packageName: String, vararg names: String) {
  *
  * With no [names] this imports [type] itself, which is what `%T` would have done anyway; with them it
  * imports the named members *of* [type] — a companion object's constants, an enum's entries.
+ *
+ * The zero-[names] half of that sentence was documented and did not work: it reached KotlinPoet's
+ * `addImport(className, *names)`, whose `require` is *names array is empty*. It works now, and it
+ * works by spelling the type as a member of its own package — `addImport(packageName,
+ * "Outer.Inner")` — because the one dotted string is what renders `import com.example.Outer.Inner`.
+ * Passing the simple names as separate arguments does not: KotlinPoet reads them as siblings and
+ * emits `import com.example.Inner` beside `import com.example.Outer`.
  */
 context(f: FileScope)
 public fun `import`(type: ClassName, vararg names: String) {
     checkNotStar("`import`", type.importSegments() + names)
-    f.builder.addImport(type, *names)
+    if (names.isEmpty()) {
+        f.builder.addImport(type.packageName, type.simpleNames.joinToString("."))
+    } else {
+        f.builder.addImport(type, *names)
+    }
 }
 
 /** `import kotlin.math.min` — a top-level function or property, as [member] names it. */

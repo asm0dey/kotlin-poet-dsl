@@ -252,6 +252,79 @@ class ImportsTest {
     }
 
     /**
+     * The two zero-name spellings, which E3 documented as supported and which both raised
+     * KotlinPoet's `IllegalArgumentException: names array is empty` — Global Constraint 26's
+     * forbidden type, naming neither construct nor cause. They resolve **differently**, and the
+     * language is what decides which way each goes:
+     *
+     *     import com.other.Thing            clean on all three frontends 2.4.10
+     *     import kotlin.Int.Companion       clean
+     *     import kotlin.math                packages cannot be imported.
+     *
+     * So the [ClassName] form does what its KDoc always claimed — imports the type itself — and the
+     * package form is refused by name, because there is no output for it that any target accepts.
+     * Neither resolution adds a declaration: the type form goes through
+     * `addImport(type.packageName, "Outer.Inner")`, which KotlinPoet renders as
+     * `import com.other.Outer.Inner`.
+     */
+    @Test
+    fun `a zero-name import of a type imports the type itself`() {
+        val out = render {
+            `import`(ClassName("com.other", "Thing"))
+            `val`("v", INT, init = 1.lit)
+        }
+        assertTrue("import com.other.Thing" in out, out)
+        // A nested type keeps its dots, which is the shape that would break if the simple names were
+        // passed one per argument — KotlinPoet reads those as siblings and emits two imports.
+        val nested = render {
+            `import`(ClassName("kotlin", "Int", "Companion"))
+            `val`("v", INT, init = expression("Companion.MAX_VALUE"))
+        }
+        assertTrue("import kotlin.Int.Companion" in nested, nested)
+        assertCompiles(nested)
+        assertCompilesEverywhereButJvm(nested)
+        // …and it still behaves as before when names are given.
+        val members = render {
+            `import`(ClassName("kotlin", "Int", "Companion"), "MAX_VALUE")
+            `val`("v", INT, init = expression("MAX_VALUE"))
+        }
+        assertTrue("import kotlin.Int.Companion.MAX_VALUE" in members, members)
+        assertCompiles(members)
+    }
+
+    /** *packages cannot be imported* on all three frontends, so there is no output to render. */
+    @Test
+    fun `a zero-name import of a package is refused by name`() {
+        val e = assertFailsWith<IllegalStateException> { render { `import`("kotlin.math") } }
+        assertTrue("`import`" in e.message!!, e.message!!)
+        assertTrue("packages cannot be imported" in e.message!!, e.message!!)
+        // The language row, compiled by hand rather than read off the message above.
+        assertTrue("ackages cannot be imported" in compile("import kotlin.math\nval v: Int = 1\n").messages)
+        // The controls: the same package with a name, and the same intent through the type overload.
+        assertCompiles(render { `import`("kotlin.math", "PI"); `val`("v", INT, init = 1.lit) })
+        assertCompiles(
+            render { `import`(ClassName("kotlin.collections", "ArrayList")); `val`("v", INT, init = 1.lit) },
+        )
+    }
+
+    /**
+     * The canary for KotlinPoet's own empty-names `require`: it is what the two guards above stand
+     * in front of, and it fails the day KotlinPoet starts accepting an empty list — at which point
+     * the type form's remedy would become "let it through" and the package form's would not change.
+     */
+    @Test
+    fun `KotlinPoet still refuses an empty names list on both overloads`() {
+        val byType = assertFailsWith<IllegalArgumentException> {
+            FileSpec.builder("com.example", "A").addImport(ClassName("com.other", "Thing"))
+        }
+        assertTrue("names array is empty" in byType.message!!, byType.message!!)
+        val byPackage = assertFailsWith<IllegalArgumentException> {
+            FileSpec.builder("com.example", "A").addImport("kotlin.math")
+        }
+        assertTrue("names array is empty" in byPackage.message!!, byPackage.message!!)
+    }
+
+    /**
      * The canary for the three overloads that have no `require`: it fails the day KotlinPoet adds
      * one, which is the day this DSL's own check stops being the only thing standing there.
      *
