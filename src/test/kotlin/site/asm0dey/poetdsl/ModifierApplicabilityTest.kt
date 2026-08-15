@@ -818,6 +818,118 @@ class ModifierApplicabilityTest {
     }
 
     /**
+     * **The annotation class body**, the third container position D42's matrix omitted — and the one
+     * E2e's own amendment left out of the list of what it had omitted, which is the defect that round
+     * was convened to fix, reproduced inside the fix.
+     *
+     * An annotation class declares a shape. Its nested classifiers are part of that shape, so all
+     * three non-public visibilities are refused on all of them. Measured, one file per row, `kotlinc`,
+     * `kotlinc-js` and `kotlinc-wasm` 2.4.10, all three identical, and at every depth:
+     *
+     *     annotation class A { protected class M }     modifier 'protected' is not applicable
+     *     annotation class A { internal class M }      inside 'annotation class'.
+     *     annotation class A { private class M }       (…'internal' / …'private')
+     *     annotation class A { protected object O }
+     *     annotation class A { internal interface I }
+     *     annotation class A { private annotation class N }
+     *     annotation class A { private companion object C }
+     *     class Outer { annotation class A { protected class M } }
+     *     class O { class Inner { annotation class A { protected class M } } }
+     *     interface I { annotation class A { protected class M } }
+     *
+     * The root cause is that an annotation class answers `kindName == "class"`, so
+     * [protectedAllowed] said yes; [internalAllowed] and [finalAllowed] are keyed on `"interface"`
+     * alone; and `private` had no container question anywhere. Nine cells rendered.
+     *
+     * The **code defect is older than E2e** — every one of these rendered at D42's head too. What is
+     * E2e's is the scope statement that said the interface body and the companion object were the two
+     * positions outside the matrix.
+     */
+    @Test
+    fun `an annotation class body takes no non-public visibility`() {
+        listOf(PRIVATE, PROTECTED, INTERNAL).forEach { modifier ->
+            listOf<Pair<String, FileScope.() -> Unit>>(
+                "a nested class" to { `class`(ANNOTATION, "A") { `class`(modifier, "M") { } } },
+                "a nested object" to { `class`(ANNOTATION, "A") { `object`(modifier, "O") { } } },
+                "a nested interface" to { `class`(ANNOTATION, "A") { `interface`(modifier, "I") { } } },
+                "a nested annotation class" to {
+                    `class`(ANNOTATION, "A") { `class`(ANNOTATION + modifier, "N") { } }
+                },
+                // `` `object`(COMPANION, …) `` is the second spelling of `companionObject`, which
+                // takes no modifier slot — so this is the only way the visibility reaches the
+                // companion object itself, and Kotlin refuses it there too.
+                "a nested companion object" to {
+                    `class`(ANNOTATION, "A") { `object`(COMPANION + modifier, "C") { } }
+                },
+                "one level down" to {
+                    `class`("Outer") { `class`(ANNOTATION, "A") { `class`(modifier, "M") { } } }
+                },
+                "two levels down" to {
+                    `class`("Outer") {
+                        `class`("Inner") { `class`(ANNOTATION, "A") { `class`(modifier, "M") { } } }
+                    }
+                },
+                "inside an interface" to {
+                    `interface`("I") { `class`(ANNOTATION, "A") { `class`(modifier, "M") { } } }
+                },
+            ).forEach { (label, body) ->
+                val m = message(body)
+                assertTrue(
+                    "modifier '${modifier.name.lowercase()}' is not applicable inside 'annotation class'" in m,
+                    "$modifier on $label: $m",
+                )
+            }
+        }
+    }
+
+    /**
+     * The control rows for the one above, and the reason it is keyed on the **immediate** container:
+     * everything an annotation class body does take, plus the two containers *inside* one that take
+     * all three visibilities back. Measured clean on all three frontends:
+     *
+     *     annotation class A { class M ; public class P ; final class F ; open class O2 }
+     *     annotation class A { abstract class Ab ; sealed class S ; annotation class N }
+     *     annotation class A { interface I ; object Obj ; companion object }
+     *     annotation class A { companion object { private class M ; internal val v: Int = 1 } }
+     *     annotation class A { class Holder { protected class Prot ; private class Hidden } }
+     *     class Outer { annotation class A { class M { private class N } } }
+     *
+     * A **detached** row is deliberately absent: `typeSpec` has no container, and this is a container
+     * question — the same reason [PropertyContainer.UNKNOWN] answers yes to everything.
+     */
+    @Test
+    fun `an annotation class body still takes everything else`() {
+        val src = render {
+            `class`(ANNOTATION, "A") {
+                `class`("M") { }
+                `class`(PUBLIC, "P") { }
+                `class`(FINAL, "F") { }
+                `class`(OPEN, "O2") { }
+                `class`(ABSTRACT, "Ab") { }
+                `class`(SEALED, "S") { }
+                `class`(ANNOTATION, "N") { }
+                `interface`("I") { }
+                `object`("Obj") { }
+                // …and the two containers of their own that an annotation class body holds, which is
+                // what keeps the rule on the immediate container rather than on anything inherited.
+                companionObject {
+                    `class`(PRIVATE, "Hidden") { }
+                    `val`(INTERNAL, "v", INT, 1.lit)
+                }
+                `class`("Holder") {
+                    `class`(PROTECTED, "Prot") { }
+                    `class`(PRIVATE, "Secret") { }
+                }
+            }
+            `class`("Outer") { `class`(ANNOTATION, "B") { `class`("M") { `class`(PRIVATE, "N") { } } } }
+        }
+        assertCompiles(src)
+        assertCompilesEverywhereButJvm(src)
+        // …and the detached builder still renders all three, because it has no container to ask.
+        assertTrue("private" in typeSpec(PRIVATE.toModifiers(), name = "M") { }.toString())
+    }
+
+    /**
      * **The noun a block prints**, which two of this family's refusals got wrong because no position
      * of the matrix is a block. Measured, all three frontends identical:
      *

@@ -593,6 +593,74 @@ internal fun privateInterfacePropertyNeedsAnAccessor(construct: String, name: St
             "ordinary abstract one.",
     )
 
+// --------------------------------------------------------------------------------------------
+// The **annotation class body**, the third container position D42's matrix omitted — and the one
+// the amendment that listed the first two left out of its own list. See [nonPublicVisibilityAllowed].
+
+/**
+ * The three visibilities that are not `public`, as one list, because an annotation class body
+ * refuses all three for one reason. [KModifier.PUBLIC] is deliberately absent: `annotation class A
+ * { public class M }` is clean on all three frontends.
+ */
+internal val NON_PUBLIC_VISIBILITIES: List<KModifier> =
+    listOf(KModifier.PRIVATE, KModifier.PROTECTED, KModifier.INTERNAL)
+
+/**
+ * Whether a declaration written in this scope may carry a visibility other than `public`.
+ *
+ * An `annotation class` declares a shape, and its nested classifiers are part of the shape it
+ * declares — so it takes no `private`, no `protected` and no `internal` on any of them. Measured, one
+ * file per row, `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10, all three identical:
+ *
+ *     annotation class A { protected class M }         modifier 'protected' is not applicable
+ *     annotation class A { internal class M }          inside 'annotation class'.
+ *     annotation class A { private class M }           (…'internal' / …'private')
+ *     annotation class A { protected object O }
+ *     annotation class A { internal interface I }
+ *     annotation class A { private annotation class N }
+ *     annotation class A { private companion object C }
+ *     class Outer { annotation class A { protected class M } }
+ *     interface I  { annotation class A { protected class M } }
+ *
+ * and the controls, clean on all three: `class M`, `public class M`, `final`, `open`, `abstract`,
+ * `sealed`, a nested `annotation class`, an `interface`, an `object` and a `companion object` — and
+ * the two rows that keep this keyed on the **immediate** container, `annotation class A { companion
+ * object { private class M ; internal val v: Int = 1 } }` and `annotation class A { class Holder {
+ * protected class Prot } }`, both of which are containers of their own.
+ *
+ * **Why this is not [protectedAllowed] with a term added.** Three questions, three predicates, per
+ * the ledger's standing rule: `protected` is refused where there is no subclass to be visible to,
+ * `internal` where a member's visibility is part of a published contract, and this one where the
+ * declaration is part of a shape. They disagree about containers — an interface body takes
+ * `private`, a companion object takes `protected`, an annotation class body takes neither — and the
+ * frontends print a different noun for each. This one is asked **first** in [declareType] for that
+ * last reason: an annotation class answers `kindName == "class"`, so [protectedAllowed] would say
+ * yes and, were it made to say no, would quote *not applicable inside 'class'*, a sentence no
+ * frontend prints.
+ *
+ * The container test is the same one [membersAllowed] makes and the question is not: that one asks
+ * whether an annotation class may hold a **member** at all (it may not — *members are prohibited in
+ * annotation classes* — which is why a function and a property never reach here), this one asks what
+ * a nested **classifier**, which it may hold, is allowed to be.
+ */
+internal val Scope.nonPublicVisibilityAllowed: Boolean
+    get() = !(this is TypeScope && KModifier.ANNOTATION in builder.modifiers)
+
+/** See [nonPublicVisibilityAllowed]. */
+internal fun annotationBodyIsPartOfTheShape(
+    construct: String,
+    subject: String,
+    modifier: KModifier,
+): Nothing = kindRefusal(
+    construct,
+    "$subject is $modifier and is declared in an `annotation class`, whose nested classifiers are " +
+        "part of the shape it declares — an annotation class has nothing of its own to hide them from",
+    "modifier '${modifier.name.lowercase()}' is not applicable inside 'annotation class'",
+    "Drop $modifier — a nested classifier of an annotation class is public — or move the declaration " +
+        "into the annotation's companionObject or into one of its nested classes, both of which are " +
+        "containers of their own and take all three.",
+)
+
 /**
  * `final`, `open` and `override` are a **member's** modifiers: each of them is about overriding, and
  * a top-level declaration is not in a hierarchy. Measured, all three frontends identical:

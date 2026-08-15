@@ -103,10 +103,20 @@ internal fun Scope.declareType(
     // applicable to 'interface'* in every container, including a file, where the container rule
     // below would have said "not applicable inside 'file'". See [Applicability] and D42.
     checkModifiers("`$kindName`", declarationForm(kindName), "'$name'", modifiers.toList())
-    // …and the container half of the same axis. A classifier's only container-keyed modifier is
-    // PROTECTED: `final class M` and `open class M` are ordinary top-level Kotlin, so
-    // [MEMBER_INHERITANCE_MODIFIERS] is a member's question and is asked in [buildFun] and
-    // [checkProperty], not here.
+    // …and the container half of the same axis, starting with the **annotation class body**, which
+    // refuses all three non-public visibilities and prints a noun of its own for each. It is asked
+    // before the three questions below because an annotation class answers `kindName == "class"` and
+    // would otherwise be quoted *not applicable inside 'class'*, which no frontend prints. See
+    // [nonPublicVisibilityAllowed]; a function and a property never reach an equivalent, being
+    // refused outright by [membersAllowed].
+    if (!nonPublicVisibilityAllowed) {
+        modifiers.toList().firstOrNull { it in NON_PUBLIC_VISIBILITIES }?.let {
+            annotationBodyIsPartOfTheShape("`$kindName`", "'$name'", it)
+        }
+    }
+    // A classifier's other container-keyed modifier is PROTECTED: `final class M` and `open class M`
+    // are ordinary top-level Kotlin, so [MEMBER_INHERITANCE_MODIFIERS] is a member's question and is
+    // asked in [buildFun] and [checkProperty], not here.
     if (KModifier.PROTECTED in modifiers.toList() && !protectedAllowed) {
         // A **block** names the declaration's own form rather than its container: kotlinc says
         // *modifier 'protected' is not applicable to 'local class'*, never *inside 'block'*, which
