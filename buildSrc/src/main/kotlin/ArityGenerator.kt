@@ -749,6 +749,51 @@ private val TYPE_BODY: List<Overload> = listOf(
     ),
 )
 
+/**
+ * E3's `` `typealias` ``. Through ADR 0004's six variants — a type alias genuinely takes a visibility
+ * and genuinely takes annotations, and both are ordinary Kotlin — and through the generator rather
+ * than by hand so that the six overloads come off the same table every other declaration does.
+ *
+ * **No shadow, and the reasoning is `` `class` ``'s rather than `` `object` ``'s.** A *local* type
+ * alias is valid Kotlin behind `-Xlocal-type-aliases`, not invalid Kotlin, so an `@Deprecated(ERROR)`
+ * overload would freeze a temporary compiler state into a surface Task 22 locks permanently — D20's
+ * argument. The refusal is a run-time `IllegalStateException` naming the flag, with a canary test.
+ * `` `typealias` `` is also `context(s: Scope)`, so the innermost scope wins and the block case is
+ * reached correctly; the shadows exist for `context(t: TypeScope)` constructs, which resolve from a
+ * block body and attach to the wrong container.
+ *
+ * `typealias` is a **hard** keyword — `fun typealias()` is *function declaration must have a name* —
+ * so the canonical spelling is backticked, and there is no alias: `typeAlias` is a re-casing rather
+ * than a short form, and ADR 0009's alias rule is about short forms.
+ */
+private fun typeAliasOverloads(): List<Overload> = VARIANTS.map { v ->
+    Overload(
+        doc = "`typealias Name = T`${v.doc}.\n\n" +
+            "Valid at file level and inside a named type — a nested `typealias` is ordinary Kotlin\n" +
+            "and `C.S` resolves, which is the question E1 left open and this round measured on all\n" +
+            "three frontends. Not valid in a block body, nor in an enum entry's or an anonymous\n" +
+            "object's body, all three of which make it a *local* type alias: that is behind\n" +
+            "`-Xlocal-type-aliases` in Kotlin 2.4 and this DSL passes no compiler flag.\n\n" +
+            "[typeVariables] are E1's deferred slot. A type alias's take no variance, no `reified`\n" +
+            "and — uniquely among this DSL's declarations — no upper bound.",
+        context = "context(s: Scope)",
+        name = "`typealias`",
+        params = v.params() + listOf("name: String", "type: TypeName") +
+            typeVariablesParam(true) + KDOC_PARAM,
+        returns = null,
+        body = """
+            |s.declareTypeAlias(
+            |    ${v.annotationsArg},
+            |    ${v.modifiersArg},
+            |    name,
+            |    type,
+            |    typeVariables,
+            |    kdoc,
+            |)
+        """.trimMargin(),
+    )
+}
+
 // --- files ----------------------------------------------------------------------------------------
 
 private val IMPORTS = listOf(
@@ -790,7 +835,8 @@ public open class ArityGeneratorTask : DefaultTask() {
             BINDINGS.flatMap { it.overloads() } +
             ctorParamOverloads() +
             SUPERTYPES +
-            TYPE_BODY
+            TYPE_BODY +
+            typeAliasOverloads()
         val funs = funOverloads()
         val ctors = ctorOverloads()
 

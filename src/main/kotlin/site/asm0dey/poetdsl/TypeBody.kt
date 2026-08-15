@@ -83,6 +83,7 @@ internal fun TypeScope.addInitializerBlock(body: BlockScope.() -> Unit) {
             "Move the code to a function, or make it a property initializer."
     }
     builder.addInitializerBlock(scope.builder.build())
+    hasInitializerBlock = true
 }
 
 /**

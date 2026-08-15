@@ -231,6 +231,16 @@ public class TypeScope internal constructor(
     internal val enumEntryArgCounts: MutableList<Pair<String, Int>> = mutableListOf()
 
     /**
+     * Whether an `` `init` `` block was added. KotlinPoet keeps its own record in
+     * `TypeSpec.Builder.initializerBlock`, which is `internal`, and [enumBodyNeedsASemicolon] needs
+     * the fact — it is one of the four member kinds whose presence makes KotlinPoet write the `;`
+     * that separates an enum's entries from its body. Set only by [addInitializerBlock], which is the
+     * only route to one in this DSL: a spliced `` +funSpec `` or `` +propertySpec `` cannot carry an
+     * initializer block, and `TypeSpec.Builder.addInitializerBlock` is reached from nowhere else.
+     */
+    internal var hasInitializerBlock: Boolean = false
+
+    /**
      * Builds the type, after the one check that can only be made once the whole body has run.
      *
      * Superclass constructor arguments in the header need a primary constructor to hang from as
@@ -277,6 +287,12 @@ public class TypeScope internal constructor(
         // D43's deferred half, here for the reason the three below are: the enum's primary
         // constructor can be written after the entry that calls it. See [checkEnumEntryArgs].
         if (enumEntryArgCounts.isNotEmpty()) checkEnumEntryArgs()
+        // …and D43's other deferred check, for the same reason: a property or a function written
+        // after the `typealias` supplies the `;` KotlinPoet omits for it. See
+        // [checkEnumTypeAliasRenders].
+        if (KModifier.ENUM in builder.modifiers && builder.typeAliasSpecs.isNotEmpty()) {
+            checkEnumTypeAliasRenders()
+        }
         val secondaryCtors = builder.funSpecs.filter { it.isConstructor }
         check(builder.superclassConstructorParameters.isEmpty() || secondaryCtors.isEmpty() || hasCtor) {
             superclassArgsPlusSecondary(kindName)
