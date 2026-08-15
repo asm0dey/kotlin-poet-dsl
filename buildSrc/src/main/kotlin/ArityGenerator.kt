@@ -127,6 +127,11 @@ private const val SHADOW_CAPTURE: String =
  * [SHADOW_CAPTURE] plus the validity clause for a construct a `typeSpec` body holds and an
  * `anonymousObject`'s does not — where [inAnonymousObject] says what the anonymous body does about
  * it, in the frontends' own words. See [SHADOW_CAPTURE] for the rows.
+ *
+ * Its opening clause is unqualified — *a `typeSpec` body* — so it belongs only to constructs the
+ * **default** `typeSpec` really holds: a `constructor`, a `companionObject`, a `superclass`, a
+ * `superinterface`. `enumEntry` composes [SHADOW_CAPTURE] directly for that reason; see its
+ * `shadow`.
  */
 private fun capturedButValidInATypeSpec(inAnonymousObject: String): String =
     "$SHADOW_CAPTURE In a `typeSpec` body the construct would have been valid; $inAnonymousObject"
@@ -189,9 +194,21 @@ private fun Overload.render(): String = buildString {
  * an unescaped `"` closes the string literal and renders a file that does not compile. Escaping here
  * rather than avoiding the character keeps the quoted-diagnostic house style available to all of
  * them.
+ *
+ * A dollar sign is escaped for the same reason and **is not exercised by any message today** —
+ * stated rather than implied, because an unexercised branch nobody has said is unexercised reads as
+ * a tested one. No shadow message contains one; Kotlin's own diagnostics do (*unresolved reference
+ * 'x'* prints the name with a leading dollar), and the house style of this file is to quote a
+ * frontend's sentence verbatim, so the next message written in that style can bring one in.
+ * Unescaped, it opens a string template in the generated file: either an unresolved reference — a
+ * `BROKEN` tree, which is at least loud — or, if the name happens to resolve at `Shadows.kt`'s file
+ * scope, a message that silently says something else.
  */
 private fun Overload.renderShadow(): String = buildString {
-    val message = shadow!!.replace("\\", "\\\\").replace("\"", "\\\"")
+    val message = shadow!!
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("$", "\${'\$'}")
     appendLine("@Deprecated(")
     appendLine("    \"$message\",")
     appendLine("    level = DeprecationLevel.ERROR,")
@@ -841,11 +858,17 @@ private val TYPE_BODY: List<Overload> = listOf(
             listOf("body: (TypeScope.() -> Unit)? = null"),
         returns = null,
         body = "t.addEnumEntry(name, args, kdoc, body)",
-        shadow = "enumEntry is only valid inside an enum class body. " +
-            capturedButValidInATypeSpec(
-                "an anonymous object has no entries — only a `class`(ENUM, …) has, which is " +
-                    "what a `typeSpec` body would have had to be for this call to land.",
-            ),
+        // The one construct whose opening clause cannot be `capturedButValidInATypeSpec`'s. That
+        // clause says "In a `typeSpec` body the construct would have been valid", and for an entry
+        // that is false of the `typeSpec` a caller writes by default: `typeSpec(name = "C")` builds
+        // a **class**, and it refuses `enumEntry` with the same sentence an anonymous object's body
+        // does — measured, both refusals verbatim, in `ShadowsTest`. Only
+        // `typeSpec(ENUM.toModifiers(), …)` accepts one. So the qualification is in the opening
+        // clause rather than recovered later in the sentence.
+        shadow = "enumEntry is only valid inside an enum class body. $SHADOW_CAPTURE " +
+            "In a `typeSpec(ENUM.toModifiers(), …)` body the construct would have been valid; " +
+            "the default `typeSpec` is a class, which has no entries and refuses one exactly as " +
+            "an anonymous object's body does.",
     ),
 )
 

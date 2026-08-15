@@ -1,9 +1,11 @@
 package site.asm0dey.poetdsl
 
+import com.squareup.kotlinpoet.KModifier
 import com.tschuchort.compiletesting.KotlinCompilation
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -58,9 +60,20 @@ class ShadowsTest {
      *     class C { constructor(q: Int) { … }      clean   ← the `typeSpec` half of the split
      *               companion object }
      *
-     * So 125 of the 126 carry "In a `typeSpec` body the construct would have been valid" plus what
-     * the anonymous body does instead, and `` `init` `` — the one that *is* valid in both — is the
-     * one that still says so.
+     * So 124 of the 126 carry "In a `typeSpec` body the construct would have been valid" plus what
+     * the anonymous body does instead, and the other two are exceptions in opposite directions:
+     * `` `init` `` — the one that *is* valid in both — still says so, and `enumEntry` is valid in
+     * **neither** default body. `typeSpec(name = "C")` builds a class, and a class has no entries:
+     *
+     *     typeSpec(name = "C") { enumEntry("A") }                  refused, "declared in a class,
+     *                                                              and only an enum class has
+     *                                                              entries"
+     *     class C { val v = object { enumEntry("A") } }            refused, the same sentence with
+     *                                                              "an anonymous object"
+     *     typeSpec(ENUM.toModifiers(), name = "E") { enumEntry }   renders `public enum class E`
+     *
+     * all three asserted below. The unqualified clause was the last unmeasured "would have been
+     * valid" left in the surface Task 22 freezes.
      */
     @Test
     fun `the validity clause is per construct, and each construct's is measured`() {
@@ -73,9 +86,9 @@ class ShadowsTest {
             captured.none { "lands here too, though the construct would have been valid there" in it },
             "the unqualified claim is back",
         )
-        // 120 `constructor`/`ctor`, both `companionObject`s, `enumEntry`, and the two supertypes.
+        // 120 `constructor`/`ctor`, both `companionObject`s, and the two supertypes.
         assertEquals(
-            125,
+            124,
             captured.count { "In a `typeSpec` body the construct would have been valid" in it },
         )
         assertEquals(120, captured.count { "\"objects cannot have constructors\"" in it })
@@ -83,10 +96,16 @@ class ShadowsTest {
             2,
             captured.count { "\"modifier 'companion' is not applicable inside 'local class'\"" in it },
         )
-        assertEquals(1, captured.count { "an anonymous object has no entries" in it })
         assertEquals(2, captured.count { "takes its supertypes as parameters" in it })
-        // …and `init`, the exception, which keeps the claim because the language keeps it.
+        // …and the two exceptions. `init` keeps the both-bodies claim because the language keeps
+        // it; `enumEntry` names the one `typeSpec` spelling that would have taken it.
         assertEquals(1, captured.count { "In either body the construct would have been valid" in it })
+        assertEquals(
+            1,
+            captured.count {
+                "In a `typeSpec(ENUM.toModifiers(), …)` body the construct would have been valid" in it
+            },
+        )
 
         // The rows the two clauses quote, compiled here rather than trusted. The leading character
         // is dropped because kctfork's renderer capitalises the first letter of a diagnostic where
@@ -102,6 +121,21 @@ class ShadowsTest {
         // The controls, and they are what make the clause a split rather than a blanket denial.
         assertCompiles("fun f() {\n  val v = object { init { println(1) } }\n  println(v)\n}\n")
         assertCompiles("class C {\n  constructor(q: Int) { println(q) }\n\n  companion object\n}\n")
+
+        // `enumEntry`'s clause, which is the one that had to be qualified: the *default* `typeSpec`
+        // is a class and refuses an entry exactly as an anonymous body does, so "in a `typeSpec`
+        // body it would have been valid" was false for it. Both refusals and the one acceptance.
+        val inClass = assertFailsWith<IllegalStateException> { typeSpec(name = "C") { enumEntry("A") } }
+        val inAnonymous = assertFailsWith<IllegalStateException> {
+            file("com.example", "A") { `class`("C") { `val`("v", init = anonymousObject { enumEntry("A") }) } }
+        }
+        assertTrue("only an enum class has entries" in inClass.message!!, inClass.message!!)
+        assertTrue("declared in a class" in inClass.message!!, inClass.message!!)
+        assertTrue("only an enum class has entries" in inAnonymous.message!!, inAnonymous.message!!)
+        assertTrue("declared in an anonymous object" in inAnonymous.message!!, inAnonymous.message!!)
+        val enumSpec = typeSpec(KModifier.ENUM.toModifiers(), name = "E") { enumEntry("A") }.toString()
+        assertTrue("public enum class E" in enumSpec, enumSpec)
+        assertTrue("A," in enumSpec, enumSpec)
     }
 
     /**
