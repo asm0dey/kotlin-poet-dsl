@@ -136,6 +136,22 @@ internal fun compileWasm(source: String): JsCompilationResult =
     compileNonJvm(source, "kotlin.stdlib.wasm", listOf("-Xwasm"))
 
 /**
+ * [compileJs] and [compileWasm] with `-Xmulti-platform`, the non-JVM halves of
+ * [compileMultiplatform] — so that a sweep containing `expect` and `actual` rows judges all three
+ * frontends under the same flag instead of comparing a JVM row that ran the expect-specific rules
+ * against two that stopped at *'expect' and 'actual' declarations can be used only in multiplatform
+ * projects*. `ModifierPairTest`'s census is the caller.
+ */
+@OptIn(ExperimentalCompilerApi::class)
+internal fun compileJsMultiplatform(source: String): JsCompilationResult =
+    compileNonJvm(source, "kotlin.stdlib.js", listOf("-Xmulti-platform"))
+
+/** See [compileJsMultiplatform]. */
+@OptIn(ExperimentalCompilerApi::class)
+internal fun compileWasmMultiplatform(source: String): JsCompilationResult =
+    compileNonJvm(source, "kotlin.stdlib.wasm", listOf("-Xwasm", "-Xmulti-platform"))
+
+/**
  * [compileWasm] with the stdlib klib named explicitly, so that the harness's own control — *does
  * `-Xwasm` actually switch the target?* — can hand it the **Kotlin/JS** klib without mutating a
  * global. The first spelling of that control called `System.setProperty`, which is correct read
