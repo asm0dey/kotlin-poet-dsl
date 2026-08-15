@@ -15,6 +15,20 @@ dependencies {
     implementation(kotlin("reflect"))
     testImplementation(kotlin("test"))
     testImplementation(libs.kctfork.core)
+    // E3: the two Kotlin versions this project had in play, aligned.
+    //
+    // kctfork 0.13.0 pins `kotlin-compiler-embeddable:2.4.0`, while the Kotlin plugin and the
+    // `jsStdlib`/`wasmStdlib` klibs are 2.4.10 — so every `assertCompiles` in this suite ran the
+    // **older** frontend while every diagnostic quoted in D36-D42 came from 2.4.10 at a command
+    // line, and the JS/Wasm rows fed 2.4.10 klibs to a 2.4.0 frontend. The deviations file's version
+    // note recorded the split and left the decision to this round.
+    //
+    // Aligned rather than labelled, because the argument for leaving them apart — that the suite
+    // then tests the conservative, older frontend — does not survive the klib mismatch: nothing was
+    // testing 2.4.0 *consistently*. The whole suite passes on 2.4.10 with no expectation changed,
+    // which is the measurement that made this cheap. `the in-suite compiler is the version this
+    // project quotes` pins it, so a future kctfork bump cannot reopen the split silently.
+    testImplementation(libs.kotlin.compiler.embeddable)
 }
 
 kotlin {

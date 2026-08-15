@@ -7,6 +7,10 @@ bcv = "0.18.1"
 [libraries]
 kotlinpoet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinpoet" }
 kctfork-core = { module = "dev.zacsweers.kctfork:core", version.ref = "kctfork" }
+# E3: pinned to the same `kotlin` version the plugin and the js/wasm klibs use, so the in-suite
+# frontend and every diagnostic this project quotes are one compiler. kctfork 0.13.0 would otherwise
+# drag in 2.4.0. See the comment in build.gradle.kts.
+kotlin-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-embeddable", version.ref = "kotlin" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

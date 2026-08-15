@@ -320,6 +320,49 @@ internal fun checkModifiers(
     modifiers.firstOrNull { it in form.denied }?.let {
         modifierNotApplicable(construct, form, subject, it, noun)
     }
+    // …and E3's, the **pair** axis's first term. See [checkVisibilityPair].
+    checkVisibilityPair(construct, subject, modifiers)
+}
+
+/**
+ * The one modifier **pair** rule this project has measured on every form: two visibilities on one
+ * declaration.
+ *
+ * E2 left the pair axis as its single measurement debt — D42 recorded 42 genuinely pair-only invalid
+ * renders in four families and said none of the four had had its **control rows** measured. E3
+ * measured all **120 unordered pairs** of the sixteen `KModifier` values that reach a `class`, on
+ * `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10 with `-Xmulti-platform`, one file per cell: 108
+ * unanimous, and the 12 that split doing so along two families already recorded as *single*-modifier
+ * facts (a `value class` needs `@JvmInline` on the JVM; `external class` is JVM-refused, D37). So the
+ * pair axis adds no frontend disagreement of its own.
+ *
+ * **Two of D42's four sketched guards would have been false rejections**, which is exactly what it
+ * warned a guess would be. "At most one of FINAL/OPEN/ABSTRACT/SEALED" refuses `open abstract class M`
+ * and `abstract sealed class M`, both clean on all three frontends; and `final enum class M` and
+ * `final data class M(val a: Int)` are clean too. The inheritance family is not a group rule at all —
+ * it is FINAL×{OPEN, ABSTRACT, SEALED} and OPEN×SEALED and nothing else — and closing it needs a
+ * per-form measurement this round did not run, because on a *function* `final abstract` draws the
+ * container's sentence rather than the pair's. Recorded in D43 with the full table, not guessed at.
+ *
+ * The **visibility** family is the one that is finished, and it is the one that had a live invalid
+ * render: `` `class`(Modifiers(setOf(PUBLIC, PRIVATE)), "M") `` rendered `public private class M`,
+ * which no frontend accepts. Measured on a class, a member function and a member property, all three
+ * frontends, one sentence throughout — *modifier 'x' is incompatible with 'y'* — and the control rows
+ * are every single-visibility declaration in this suite. `PROTECTED` is in the set for completeness;
+ * its file-level and its container rules are [protectedAllowed]'s and fire elsewhere.
+ */
+private val VISIBILITIES: List<KModifier> =
+    listOf(KModifier.PUBLIC, KModifier.PROTECTED, KModifier.PRIVATE, KModifier.INTERNAL)
+
+/** See [VISIBILITIES]. */
+internal fun checkVisibilityPair(construct: String, subject: String, modifiers: List<KModifier>) {
+    val declared = modifiers.filter { it in VISIBILITIES }
+    check(declared.size < 2) {
+        val (a, b) = declared
+        "$construct: $subject carries ${a.name} and ${b.name}, and a declaration has one visibility " +
+            "— \"modifier '${a.name.lowercase()}' is incompatible with " +
+            "'${b.name.lowercase()}'\" on the JVM, on Kotlin/JS and on Kotlin/Wasm alike. Pass one."
+    }
 }
 
 /**
