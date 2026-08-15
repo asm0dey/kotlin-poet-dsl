@@ -358,14 +358,24 @@ internal fun constNeedsATopLevelOrObjectContainer(construct: String, name: Strin
  *
  *     class Holder { protected class O ; protected object P ; protected interface Q }
  *     open class C { protected val g: Int = 1 ; protected fun j() { } }
+ *     class Outer { companion object { protected val p: Int = 1 ; protected fun f() { }
+ *                                      protected class M ; protected object Q
+ *                                      protected interface I2 } }
+ *     interface I { companion object { protected val p: Int = 1 } }
  *
- * So the answer is "the container is a class", which is [TypeScope.kindName] and nothing else — an
- * `enum`, a `sealed`, an `abstract`, a `data` and a `value class` all answer `"class"` and all take
- * a `protected` member. A **companion object** does not, and neither does a plain object: both are
- * `"named object"`/`"companion object"` here.
+ * So the answer is "the container is a class **or a companion object**". An `enum`, a `sealed`, an
+ * `abstract`, a `data` and a `value class` all answer `"class"` in [TypeScope.kindName] and all take
+ * a `protected` member; a **standalone** object does not, and neither does an interface.
+ *
+ * **The companion row is a false rejection this predicate shipped**, and the reason it went unseen is
+ * that D42's four positions are a file, a class, a nested class and the detached builder — a
+ * companion object is not one of them, so the row was asserted from this DSL's own message rather
+ * than from a compiler. A companion object is the one object whose members a subclass of the
+ * enclosing type can see, which is exactly what `protected` is about; that it belongs to an
+ * *interface* is no obstacle either (the last control row above).
  */
 internal val Scope.protectedAllowed: Boolean
-    get() = this is TypeScope && kindName == "class"
+    get() = this is TypeScope && (kindName == "class" || kindName == "companion object")
 
 /**
  * The property side of [protectedNeedsAClass], which reads a [PropertyContainer] rather than a

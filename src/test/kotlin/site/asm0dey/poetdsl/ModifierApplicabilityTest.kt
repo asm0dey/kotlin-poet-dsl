@@ -481,9 +481,12 @@ class ModifierApplicabilityTest {
 
     /**
      * `protected` names a visibility to subclasses, so it needs a container that can have one.
-     * Measured, all three frontends identical: a file, a standalone object, a companion object and
-     * an interface all refuse it, and a class body — including `enum`, `sealed`, `abstract`, `data`
-     * and `value` — takes it.
+     * Measured, all three frontends identical: a file, a standalone object and an interface refuse
+     * it, and a class body — including `enum`, `sealed`, `abstract`, `data` and `value` — takes it.
+     *
+     * **A companion object takes it too**, which the previous round asserted the other way round
+     * from its own message rather than from a frontend. See
+     * [protected is a companion object's to give].
      */
     @Test
     fun `protected needs a class around it`() {
@@ -493,9 +496,6 @@ class ModifierApplicabilityTest {
             "an object at file level" to { `object`(PROTECTED, "O") { } },
             "a class in an object" to { `object`("O") { `class`(PROTECTED, "M") { } } },
             "a class in an interface" to { `interface`("I") { `class`(PROTECTED, "M") { } } },
-            "a class in a companion object" to {
-                `class`("C") { companionObject { `class`(PROTECTED, "M") { } } }
-            },
             "a function at file level" to { `fun`(PROTECTED, "f") { } },
             "a function in an object" to { `object`("O") { `fun`(PROTECTED, "f") { } } },
             "a property at file level" to { `val`(PROTECTED, "p", INT, 1.lit) },
@@ -533,6 +533,51 @@ class ModifierApplicabilityTest {
             "protected" in propertySpec(PROTECTED.toModifiers(), name = "p", type = INT, init = 1.lit)
                 .toString(),
         )
+    }
+
+    /**
+     * **A false rejection the previous round shipped, and the two positions its matrix omitted are
+     * why.** D42's four positions are a file, a class, a nested class and the detached builder, so
+     * nothing in it ever put a member inside a **companion object**; the row that says a companion
+     * object refuses `protected` was asserted from this DSL's own message rather than from a
+     * compiler. Measured, one file per row, all three frontends agreeing:
+     *
+     *     class Outer { companion object { protected val p: Int = 1 } }      CLEAN
+     *     class Outer { companion object { protected fun f() { } } }         CLEAN
+     *     class Outer { companion object { protected class M } }             CLEAN
+     *     class Outer { companion object { protected object Q } }            CLEAN
+     *     class Outer { companion object { protected interface I2 } }        CLEAN
+     *     interface I { companion object { protected val p: Int = 1 } }      CLEAN
+     *     object O { protected val p: Int = 1 }        …not applicable inside 'standalone object'.
+     *     interface I { protected val p: Int }         …not applicable inside 'interface'.
+     *
+     * A companion object is the one object whose members a subclass of the enclosing type can see,
+     * so it is the one object `protected` means something in — and a **standalone** object is still
+     * refused, which is what keeps this from being "any object body".
+     */
+    @Test
+    fun `protected is a companion object's to give`() {
+        assertCompiles(
+            render {
+                `class`("Outer") {
+                    companionObject {
+                        `val`(PROTECTED, "p", INT, 1.lit)
+                        `var`(PROTECTED, "v", INT, 1.lit)
+                        `fun`(PROTECTED, "f") { }
+                        `class`(PROTECTED, "M") { }
+                        `object`(PROTECTED, "Q") { }
+                        `interface`(PROTECTED, "I2") { }
+                    }
+                }
+                `interface`("I") { companionObject { `val`(PROTECTED, "q", INT, 1.lit) } }
+                // …one level down, where a container-keyed rule has inverted three times before.
+                `class`("Top") { `class`("Inner") { companionObject { `fun`(PROTECTED, "g") { } } } }
+            },
+        )
+        // …and a standalone object still refuses it, which is the neighbour that keeps the rule
+        // from being "any object".
+        val m = message { `object`("O") { `val`(PROTECTED, "p", INT, 1.lit) } }
+        assertTrue("modifier 'protected' is not applicable" in m, m)
     }
 
     /**
