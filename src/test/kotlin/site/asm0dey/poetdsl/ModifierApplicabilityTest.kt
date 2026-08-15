@@ -416,6 +416,38 @@ class ModifierApplicabilityTest {
         }
     }
 
+    /**
+     * **The one row whose sentence depended on a shape the matrix never built.** KotlinPoet omits a
+     * constructor's *empty* body (`canBodyBeOmitted`), so the probe — which used empty bodies — only
+     * ever saw `public fun constructor(q: Int)`, which is *function 'constructor' without a body must
+     * be abstract*. Give the same construct a body and it is a different shape entirely. Measured,
+     * one file per row, all three frontends agreeing:
+     *
+     *     class C { fun constructor(q: Int) { println(q) } }   CLEAN
+     *     class C { fun constructor(q: Int) }                  function 'constructor' without a body
+     *                                                          must be abstract.
+     *     class C(val a: Int) {                                function 'constructor' without a body
+     *       fun constructor(q: Int) : this(1) { println(q) }   must be abstract. + six syntax errors
+     *     }
+     *
+     * The refusal stands — `` `constructor` `` means a secondary constructor, and D25's delegation
+     * call is the third row above — but it no longer asserts one sentence of every shape. It says
+     * which shape draws which, and names the spelling that works.
+     */
+    @Test
+    fun `fun on a constructor declines the spelling and names the one that works`() {
+        val m = message { `class`("C") { `constructor`(FUN, param("q", INT)) { ret() } } }
+        assertTrue("not a constructor at all but a function named `constructor`" in m, m)
+        // The diagnostic is attributed to the shape that draws it, not asserted of the shape at hand.
+        assertTrue("with an empty body" in m, m)
+        assertTrue("function 'constructor' without a body must be abstract" in m, m)
+        assertTrue("delegation call" in m, m)
+        // …and the remedy names a spelling this DSL really has. The nearest valid neighbour: the
+        // function the caller would get, written as one.
+        assertTrue("`fun`(\"constructor\"" in m, m)
+        assertCompiles(render { `class`("C") { `fun`("constructor", param("q", INT)) { _ -> ret() } } })
+    }
+
     @Test
     fun `a secondary constructor still carries a visibility`() {
         assertCompiles(

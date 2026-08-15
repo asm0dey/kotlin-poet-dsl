@@ -201,8 +201,8 @@ internal fun declarationForm(kindName: String): DeclarationForm = when (kindName
  *
  * - `FUN` on a class, an object or a function is a **syntax error** — `fun class M` and `fun fun f()`
  *   are both *function declaration must have a name*, because `fun` starts a function declaration
- *   and the parser never reaches the rest — and on a **constructor** it renders a function *named*
- *   `constructor`, which is *function 'constructor' without a body must be abstract*;
+ *   and the parser never reaches the rest — and on a **constructor** it is not a language rule at
+ *   all: see [funOnAConstructor];
  * - `ENUM` on a constructor is *syntax error: 'class' keyword is expected after 'enum'*;
  * - `INLINE` on a property is KotlinPoet's own refusal, and a render gap rather than a language
  *   rule.
@@ -218,6 +218,7 @@ internal fun modifierNotApplicable(
     noun: String = form.noun,
 ): Nothing {
     val word = modifier.name.lowercase()
+    if (modifier == KModifier.FUN && form == DeclarationForm.CONSTRUCTOR) funOnAConstructor(construct)
     if (modifier == KModifier.INLINE && form == DeclarationForm.PROPERTY) {
         kindRefusal(
             construct,
@@ -229,35 +230,58 @@ internal fun modifierNotApplicable(
                 "accessor here. Drop INLINE — it changes no signature a generator's caller can see.",
         )
     }
-    // Three of the denials draw a sentence of their own rather than *modifier 'x' is not applicable
+    // Two of the denials draw a sentence of their own rather than *modifier 'x' is not applicable
     // to 'y'*, because the keyword starts a **different declaration** and the parser never reaches
     // the one the caller meant. Each is quoted as measured, kotlinc 2.4.10:
     //
     //     fun class M                     function declaration must have a name.
     //     class C { enum constructor(q: Int) { } }
     //                                     syntax error: 'class' keyword is expected after 'enum'.
-    //     class C { fun constructor(q: Int) { } }
-    //                                     function 'constructor' without a body must be abstract.
     val diagnostic = when {
         modifier == KModifier.ENUM && form == DeclarationForm.CONSTRUCTOR ->
             "syntax error: 'class' keyword is expected after 'enum'"
-        modifier == KModifier.FUN && form == DeclarationForm.CONSTRUCTOR ->
-            "function 'constructor' without a body must be abstract"
         modifier == KModifier.FUN -> "function declaration must have a name"
         else -> "modifier '$word' is not applicable to '$noun'"
     }
     kindRefusal(
         construct,
-        if (modifier == KModifier.FUN && form == DeclarationForm.CONSTRUCTOR) {
-            "$subject carries FUN, so what renders is not a constructor at all but a function " +
-                "named `constructor`"
-        } else {
-            "$subject carries $modifier, which Kotlin accepts on ${article(noun)} $noun nowhere"
-        },
+        "$subject carries $modifier, which Kotlin accepts on ${article(noun)} $noun nowhere",
         diagnostic,
         "Drop $modifier${applicableForms(modifier)}.",
     )
 }
+
+/**
+ * `FUN` on a secondary constructor, the one row of [DeclarationForm]'s table that is **not** a
+ * language rule — and the one whose sentence depended on a shape the matrix never built.
+ *
+ * KotlinPoet omits a constructor's body when it is empty (`canBodyBeOmitted`), so a probe written
+ * with empty bodies only ever produces the bodyless half. Measured, one file per row, `kotlinc`,
+ * `kotlinc-js` and `kotlinc-wasm` 2.4.10, all three agreeing:
+ *
+ *     class C { fun constructor(q: Int) { println(q) } }   CLEAN
+ *     class C { fun constructor(q: Int) }                  function 'constructor' without a body
+ *                                                          must be abstract.
+ *     class C(val a: Int) {                                function 'constructor' without a body
+ *       fun constructor(q: Int) : this(1) { println(q) }   must be abstract, and six syntax errors
+ *     }                                                    after it
+ *
+ * So this is the DSL **declining a spelling**, not Kotlin refusing a shape, and it says so instead of
+ * quoting one sentence at all three rows. It is deliberately not gated on the body being empty: the
+ * check runs before the body lambda has been called and before D25's delegation call has been
+ * written, and `` `constructor` `` means a secondary constructor — rendering a *function* from it
+ * would be the "silently wrong output" Global Constraint 26 is about, whichever way the body falls.
+ * The remedy names the construct that renders exactly the third row's valid half.
+ */
+internal fun funOnAConstructor(construct: String): Nothing = error(
+    "$construct: this secondary constructor carries FUN, so what would render is not a constructor " +
+        "at all but a function named `constructor` — with an empty body that is \"function " +
+        "'constructor' without a body must be abstract\" on the JVM, on Kotlin/JS and on Kotlin/Wasm " +
+        "alike, because KotlinPoet omits a constructor's empty body, and with a delegation call it " +
+        "is a syntax error on all three. This DSL declines the spelling rather than rendering a " +
+        "function from a constructor: write `fun`(\"constructor\", …) if a member function by that " +
+        "name is what you want, or drop FUN.",
+)
 
 /** ", which is applicable to a class and to an interface" — or "" where the modifier fits nothing else. */
 private fun applicableForms(modifier: KModifier): String {
