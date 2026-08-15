@@ -169,6 +169,85 @@ internal fun Scope.innerNeedsAnEnclosingClass(kindName: String, name: String): N
 }
 
 /**
+ * The classifier kinds `inner` is **incompatible with**, and the sentence each one draws.
+ *
+ * This is the second half of the `inner` rule and it is about the declaration rather than about its
+ * container: [innerAllowed] answers *may an `inner` class be declared here?*, and this answers *may
+ * this classifier be `inner` at all?*
+ *
+ * **The E3 fix round widened [innerAllowed] to the two anonymous bodies correctly and turned ten
+ * refusals into invalid renders doing it**, because at base every `inner` declaration in an
+ * anonymous body was refused for the container's sake, and afterwards every one of them rendered.
+ * Its 128-cell sweep could not see that: the cells were 32 **single** modifiers × 2 base forms × 2
+ * bodies, so a *pair* is not a coordinate of that product — this project's recurring defect, for
+ * the fourth time.
+ *
+ * The sweep this table comes from is `inner × each of the other 31 KModifier values × {`class N`,
+ * `class N(val a: Int)`} × {a class body, an anonymous object's body, an enum entry's body}`, each
+ * cell rendered **through this DSL** and each render judged on `kotlinc`, `kotlinc-js` and
+ * `kotlinc-wasm` 2.4.10 — the render, because `public sealed inner class N` is what KotlinPoet
+ * emits for `` `class`(INNER + SEALED, …) `` and it is a different input from `sealed inner class
+ * N`. Eighteen distinct declarations render; six of them are invalid, in **all three** containers
+ * alike:
+ *
+ *     public inner annotation class N       modifier 'inner' is not applicable to 'annotation class'.
+ *     public inner enum class N             modifier 'inner' is not applicable to 'enum class'  —
+ *                                           and to *'local class'* in either anonymous body, where
+ *                                           `enum` makes the declaration local and `inner` cannot
+ *                                           make it a member
+ *     public sealed inner class N           modifier 'sealed' is incompatible with 'inner'.
+ *     public inner data class N(val a: Int) modifier 'inner' is incompatible with 'data'.
+ *     public inner value class N(val a: Int) value class cannot be local or inner.
+ *     public inner inline class N(val a: Int) — the same sentence; `inline` is `value`'s old spelling
+ *
+ * and the controls, clean on all three frontends in all three containers: `public inner class N`,
+ * `public inner class N(val a: Int)`, and each of the five kinds **without** `inner` in a class body
+ * (`public annotation class N`, `public enum class N`, `public sealed class N`, `public data class
+ * N(val a: Int)`, `public value class N(val a: Int)` — the last needing `@JvmInline` on the JVM,
+ * D37's platform rule and not this DSL's business). So it is the pair that is refused and neither
+ * half; each half is a shape this DSL still renders.
+ *
+ * The remaining twelve rendered pairs are left alone deliberately: `private`/`internal`/`final`/
+ * `open`/`abstract`/`actual`/`expect` × `inner` are **clean**, `protected` × `inner` is clean in a
+ * class body and in an anonymous object's and is already refused in an enum entry's by
+ * [protectedAllowed], and `external` × `inner` is invalid in every one of the three — but so is
+ * `external` on a nested class *without* `inner*, which is D41's still-open `external` row and not a
+ * pair fact. Recorded in D43 rather than closed here.
+ */
+private val INNER_INCOMPATIBLE_KINDS: List<KModifier> = listOf(
+    KModifier.ANNOTATION, KModifier.ENUM, KModifier.SEALED, KModifier.DATA,
+    KModifier.VALUE, KModifier.INLINE,
+)
+
+/** See [INNER_INCOMPATIBLE_KINDS]. Asked wherever `inner` reaches a render — one fact, two readers. */
+internal fun Scope.checkInnerKindPair(construct: String, name: String, modifiers: Collection<KModifier>) {
+    if (KModifier.INNER !in modifiers) return
+    val kind = INNER_INCOMPATIBLE_KINDS.firstOrNull { it in modifiers } ?: return
+    val word = kind.name.lowercase()
+    kindRefusal(
+        construct,
+        "'$name' carries INNER and $word, and an `inner` class is a member with an enclosing " +
+            "instance, which ${if (kind == KModifier.SEALED) "a `sealed class`" else "a `$word class`"} " +
+            "cannot be",
+        when (kind) {
+            KModifier.ANNOTATION -> "modifier 'inner' is not applicable to 'annotation class'"
+            // `enum` makes the declaration a *local* class in an anonymous body, so the noun the
+            // frontends print there is not the one they print in a class body. Measured in both.
+            KModifier.ENUM ->
+                "modifier 'inner' is not applicable to " +
+                    if (isAnonymousBody) "'local class'" else "'enum class'"
+            // KotlinPoet renders the modifiers in `KModifier` order, so `sealed` precedes `inner`
+            // and this is the sentence the *render* draws; written the other way round the
+            // frontends name the other modifier first.
+            KModifier.SEALED -> "modifier 'sealed' is incompatible with 'inner'"
+            KModifier.DATA -> "modifier 'inner' is incompatible with 'data'"
+            else -> "value class cannot be local or inner"
+        },
+        "Drop INNER — a nested classifier needs no modifier to be one — or drop ${kind.name}.",
+    )
+}
+
+/**
  * Whether a **member** may be declared in this scope at all.
  *
  * An `annotation class` is a declaration of a shape, not of a thing with behaviour: it holds its

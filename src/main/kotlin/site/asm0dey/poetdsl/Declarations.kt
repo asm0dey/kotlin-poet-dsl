@@ -150,6 +150,12 @@ internal fun Scope.declareType(
     if (KModifier.INNER in modifiers.toList() && !innerAllowed) {
         innerNeedsAnEnclosingClass(kindName, name)
     }
+    // …and the *pair* half of the same modifier, asked after the container half so that its quoted
+    // sentence is only ever printed for a container the pair was measured in — the two that accept
+    // an `inner` class at all. See [INNER_INCOMPATIBLE_KINDS], and D43 for why this is a fix rather
+    // than a widening: every one of these rendered the day `innerAllowed` learnt about the
+    // anonymous bodies.
+    checkInnerKindPair("`$kindName`", name, modifiers.toList())
     if (!nestedTypesAllowed && KModifier.INNER !in modifiers.toList()) {
         holdsNoNestedType(kindName, name)
     }

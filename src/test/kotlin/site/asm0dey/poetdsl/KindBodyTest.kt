@@ -10,6 +10,8 @@ import com.squareup.kotlinpoet.KModifier.EXPECT
 import com.squareup.kotlinpoet.KModifier.EXTERNAL
 import com.squareup.kotlinpoet.KModifier.FUN
 import com.squareup.kotlinpoet.KModifier.LATEINIT
+import com.squareup.kotlinpoet.KModifier
+import com.squareup.kotlinpoet.KModifier.INLINE
 import com.squareup.kotlinpoet.KModifier.INNER
 import com.squareup.kotlinpoet.KModifier.INTERNAL
 import com.squareup.kotlinpoet.KModifier.OPEN
@@ -100,6 +102,108 @@ class KindBodyTest {
         assertTrue(
             "inner class N" in render { `interface`("O") { `class`("M") { `class`(INNER, "N") { } } } },
         )
+    }
+
+    // --- …and the pair half: which classifier kinds may be `inner` at all ----------------------
+
+    /**
+     * `inner` is refused **on** five classifier kinds, in all three containers that take an `inner`
+     * class: a class body, an anonymous object's body and an enum entry's. Every row is a render
+     * this DSL emitted until this round — the E3 fix round widened [Scope.innerAllowed] to the two
+     * anonymous bodies, and every `inner` pair in those bodies went from refused to rendered with
+     * it, because its sweep was 32 *single* modifiers and a pair is not a coordinate of that
+     * product.
+     *
+     * The quoted sentences are the compiler's, transcribed from a run over the **renders**, and the
+     * render is not the input: KotlinPoet emits `public sealed inner class N` for
+     * `` `class`(INNER + SEALED, …) ``, and the frontends name the first-written modifier, so
+     * `inner sealed class N` and `sealed inner class N` draw the two halves of one sentence.
+     */
+    @Test
+    fun `inner is refused on the five classifier kinds it is incompatible with`() {
+        data class Row(val modifier: KModifier, val sentence: String, val param: Boolean)
+        val rows = listOf(
+            Row(ANNOTATION, "modifier 'inner' is not applicable to 'annotation class'", false),
+            Row(SEALED, "modifier 'sealed' is incompatible with 'inner'", false),
+            Row(DATA, "modifier 'inner' is incompatible with 'data'", true),
+            Row(VALUE, "value class cannot be local or inner", true),
+            Row(INLINE, "value class cannot be local or inner", true),
+        )
+        for (row in rows) {
+            val declare: TypeScope.() -> Unit = {
+                if (row.param) {
+                    `class`(Modifiers(setOf(INNER, row.modifier)), "N", param(VAL, "a", INT)) { }
+                } else {
+                    `class`(Modifiers(setOf(INNER, row.modifier)), "N") { }
+                }
+            }
+            val inClass = message { `class`("C") { declare() } }
+            assertTrue(row.sentence in inClass, inClass)
+            val inAnonymous = message { `fun`("f") { `val`("v", init = anonymousObject(body = declare)) } }
+            assertTrue(row.sentence in inAnonymous, inAnonymous)
+            val inEntry = message { `class`(ENUM, "E") { enumEntry("A", body = declare) } }
+            assertTrue(row.sentence in inEntry, inEntry)
+        }
+    }
+
+    /**
+     * `enum` is the one of the five whose **noun** moves: the frontends call the declaration an
+     * *enum class* in a class body and a *local class* in either anonymous body, because `enum`
+     * makes it local there and `inner` cannot make it a member. Measured, one file per cell, all
+     * three frontends:
+     *
+     *     class C { public inner enum class N }              modifier 'inner' is not applicable to
+     *                                                        'enum class'.
+     *     val v = object { public inner enum class N }       …to 'local class'.
+     *     enum class E { A { public inner enum class N } }   …to 'local class'.
+     */
+    @Test
+    fun `the inner enum sentence names the container's own noun`() {
+        val declare: TypeScope.() -> Unit = { `class`(Modifiers(setOf(INNER, ENUM)), "N") { } }
+        val inClass = message { `class`("C") { declare() } }
+        assertTrue("modifier 'inner' is not applicable to 'enum class'" in inClass, inClass)
+        val inAnonymous = message { `fun`("f") { `val`("v", init = anonymousObject(body = declare)) } }
+        assertTrue("modifier 'inner' is not applicable to 'local class'" in inAnonymous, inAnonymous)
+        val inEntry = message { `class`(ENUM, "E") { enumEntry("A", body = declare) } }
+        assertTrue("modifier 'inner' is not applicable to 'local class'" in inEntry, inEntry)
+    }
+
+    /**
+     * The control rows, and they are what say this refuses the **pair** and not either half: an
+     * `inner` class still renders in all three containers, and each of the five kinds still renders
+     * without `inner`. Compiled, so "still renders" is not the whole claim.
+     */
+    @Test
+    fun `an inner class and each classifier kind still render on their own`() {
+        val anonymous = render {
+            `fun`("f") {
+                `val`("v", init = anonymousObject { `class`(INNER, "N") { `val`("p", INT, init = 1.lit) } })
+            }
+        }
+        assertTrue("inner class N" in anonymous, anonymous)
+        assertCompiles(anonymous)
+        val entry = render {
+            `class`(ENUM, "E") { enumEntry("A") { `class`(INNER, "N") { } } }
+        }
+        assertTrue("inner class N" in entry, entry)
+        assertCompiles(entry)
+        val kinds = render {
+            `class`("C") {
+                `class`(ANNOTATION, "A") { }
+                `class`(ENUM, "N") { }
+                `class`(SEALED, "S") { }
+                `class`(DATA, "D", param(VAL, "a", INT)) { }
+            }
+        }
+        assertTrue("annotation class A" in kinds, kinds)
+        assertCompiles(kinds)
+        // A `value class` is the one whose control the JVM refuses for a reason of its own —
+        // *value classes without '@JvmInline' annotation are not yet supported*, D37's platform
+        // rule and the caller's annotation to add — so it is rendered here and compiled on the two
+        // frontends that can see past that.
+        val valueClass = render { `class`("C") { `class`(VALUE, "V", param(VAL, "a", INT)) { } } }
+        assertTrue("value class V" in valueClass, valueClass)
+        assertCompilesEverywhereButJvm(valueClass)
     }
 
     // --- an `inner class` holds no nested classifier ------------------------------------------
