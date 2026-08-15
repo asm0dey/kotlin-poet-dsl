@@ -490,8 +490,10 @@ class AnonymousObjectTest {
      *     val v = object { public class N }                    modifier 'public' is not applicable
      *     enum class E { A { public class N } }                 to 'local class'.
      *
-     * The brief named four of these eight; the `funSpec(PROTECTED)` row and both `+typeSpec` rows
-     * were found by building the neighbours it did not.
+     * The brief named **five** of these eight — the four `ABSTRACT` rows and the
+     * `propertySpec(PROTECTED)` one — and the `funSpec(PROTECTED)` row and both `+typeSpec` rows
+     * were found by building the neighbours it did not. (It said four here and five in the report
+     * body; the report body is the one that matches `e3-fix-brief.md`.)
      */
     @Test
     fun `the splice paths ask the anonymous body's own questions`() {
