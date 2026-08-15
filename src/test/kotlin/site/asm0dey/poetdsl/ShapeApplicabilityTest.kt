@@ -301,6 +301,30 @@ class ShapeApplicabilityTest {
     }
 
     /**
+     * The expiry watch for [EXPERIMENTAL_OPERATOR_NAMES].
+     *
+     * `of` is a key of the compiler's table, so the pin above cannot see it, and it never draws
+     * *illegal function name*, so the sweep above cannot see it either — both assertions are
+     * invariant across stabilisation. What changes is *this* sentence: today `operator fun of` is
+     * refused because the feature is experimental and this DSL passes no compiler flag, ever. When
+     * collection literals stabilise, the diagnostic goes away, `of` becomes a false rejection, and
+     * this test fails.
+     *
+     * Written after a review found the KDoc claiming the pin would catch this. It would not.
+     */
+    @Test
+    fun `an experimental operator name is still an error unflagged`() {
+        val source = "class C { operator fun of(x: Int) { } }"
+        listOf(
+            "kotlinc" to compile(source).messages,
+            "kotlinc-js" to compileJs(source).messages,
+            "kotlinc-wasm" to compileWasm(source).messages,
+        ).forEach { (frontend, messages) ->
+            assertTrue("collection literals" in messages, "$frontend: $messages")
+        }
+    }
+
+    /**
      *     operator fun plus(x: Int) { }                    'operator' modifier is not applicable to
      *     fun outer() { operator fun plus(x: Int) { } }    function: must be a member or an
      *                                                      extension function.

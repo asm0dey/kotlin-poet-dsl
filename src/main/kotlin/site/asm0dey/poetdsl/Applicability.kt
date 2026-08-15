@@ -726,8 +726,15 @@ internal val MEMBER_INHERITANCE_MODIFIERS: List<KModifier> =
  *
  * Subtracted from the compiler's table by `the operator name set is the compiler's own table`, so
  * the exclusion is one line of a test rather than a name silently missing from [OPERATOR_NAMES].
- * **When collection literals stabilise this becomes a false rejection**, and the test that fails is
- * the same one — the exclusion has to be deleted by hand, which is the point of writing it down.
+ *
+ * **When collection literals stabilise this becomes a false rejection**, and the test that catches
+ * that is `an experimental operator name is still an error unflagged`, which compiles the shape and
+ * asserts the experimental-feature diagnostic. An earlier version of this KDoc claimed the *pin*
+ * would fail instead; it would not — `of` stays a key of the table after stabilisation, so the set
+ * assertion is invariant, and the frontend sweep filters on *illegal function name*, a sentence `of`
+ * never draws in either world. That was this round's own lesson — an expiry written down and pinned
+ * to nothing — reproduced in the fix that teaches it, which is why the expiry now has a test that
+ * actually watches the thing that changes.
  */
 internal val EXPERIMENTAL_OPERATOR_NAMES: Set<String> = setOf("of")
 
@@ -754,7 +761,8 @@ internal val EXPERIMENTAL_OPERATOR_NAMES: Set<String> = setOf("of")
  * - **`hashCode`, `toString`, `toInt`, `toDouble`, `and`, `or`, `xor`, `shl`, `shr` and `ushr`** are
  *   all constants of `OperatorNameConventions`, which is a bag of well-known `Name`s and **not** the
  *   operator table; every one of them is *illegal function name* on all three frontends. Deriving
- *   this set from that class would have opened ten invalid renders while closing one false rejection.
+ *   this set from that class would have opened **nineteen** invalid renders while closing one false
+ *   rejection (the E2f review counted them; ten was the subset that had been compiled).
  */
 internal val OPERATOR_NAMES: Set<String> = setOf(
     "plus", "minus", "times", "div", "rem",
