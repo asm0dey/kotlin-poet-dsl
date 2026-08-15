@@ -110,6 +110,20 @@ internal fun Scope.declareType(
     if (KModifier.PROTECTED in modifiers.toList() && !protectedAllowed) {
         protectedNeedsAClass("`$kindName`", "'$name'", noun = null)
     }
+    // …and the interface body's own two, which reach a nested classifier exactly as they reach a
+    // function and a property: an interface member is public or private, and it is open. See
+    // [internalAllowed] and [finalAllowed].
+    if (KModifier.INTERNAL in modifiers.toList() && !internalAllowed) {
+        interfaceBodyRefusal("`$kindName`", "'$name'", KModifier.INTERNAL)
+    }
+    if (KModifier.FINAL in modifiers.toList() && !finalAllowed) {
+        interfaceBodyRefusal("`$kindName`", "'$name'", KModifier.FINAL)
+    }
+    // `` `object`(COMPANION, …) `` is the second spelling of `companionObject`, and it never asked
+    // the question `addCompanionObject` has asked since Task 12. One predicate, two readers.
+    if (KModifier.COMPANION in modifiers.toList() && !companionAllowed) {
+        companionNeedsAClassOrInterface("`$kindName`", name)
+    }
     // The two rules of the classifier-kind family that are about *this* declaration's placement
     // rather than about its body, asked before the name is registered so that a refused declaration
     // does not burn a name — the same ordering Task 12 gave a rejected binding. See [Kinds] for the
@@ -842,6 +856,20 @@ internal fun buildFun(
                     is FileScope -> "top level function"
                 },
             )
+        }
+        // The interface body's four, in the container that has them. The last two are keyed on
+        // PRIVATE as well as on the container, because that is the one way an interface member is
+        // not open — see [openMemberRefusal].
+        if (KModifier.INTERNAL in declaredModifiers && !parent.internalAllowed) {
+            interfaceBodyRefusal("`fun`", "'$name'", KModifier.INTERNAL)
+        }
+        if (KModifier.FINAL in declaredModifiers && !parent.finalAllowed) {
+            interfaceBodyRefusal("`fun`", "'$name'", KModifier.FINAL)
+        }
+        if (parent is TypeScope && parent.kindName == "interface" && KModifier.PRIVATE !in declaredModifiers) {
+            declaredModifiers.firstOrNull { it == KModifier.TAILREC || it == KModifier.INLINE }?.let {
+                openMemberRefusal("`fun`", name, it)
+            }
         }
         if (parent !is TypeScope) {
             declaredModifiers.firstOrNull { it in MEMBER_INHERITANCE_MODIFIERS }?.let {

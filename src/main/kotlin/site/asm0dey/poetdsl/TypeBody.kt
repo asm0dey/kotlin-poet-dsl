@@ -115,7 +115,12 @@ internal fun TypeScope.addInitializerBlock(body: BlockScope.() -> Unit) {
  * refused by the kind check below rather than rendered.
  */
 internal fun TypeScope.addCompanionObject(name: String?, kdoc: String?, body: TypeScope.() -> Unit) {
-    check(kindName == "class" || kindName == "interface") {
+    // [Scope.companionAllowed], not this list written out again: `` `object`(COMPANION, …) `` is a
+    // second spelling of this construct and asks the same question, and the two had already drifted
+    // — that one rendered `companion object O` at file level and reached KotlinPoet's own
+    // `IllegalArgumentException` inside an object. One fact, one reader; the sentences stay separate
+    // because the constructs are.
+    check(companionAllowed) {
         "companionObject: ${article(kindName)} $kindName cannot declare a companion object; only a " +
             "class or an interface can."
     }

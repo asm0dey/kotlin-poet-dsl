@@ -399,19 +399,186 @@ internal fun Scope.protectedNeedsAClass(construct: String, subject: String, noun
         "$subject is PROTECTED and is declared in ${containerLabel()}, which has no subclass for " +
             "the visibility to mean anything to",
         if (noun == null) {
-            "modifier 'protected' is not applicable inside '${protectedContainerNoun()}'"
+            "modifier 'protected' is not applicable inside '${containerNoun()}'"
         } else {
             "modifier 'protected' is not applicable to '$noun'"
         },
         "Use PRIVATE, INTERNAL or PUBLIC, or move the declaration into a class.",
     )
 
-/** The bare noun *modifier 'protected' is not applicable inside 'x'* names. */
-private fun Scope.protectedContainerNoun(): String = when (this) {
+/**
+ * The bare noun *modifier 'x' is not applicable inside 'y'* names — `protected`'s and `companion`'s
+ * alike, since the frontends name the container the same way for both.
+ *
+ * A **block** never reaches here: a local declaration draws the noun of its own *form* rather than
+ * its container's — *modifier 'protected' is not applicable to 'local class'*, measured, all three
+ * frontends — so [declareType] and [buildFun] both pass that noun in, and a local `object` is
+ * refused before this by [declareType]'s `localAllowed` check. The branch answers with the form
+ * anyway, for the day one of those changes: *'block'* is a noun no frontend has ever printed.
+ */
+private fun Scope.containerNoun(): String = when (this) {
     is FileScope -> "file"
-    is BlockScope -> "block"
+    is BlockScope -> "local class"
     is TypeScope -> if (kindName == "named object") "standalone object" else kindName
 }
+
+/**
+ * Whether a **companion object** may be declared in this scope — a class body or an interface body,
+ * and nothing else. Measured, one file per row, all three frontends identical:
+ *
+ *     companion object O                                        modifier 'companion' is not
+ *     object Outer { companion object O }                       applicable inside 'file' /
+ *     class Outer { companion object { companion object O } }   'standalone object' /
+ *                                                               'companion object'.
+ *
+ * and the controls, clean on all three: `class C { companion object O }` and
+ * `interface I { companion object O }`.
+ *
+ * The same question `addCompanionObject` has asked since Task 12, read through one predicate now
+ * rather than spelled out at each — because `` `object`(COMPANION, …) `` is a **second spelling** of
+ * the same construct and never asked it, which is how `companion object O` at file level rendered
+ * and how a companion object inside an object reached KotlinPoet's own `IllegalArgumentException`.
+ */
+internal val Scope.companionAllowed: Boolean
+    get() = this is TypeScope && (kindName == "class" || kindName == "interface")
+
+/** See [companionAllowed]. */
+internal fun Scope.companionNeedsAClassOrInterface(construct: String, name: String): Nothing =
+    kindRefusal(
+        construct,
+        "'$name' is COMPANION and is declared in ${containerLabel()}, which has no companion object " +
+            "to be — only a class and an interface do",
+        "modifier 'companion' is not applicable inside '${containerNoun()}'",
+        "Declare '$name' in a class or an interface — or drop COMPANION, which leaves an ordinary " +
+            "object.",
+    )
+
+// --------------------------------------------------------------------------------------------
+// The **interface body**, one of the two container positions D42's matrix omitted (the other is a
+// companion object, and it cost this file a false rejection — see [protectedAllowed]).
+//
+// An interface publishes a contract, and Kotlin says two things about the members of one: they are
+// `public` or `private` and nothing else, and they are **open**. Four refusals follow, and each is
+// keyed on the container rather than on the form, because all four hold for a nested classifier, a
+// function and a property alike.
+
+/**
+ * Whether a declaration written in this scope may be `internal`.
+ *
+ * Measured, one file per row, `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10, all three
+ * identical, and at every depth:
+ *
+ *     interface I { internal fun f() { } }   modifier 'internal' is not applicable inside
+ *     interface I { internal class M }       'interface'.
+ *     interface I { internal val p: Int }
+ *     class Outer { class Inner { interface I { internal class M } } }
+ *
+ * and the controls, clean on all three: the same members declared `private`; the same members in a
+ * class, in an object and at file level; and — the row that keeps this keyed on the *immediate*
+ * container — `interface I { companion object { internal val x: Int = 1 } }`, because a companion
+ * object is a container of its own and takes what its interface does not.
+ *
+ * The function row is also one of the three cells in these two positions that reached **KotlinPoet's
+ * own `IllegalArgumentException`** — *modifiers [INTERNAL] must contain none of [INTERNAL,
+ * PROTECTED]*, which names neither the construct nor the member.
+ */
+internal val Scope.internalAllowed: Boolean
+    get() = !(this is TypeScope && kindName == "interface")
+
+/**
+ * Whether a declaration written in this scope may be `final`.
+ *
+ * Its own question and its own field beside [internalAllowed], because the two coincide only by
+ * today's containers and not by their reasons: `internal` is refused because an interface member's
+ * visibility is part of the contract, `final` because an interface member is open. Measured, all
+ * three frontends, at every depth:
+ *
+ *     interface I { final fun f() { } }                           modifier 'final' is not
+ *     interface I { final class M }                               applicable inside 'interface'.
+ *     class Outer { interface I { final val p: Int get() = 1 } }
+ *
+ * and the controls, clean on all three: `object O { final val x: Int = 1 }`, the same in a class and
+ * in a companion object — including an interface's own, `interface I { companion object { final val
+ * y: Int = 1 } }`.
+ *
+ * Separate from [MEMBER_INHERITANCE_MODIFIERS], which asks whether there is a **hierarchy** at all
+ * (the file-level question) and lets a classifier through: `final class M` at file level is ordinary
+ * Kotlin and `interface I { final class M }` is not.
+ */
+internal val Scope.finalAllowed: Boolean
+    get() = !(this is TypeScope && kindName == "interface")
+
+/** See [internalAllowed] and [finalAllowed]. */
+internal fun interfaceBodyRefusal(construct: String, subject: String, modifier: KModifier): Nothing =
+    kindRefusal(
+        construct,
+        if (modifier == KModifier.INTERNAL) {
+            "$subject is INTERNAL and is declared in an interface, whose members are the contract it " +
+                "publishes — an interface member is public or private, and nothing else"
+        } else {
+            "$subject is FINAL and is declared in an interface, whose members are open by definition"
+        },
+        "modifier '${modifier.name.lowercase()}' is not applicable inside 'interface'",
+        if (modifier == KModifier.INTERNAL) {
+            "Use PUBLIC or PRIVATE, or move the declaration out of the interface — its companion " +
+                "object takes INTERNAL, and so does a class or an object."
+        } else {
+            "Drop FINAL — an interface member cannot be final — or move the declaration out of the " +
+                "interface."
+        },
+    )
+
+/**
+ * `tailrec` and `inline` on an interface's **function**, which the interface refuses for a reason of
+ * its own rather than for a visibility: both are prohibited on an open member, and every interface
+ * member is open unless it is `private`. Measured, all three frontends:
+ *
+ *     interface I { tailrec fun f(n: Int) { … } }          tailrec is prohibited on open members.
+ *     interface I { inline fun f() { } }                   'inline' modifier on virtual members is
+ *                                                          prohibited. Only private or final
+ *                                                          members can be inlined.
+ *     interface I { private tailrec fun f(n: Int) { … } }  CLEAN
+ *     interface I { private inline fun f() { } }           CLEAN
+ *     class C { tailrec fun f(n: Int) { … } }              CLEAN
+ *     class C { inline fun f() { } }                       CLEAN
+ *
+ * Kotlin's own sentence names *private or final*, and `final` is not one of the two here — an
+ * interface body refuses it outright ([finalAllowed]) — so the remedy names `private` alone.
+ */
+internal fun openMemberRefusal(construct: String, name: String, modifier: KModifier): Nothing =
+    kindRefusal(
+        construct,
+        "'$name' is $modifier and is declared in an interface, where every member is open unless it " +
+            "is PRIVATE",
+        if (modifier == KModifier.TAILREC) {
+            "tailrec is prohibited on open members"
+        } else {
+            "'inline' modifier on virtual members is prohibited. Only private or final members can " +
+                "be inlined"
+        },
+        "Declare '$name' PRIVATE, which is the one way an interface member is not open — FINAL is " +
+            "not applicable inside an interface at all — or drop $modifier.",
+    )
+
+/**
+ * A `private` property in an interface body with no accessor. It is a **shape** rule rather than a
+ * modifier one — a property with no accessor and no value in an interface is *abstract*, and an
+ * abstract member cannot be private. Measured, all three frontends:
+ *
+ *     interface I { private val p: Int }                             abstract property in
+ *     interface I { private var v: Int }                             interface cannot be private.
+ *     interface I { private val p: Int get() = 1 }                   CLEAN
+ *     interface I { private var v: Int get() = 1; set(value) { } }   CLEAN
+ */
+internal fun privateInterfacePropertyNeedsAnAccessor(construct: String, name: String): Nothing =
+    kindRefusal(
+        construct,
+        "'$name' is PRIVATE and is declared in an interface with no accessor, which makes it " +
+            "abstract, and an abstract member has nothing to be private to",
+        "abstract property in interface cannot be private",
+        "Give '$name' a getter, or drop PRIVATE — an interface property with no accessor is the " +
+            "ordinary abstract one.",
+    )
 
 /**
  * `final`, `open` and `override` are a **member's** modifiers: each of them is about overriding, and

@@ -283,6 +283,15 @@ internal fun PropertySpec.Builder.addAccessors(
  *   parameters. Its own field rather than a reading of [backingFieldAllowed], because it is a
  *   different question with a different answer: an interface forbids the *storage* and takes a
  *   getter, an annotation class forbids the *declaration* and takes nothing. See [Kinds].
+ * @property internalAllowed whether `INTERNAL` is legal on a property here — false in an interface
+ *   body, whose members are the contract it publishes. See [Scope.internalAllowed].
+ * @property finalAllowed whether `FINAL` is legal on a property here — false in an interface body,
+ *   whose members are open. Its own field beside [memberInheritanceAllowed], which asks the other
+ *   question about the same keyword: *is there a hierarchy at all?* is the file's answer, *may a
+ *   member of this hierarchy be final?* is the interface's. See [Scope.finalAllowed].
+ * @property isInterfaceBody whether this container is an interface body, which no other field
+ *   answers: the two above are per-modifier and this one is what a **shape** rule needs — a
+ *   `private` property with no accessor is abstract, and an abstract member cannot be private.
  * @property externalAllowed whether `EXTERNAL` is legal on a property here, on the same
  *   immediate-builder rule and for the same measured reason: `external class C { val a: Int }` — the
  *   render KotlinPoet produces once it drops the member's keyword — compiles clean on Kotlin/JS and
@@ -301,6 +310,9 @@ internal class PropertyContainer(
     val protectedAllowed: Boolean,
     val memberInheritanceAllowed: Boolean,
     val constAllowed: Boolean,
+    val internalAllowed: Boolean,
+    val finalAllowed: Boolean,
+    val isInterfaceBody: Boolean,
 ) {
     /** See [backingFieldDenial]. */
     val backingFieldAllowed: Boolean get() = backingFieldDenial == null
@@ -331,6 +343,9 @@ internal class PropertyContainer(
             protectedAllowed = true,
             memberInheritanceAllowed = true,
             constAllowed = true,
+            internalAllowed = true,
+            finalAllowed = true,
+            isInterfaceBody = false,
         )
     }
 }
@@ -365,6 +380,11 @@ private fun Scope.propertyContainer(): PropertyContainer {
             // …and the one modifier whose container rule points the other way: a `const val` belongs
             // to the file or to an object, and the file is where it is most at home.
             constAllowed = true,
+            // [Scope.internalAllowed] and [Scope.finalAllowed], both true here — a *file* is not an
+            // interface — read through the shared predicates for the same reason the four above are.
+            internalAllowed = internalAllowed,
+            finalAllowed = finalAllowed,
+            isInterfaceBody = false,
         )
     }
     val typeModifiers = builder.modifiers
@@ -429,6 +449,15 @@ private fun Scope.propertyContainer(): PropertyContainer {
         // A `const val` lives at file level, in a named object or in a companion object — never on
         // an instance. `kindName` separates all three of this DSL's type builders.
         constAllowed = kindName == "named object" || kindName == "companion object",
+        // The interface body's two, read through the same predicates `declareType` and `buildFun`
+        // read — one fact, one reader, as the `expect` family has in `isExpectContainer`.
+        internalAllowed = internalAllowed,
+        finalAllowed = finalAllowed,
+        // …and the container itself, for the shape rule that needs more than a modifier list. The
+        // fourth reading of `kindName == "interface"` in this function, and the fourth question:
+        // may a member have no value, may it have storage, is this a `fun interface`, and is a
+        // private member of it abstract.
+        isInterfaceBody = kindName == "interface",
     )
 }
 
@@ -490,6 +519,25 @@ internal fun checkProperty(
     // container, which is why it is built here rather than inside the refusal.
     if (KModifier.PROTECTED in declared && !container.protectedAllowed) {
         protectedNotAllowedHere(construct, name)
+    }
+    // …and the interface body's own two, which reach a property exactly as they reach a function and
+    // a nested classifier. See [Scope.internalAllowed] and [Scope.finalAllowed].
+    if (KModifier.INTERNAL in declared && !container.internalAllowed) {
+        interfaceBodyRefusal(construct, "'$name'", KModifier.INTERNAL)
+    }
+    if (KModifier.FINAL in declared && !container.finalAllowed) {
+        interfaceBodyRefusal(construct, "'$name'", KModifier.FINAL)
+    }
+    // A `private` interface property with no accessor is **abstract**, and an abstract member cannot
+    // be private — the shape half of what `private` costs in an interface body, and the reason
+    // [PropertyContainer.isInterfaceBody] exists beside the two per-modifier fields. An initializer
+    // or a delegate cannot get this far in an interface: both are refused below by the backing-field
+    // rules, whose sentences are more specific and belong to them.
+    if (container.isInterfaceBody &&
+        KModifier.PRIVATE in declared &&
+        getter == null && init == null && by == null
+    ) {
+        privateInterfacePropertyNeedsAnAccessor(construct, name)
     }
     if (!container.memberInheritanceAllowed) {
         declared.firstOrNull { it in MEMBER_INHERITANCE_MODIFIERS }?.let {

@@ -610,6 +610,210 @@ class ModifierApplicabilityTest {
         assertTrue("final" in funSpec(FINAL.toModifiers(), name = "f") { }.toString())
     }
 
+    /**
+     * **The interface body, the first of the two positions D42's matrix omitted.** An interface
+     * publishes a contract: its members are `public` or `private` and nothing else, and they are
+     * open by definition. Measured, one file per row, all three frontends agreeing, at the top level
+     * and one and two levels down:
+     *
+     *     interface I { internal fun f() { } }        modifier 'internal' is not applicable inside
+     *     interface I { internal class M }            'interface'.
+     *     interface I { internal val p: Int }
+     *     class Outer { interface I { internal fun f() { } } }
+     *     class Outer { class Inner { interface I { internal class M } } }
+     *     interface I { final fun f() { } }           modifier 'final' is not applicable inside
+     *     class Outer { interface I { final val p: Int get() = 1 } }        'interface'.
+     *
+     * `interface I { internal fun f() { } }` is also one of the three cells in these two positions
+     * that reached **KotlinPoet's own `IllegalArgumentException`** (*modifiers [INTERNAL] must
+     * contain none of [INTERNAL, PROTECTED]*), which Global Constraint 26 forbids.
+     */
+    @Test
+    fun `an interface body takes no internal and no final member`() {
+        listOf<Pair<String, FileScope.() -> Unit>>(
+            "a function" to { `interface`("I") { `fun`(INTERNAL, "f") { } } },
+            "a class" to { `interface`("I") { `class`(INTERNAL, "M") { } } },
+            "an interface" to { `interface`("I") { `interface`(INTERNAL, "J") { } } },
+            "an object" to { `interface`("I") { `object`(INTERNAL, "Q") { } } },
+            "a property" to { `interface`("I") { `val`(INTERNAL, "p", INT) } },
+            "a var" to { `interface`("I") { `var`(INTERNAL, "p", INT) } },
+            "one level down" to { `class`("O") { `interface`("I") { `fun`(INTERNAL, "f") { } } } },
+            "two levels down" to {
+                `class`("O") { `class`("N") { `interface`("I") { `class`(INTERNAL, "M") { } } } }
+            },
+        ).forEach { (label, body) ->
+            val m = message(body)
+            assertTrue("modifier 'internal' is not applicable inside 'interface'" in m, "$label: $m")
+        }
+        listOf<Pair<String, FileScope.() -> Unit>>(
+            "a function" to { `interface`("I") { `fun`(FINAL, "f") { } } },
+            "a class" to { `interface`("I") { `class`(FINAL, "M") { } } },
+            "an object" to { `interface`("I") { `object`(FINAL, "Q") { } } },
+            "a property" to { `interface`("I") { `val`(FINAL, "p", INT, getter = { ret(1.lit) }) } },
+            "a var" to { `interface`("I") { `var`(FINAL, "p", INT, getter = { ret(1.lit) }, setter = { }) } },
+            "one level down" to { `class`("O") { `interface`("I") { `fun`(FINAL, "f") { } } } },
+        ).forEach { (label, body) ->
+            val m = message(body)
+            assertTrue("modifier 'final' is not applicable inside 'interface'" in m, "$label: $m")
+        }
+    }
+
+    /**
+     * The control rows for the two above: `private` is the visibility an interface body *does* take,
+     * and every other container still takes both modifiers — including the interface's own
+     * **companion object**, which is a container of its own and takes them (measured).
+     */
+    @Test
+    fun `internal and final still render everywhere an interface body is not`() {
+        assertCompiles(
+            render {
+                `interface`("I") {
+                    `fun`(PRIVATE, "f") { }
+                    `class`(PRIVATE, "M") { }
+                    `object`(PRIVATE, "Q") { }
+                    `interface`(PRIVATE, "J") { }
+                    `val`(PRIVATE, "p", INT, getter = { ret(1.lit) })
+                    companionObject {
+                        `val`(INTERNAL, "x", INT, 1.lit)
+                        `val`(FINAL, "y", INT, 1.lit)
+                    }
+                }
+                `object`("O") { `val`(INTERNAL, "a", INT, 1.lit); `val`(FINAL, "b", INT, 1.lit) }
+                `class`("C") { `val`(INTERNAL, "a", INT, 1.lit); `val`(FINAL, "b", INT, 1.lit) }
+                `class`("D") { companionObject { `val`(INTERNAL, "a", INT, 1.lit); `val`(FINAL, "b", INT, 1.lit) } }
+                `class`(INTERNAL, "E") { }
+                `val`(INTERNAL, "top", INT, 1.lit)
+            },
+        )
+        // …and the detached builders, which answer for no container at all.
+        assertTrue("internal" in typeSpec(INTERNAL.toModifiers(), name = "M") { }.toString())
+        assertTrue("internal" in funSpec(INTERNAL.toModifiers(), name = "f") { }.toString())
+        assertTrue("final" in propertySpec(FINAL.toModifiers(), name = "p", type = INT, init = 1.lit).toString())
+    }
+
+    /**
+     * `tailrec` and `inline` are the two modifiers an interface body refuses for a **reason of its
+     * own** rather than for a visibility: an interface member is open, and both are prohibited on
+     * open members. `private` is the one way out, and it is the same one Kotlin's own sentence
+     * names. Measured, all three frontends:
+     *
+     *     interface I { tailrec fun f(n: Int) { … } }   tailrec is prohibited on open members.
+     *     interface I { inline fun f() { } }            'inline' modifier on virtual members is
+     *                                                   prohibited. Only private or final members
+     *                                                   can be inlined.
+     *     interface I { private tailrec fun f(n: Int) { … } }   CLEAN
+     *     interface I { private inline fun f() { } }            CLEAN
+     */
+    @Test
+    fun `tailrec and inline in an interface need private`() {
+        val tailrec = message { `interface`("I") { `fun`(TAILREC, "f", param("n", INT)) { _ -> } } }
+        assertTrue("tailrec is prohibited on open members" in tailrec, tailrec)
+        val inline = message { `interface`("I") { `fun`(INLINE, "f") { } } }
+        assertTrue("'inline' modifier on virtual members is prohibited" in inline, inline)
+        assertTrue(
+            "tailrec is prohibited on open members" in
+                message { `class`("O") { `interface`("I") { `fun`(TAILREC, "f", param("n", INT)) { _ -> } } } },
+        )
+        // The neighbours, compiled: `private` in the same container, and both modifiers in a class.
+        assertCompiles(
+            render {
+                `interface`("I") {
+                    `fun`(PRIVATE + TAILREC, "f", param("n", INT)) { _ -> }
+                    `fun`(PRIVATE + INLINE, "g") { }
+                }
+                `class`("C") { `fun`(TAILREC, "f", param("n", INT)) { _ -> }; `fun`(INLINE, "g") { } }
+                `object`("O") { `fun`(TAILREC, "h", param("n", INT)) { _ -> } }
+            },
+        )
+        assertTrue("tailrec" in funSpec(TAILREC.toModifiers(), name = "f") { }.toString())
+    }
+
+    /**
+     * A `private` interface property with no accessor is **abstract**, and an abstract member cannot
+     * be private — a shape rule rather than a modifier one, and the second half of what `private`
+     * costs in an interface body. Measured, all three frontends:
+     *
+     *     interface I { private val p: Int }                    abstract property in interface
+     *     interface I { private var v: Int }                    cannot be private.
+     *     interface I { private val p: Int get() = 1 }          CLEAN
+     *     interface I { private var v: Int get() = 1; set(value) { } }   CLEAN
+     */
+    @Test
+    fun `a private interface property needs an accessor`() {
+        val m = message { `interface`("I") { `val`(PRIVATE, "p", INT) } }
+        assertTrue("abstract property in interface cannot be private" in m, m)
+        val v = message { `interface`("I") { `var`(PRIVATE, "v", INT) } }
+        assertTrue("abstract property in interface cannot be private" in v, v)
+        assertTrue(
+            "abstract property in interface cannot be private" in
+                message { `class`("O") { `interface`("I") { `val`(PRIVATE, "p", INT) } } },
+        )
+        assertCompiles(
+            render {
+                `interface`("I") {
+                    `val`(PRIVATE, "p", INT, getter = { ret(1.lit) })
+                    `var`(PRIVATE, "v", INT, getter = { ret(1.lit) }, setter = { })
+                    // …and the same property without the modifier, which is the ordinary abstract one
+                    `val`("q", INT)
+                }
+            },
+        )
+        assertTrue(
+            "private" in propertySpec(PRIVATE.toModifiers(), name = "p", type = INT).toString(),
+        )
+    }
+
+    /**
+     * **The second spelling of a companion object**, and the last two of the three cells in these
+     * positions that reached KotlinPoet's own `IllegalArgumentException` (*OBJECT types can't have a
+     * companion object*). `companionObject` has asked this question since Task 12; `` `object` ``
+     * with the `COMPANION` modifier is the same construct spelled differently and never asked it.
+     * Measured, all three frontends:
+     *
+     *     companion object O                                    modifier 'companion' is not
+     *     object Outer { companion object O }                   applicable inside 'file' /
+     *     class Outer { companion object { companion object O } }  'standalone object' /
+     *                                                              'companion object'.
+     *     class C { companion object O }        CLEAN
+     *     interface I { companion object O }    CLEAN
+     *
+     * The file-level row is D42's last unfiled invalid render — *"the only one belonging to no
+     * existing family"* — and it turns out to belong to this one.
+     */
+    @Test
+    fun `companion needs a class or an interface around it`() {
+        listOf<Pair<String, Pair<String, FileScope.() -> Unit>>>(
+            "file" to ("at file level" to { `object`(COMPANION, "O") { } }),
+            "standalone object" to ("in an object" to { `object`("Outer") { `object`(COMPANION, "O") { } } }),
+            "companion object" to (
+                "in a companion object" to {
+                    `class`("Outer") { companionObject { `object`(COMPANION, "O") { } } }
+                }
+                ),
+        ).forEach { (noun, row) ->
+            val (label, body) = row
+            val m = message(body)
+            assertTrue("modifier 'companion' is not applicable inside '$noun'" in m, "$label: $m")
+        }
+        // The controls: both containers that do hold one, both spellings, and one level down.
+        assertCompiles(
+            render {
+                `class`("C") { `object`(COMPANION, "O") { } }
+                `interface`("I") { `object`(COMPANION, "P") { } }
+                `class`("D") { companionObject { } }
+                `class`("Top") { `class`("Inner") { `object`(COMPANION, "Q") { } } }
+            },
+        )
+        // There is no detached row to keep: `typeSpec` builds a **class**, so `COMPANION` is refused
+        // there by the form table (*modifier 'companion' is not applicable to 'class'*) and never
+        // reaches a container question at all. D42 says the same thing from the other side — an
+        // object and an interface have no detached builder.
+        val detached = assertFailsWith<IllegalStateException> {
+            typeSpec(COMPANION.toModifiers(), name = "O") { }
+        }.message!!
+        assertTrue("modifier 'companion' is not applicable to 'class'" in detached, detached)
+    }
+
     /** A `const val` belongs to the file or to an object, never to an instance. */
     @Test
     fun `const needs a file or an object around it`() {
