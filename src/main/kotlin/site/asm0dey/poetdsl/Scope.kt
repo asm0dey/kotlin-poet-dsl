@@ -55,6 +55,15 @@ public class FileScope internal constructor(
     names: NameScope,
     id: ScopeId,
 ) : Scope(names, id), Annotatable {
+    /**
+     * Aliases already used by an `aliasedImport` in this file (D43). KotlinPoet keeps its imports in
+     * a `TreeSet` keyed on the *imported* name, so two aliases that collide are two distinct entries
+     * and both are emitted; Kotlin answers that with *conflicting import: imported name 'X' is
+     * ambiguous*. Its own set, not [declaredTypeNames]: an alias and a declared type of the same name
+     * are a different question, and this DSL has measured no answer for it.
+     */
+    internal val declaredImportAliases: MutableSet<String> = mutableSetOf()
+
     /** Annotations added at file level default to the `@file:` use-site target. */
     override fun addAnnotation(spec: AnnotationSpec) {
         builder.addAnnotation(
