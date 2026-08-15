@@ -632,46 +632,92 @@ internal val MEMBER_INHERITANCE_MODIFIERS: List<KModifier> =
 //
 // The `operator` check is a **necessary** condition and deliberately nothing more: a name outside
 // Kotlin's set can never carry the modifier, in any container, at any arity, with or without a
-// receiver — so it cannot over-refuse. The per-operator conventions (`get` needs a parameter,
-// `compareTo` must return `Int`, `inc` must return a supertype of its receiver) are the frontend's,
-// and each would need its own measurement before it could be written here.
+// receiver. **That makes it unable to over-refuse if and only if the set this file holds equals the
+// set the language holds** — the argument is about the *shape* of the check and says nothing about
+// its input, and stating it without its condition is how `inv` came to be refused for a round while
+// a comment two lines up claimed refusal was impossible. The set is therefore pinned against the
+// compiler's own table and not written out from memory; see [OPERATOR_NAMES].
+//
+// The general form, which is this round's lesson: **when a guard's correctness depends on a set,
+// derive the set or pin it against its source.** A hand-enumerated set makes a sound argument
+// unsound without changing a word of it.
+//
+// The per-operator conventions (`get` needs a parameter, `compareTo` must return `Int`, `inc` must
+// return a supertype of its receiver) are the frontend's, and each would need its own measurement
+// before it could be written here.
 
 /**
- * Kotlin's operator names. Measured one file per row on `kotlinc`, `kotlinc-js` and `kotlinc-wasm`
- * 2.4.10 as `class C { operator fun <name>(x: Int) { } }`, and split on whether the diagnostic is
- * *'operator' modifier is not applicable to function: **illegal function name*** — every name below
- * draws one of the *other* sentences (*must return 'Int'*, *must have no value parameters*, …), which
- * is the frontend judging a shape rather than a name.
+ * The operator names Kotlin **recognises but does not yet enable** — today exactly `of`, the
+ * collection-literal operator. It is a key of the compiler's table like any other, so a name-only
+ * check derived from that table alone would let it through; and `class C { operator fun of(x: Int)
+ * { } }` is *the feature "collection literals" is experimental and should be enabled explicitly …
+ * '-Xcollection-literals'* on `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10, an **error** on all
+ * three. This DSL passes no compiler flag ever, so there is no target that accepts the render and
+ * the name stays refused — the same reading of *"not valid Kotlin means on the target platform"*
+ * that keeps `external` classifiers allowed.
  *
- * `mod` and `modAssign` are **not** here: they were operator names once and on 2.4.10 they are
- * *illegal function name* like any other, on all three frontends.
+ * Subtracted from the compiler's table by `the operator name set is the compiler's own table`, so
+ * the exclusion is one line of a test rather than a name silently missing from [OPERATOR_NAMES].
+ * **When collection literals stabilise this becomes a false rejection**, and the test that fails is
+ * the same one — the exclusion has to be deleted by hand, which is the point of writing it down.
  */
-private val OPERATOR_NAMES: Set<String> = setOf(
+internal val EXPERIMENTAL_OPERATOR_NAMES: Set<String> = setOf("of")
+
+/**
+ * Kotlin's operator names, **pinned against the compiler's own table rather than enumerated from
+ * memory** — see `the operator name set is the compiler's own table`, which reads
+ * `OperatorFunctionChecks.checksByName` (the map K2's `FirOperatorModifierChecker` looks a name up in
+ * before it reports *illegal function name*) off the test classpath and asserts it equals this set
+ * plus [EXPERIMENTAL_OPERATOR_NAMES]. If Kotlin adds an operator name, that test fails.
+ *
+ * **It was enumerated by hand, and the hand missed `inv`.** `class C { operator fun inv(): C = this }`
+ * is clean on all three frontends and this DSL refused it for a round. The check's justification —
+ * a name-only test is a *necessary* condition, so it cannot over-refuse — is sound and was resting on
+ * an unsound input: the argument holds **only if this set equals the language's set**, which nothing
+ * checked. That is the round's general lesson: *when a guard's correctness depends on a set, derive
+ * the set or pin it against its source.*
+ *
+ * Each name is also measured behaviourally, one class per name on all three frontends, by `the
+ * frontends judge every name in the set`: every name here draws one of the *other* sentences
+ * (*must return 'Int'*, *must have no value parameters*, …), which is the frontend judging a shape
+ * rather than a name. Two names that look like they belong and do not:
+ *
+ * - **`mod` and `modAssign`** were operator names once; on 2.4.10 they are *illegal function name*.
+ * - **`hashCode`, `toString`, `toInt`, `toDouble`, `and`, `or`, `xor`, `shl`, `shr` and `ushr`** are
+ *   all constants of `OperatorNameConventions`, which is a bag of well-known `Name`s and **not** the
+ *   operator table; every one of them is *illegal function name* on all three frontends. Deriving
+ *   this set from that class would have opened ten invalid renders while closing one false rejection.
+ */
+internal val OPERATOR_NAMES: Set<String> = setOf(
     "plus", "minus", "times", "div", "rem",
     "plusAssign", "minusAssign", "timesAssign", "divAssign", "remAssign",
-    "inc", "dec", "unaryPlus", "unaryMinus", "not",
+    "inc", "dec", "unaryPlus", "unaryMinus", "not", "inv",
     "equals", "compareTo", "contains", "invoke", "iterator", "next", "hasNext",
     "get", "set", "rangeTo", "rangeUntil",
     "getValue", "setValue", "provideDelegate",
 )
 
-/** `component1`, `component2`, … — measured accepted as a *name* for every digit string, `component0` included. */
-private val COMPONENT_NAME = Regex("component\\d+")
+/**
+ * `component1`, `component2`, … — measured accepted as a *name* for every digit string, `component0`
+ * included, and pinned against the compiler's `regexChecks`, the one regex entry of the same table.
+ */
+internal val COMPONENT_NAME = Regex("component\\d+")
 
 /** See [OPERATOR_NAMES]. */
 internal fun isOperatorName(name: String): Boolean =
     name in OPERATOR_NAMES || COMPONENT_NAME.matches(name)
 
-/** See [OPERATOR_NAMES]. */
+/**
+ * See [OPERATOR_NAMES] — including the list of names in the remedy, which is that set rather than a
+ * second copy of it. The first copy is what cost `inv` a round.
+ */
 internal fun operatorNeedsAnOperatorName(construct: String, name: String): Nothing = kindRefusal(
     construct,
     "'$name' is OPERATOR, and Kotlin's operator names are a closed set that '$name' is not in — the " +
         "modifier says which operator a function implements, so the name is the whole of it",
     "'operator' modifier is not applicable to function: illegal function name",
-    "Name '$name' after the operator it implements — plus, minus, times, div, rem and their " +
-        "…Assign forms, inc, dec, unaryPlus, unaryMinus, not, equals, compareTo, contains, invoke, " +
-        "iterator, next, hasNext, get, set, rangeTo, rangeUntil, getValue, setValue, " +
-        "provideDelegate, componentN — or drop OPERATOR, which leaves an ordinary function.",
+    "Name '$name' after the operator it implements — ${OPERATOR_NAMES.joinToString(", ")} or " +
+        "componentN — or drop OPERATOR, which leaves an ordinary function.",
 )
 
 /**

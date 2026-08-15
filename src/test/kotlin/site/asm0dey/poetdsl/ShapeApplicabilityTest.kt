@@ -9,9 +9,12 @@ import com.squareup.kotlinpoet.KModifier.OPERATOR
 import com.squareup.kotlinpoet.KModifier.OVERRIDE
 import com.squareup.kotlinpoet.KModifier.VARARG
 import com.squareup.kotlinpoet.STRING
+import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * E2e — the **fourth axis**, and the two thirds of its `override`/`infix`/`operator` corner that are
@@ -31,6 +34,7 @@ import kotlin.test.assertTrue
  * Every refusal below is measured on `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10, and every one
  * has its nearest valid neighbour compiled in the same test.
  */
+@OptIn(ExperimentalCompilerApi::class)
 class ShapeApplicabilityTest {
 
     private fun render(body: FileScope.() -> Unit): String = file("com.example", "P", body = body).toString()
@@ -216,6 +220,87 @@ class ShapeApplicabilityTest {
     }
 
     /**
+     * **`inv` is an operator name, and this DSL refused it** — E2f's one false rejection, and the
+     * reason [OPERATOR_NAMES] is no longer written out from memory. Measured, one file per row,
+     * `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10, all three identical:
+     *
+     *     class C { operator fun inv(): C = this }   CLEAN
+     *     class C { operator fun inv(x: Int) { } }   'operator' … must have no value parameters.
+     *                                                ← the *name* is accepted; the arity is the
+     *                                                  frontend's own business, as it is for `not`
+     *     class C { operator fun nope(): C = this }  'operator' … illegal function name.   ← control
+     */
+    @Test
+    fun `inv is an operator name`() {
+        val rendered = render {
+            `class`("C") { `fun`(OPERATOR, "inv", returns = ClassName("com.example", "C")) { ret(expression("this")) } }
+        }
+        assertTrue("operator fun inv" in rendered, rendered)
+        assertCompiles(rendered)
+        assertCompilesEverywhereButJvm(rendered)
+        // …and the nearest *invalid* neighbour is still the frontend's to refuse, not this DSL's:
+        // a wrong arity on a right name renders, because the name-only check is a necessary
+        // condition and deliberately nothing more.
+        assertTrue("operator fun inv" in render { `class`("C") { `fun`(OPERATOR, "inv", param("x", INT)) { _ -> } } })
+        // …and the control the row above is nearest to.
+        assertTrue("illegal function name" in message { `class`("C") { `fun`(OPERATOR, "nope") { } } })
+    }
+
+    /**
+     * **The pin.** [OPERATOR_NAMES] was hand-enumerated from a 44-name list, and the comment on the
+     * guard argued — correctly — that a name-only check is a *necessary* condition and therefore
+     * cannot over-refuse. That argument holds only if **the set equals the language's set**, so the
+     * sound argument sat on an unsound input and `inv` was refused.
+     *
+     * This test derives the language's set from the compiler on the test classpath rather than
+     * restating it: `OperatorFunctionChecks.checksByName` is the map K2's `FirOperatorModifierChecker`
+     * looks a function's name up in, and a name that misses it is *illegal function name*. If Kotlin
+     * adds an operator name, this fails.
+     *
+     * **`OperatorNameConventions` — the class the brief named — is the wrong table.** It is a bag of
+     * `Name` constants that includes `hashCode`, `toString`, `toInt`, `toDouble`, `and`, `or`, `xor`,
+     * `shl`, `shr` and `ushr`, and every one of those is *illegal function name* on all three
+     * frontends (`the frontends judge every name in the set` compiles them). Pinning against it would
+     * have opened ten invalid renders while closing one false rejection.
+     */
+    @Test
+    fun `the operator name set is the compiler's own table`() {
+        assertEquals(compilerOperatorNames() - EXPERIMENTAL_OPERATOR_NAMES, OPERATOR_NAMES)
+        assertEquals(compilerComponentRegex(), COMPONENT_NAME.pattern)
+    }
+
+    /**
+     * …and the cross-check that the reflected table is the table the **frontends** use, since a
+     * derivation is only as good as the field it reads: every name in it draws something other than
+     * *illegal function name*, and every name outside it draws exactly that — on `kotlinc`,
+     * `kotlinc-js` and `kotlinc-wasm`, one class per name, attributed by line.
+     *
+     * The non-operator rows are chosen to include the ten `OperatorNameConventions` members that are
+     * not operator names, plus `mod`/`modAssign`, which were operator names once.
+     */
+    @Test
+    fun `the frontends judge every name in the set`() {
+        val names = (OPERATOR_NAMES + EXPERIMENTAL_OPERATOR_NAMES).sorted() +
+            listOf("component0", "component1", "component12")
+        val nonNames = listOf(
+            "mod", "modAssign",
+            "hashCode", "toString", "toInt", "toDouble", "and", "or", "xor", "shl", "shr", "ushr",
+            "nope",
+        )
+        val all = names + nonNames
+        val source = all.mapIndexed { i, n -> "class N$i { operator fun $n(x: Int) { } }" }.joinToString("\n")
+        val illegal = mapOf(
+            "kotlinc" to illegalNameLines(compile(source).messages),
+            "kotlinc-js" to illegalNameLines(compileJs(source).messages),
+            "kotlinc-wasm" to illegalNameLines(compileWasm(source).messages),
+        )
+        illegal.forEach { (frontend, lines) ->
+            val refused = lines.map { all[it - 1] }.toSet()
+            assertEquals(nonNames.toSet(), refused, frontend)
+        }
+    }
+
+    /**
      *     operator fun plus(x: Int) { }                    'operator' modifier is not applicable to
      *     fun outer() { operator fun plus(x: Int) { } }    function: must be a member or an
      *                                                      extension function.
@@ -256,4 +341,58 @@ class ShapeApplicabilityTest {
             },
         )
     }
+
+    // --- the compiler's own operator table, read rather than restated ----------------------------
+
+    /**
+     * The names K2 will look a function up in before it says *illegal function name*.
+     *
+     * `OperatorFunctionChecks.checksByName` is a `Map<Name, List<Check>>`: a name that is not a key
+     * and matches no [compilerComponentRegex] never reaches a `Check` at all, which is exactly the
+     * diagnostic this DSL's guard mirrors. The field is private, so this reads it reflectively — and
+     * if a future compiler renames it, this fails loudly, which is the direction a pin should fail
+     * in. kctfork puts `kotlin-compiler-embeddable` on the test classpath, so the table read here is
+     * the one the [compile] harness itself enforces.
+     */
+    private fun compilerOperatorNames(): Set<String> =
+        operatorFunctionChecks("checksByName") { (it as Map<*, *>).keys.map(Any?::toString).toSet() }
+
+    /** See [compilerOperatorNames]. `component\d+` is the one regex entry in the same table. */
+    private fun compilerComponentRegex(): String =
+        operatorFunctionChecks("regexChecks") { field ->
+            (field as List<*>).map { pair ->
+                pair!!.javaClass.getMethod("getFirst").invoke(pair).toString()
+            }.single()
+        }
+
+    /** See [compilerOperatorNames]. */
+    private fun <T> operatorFunctionChecks(field: String, read: (Any) -> T): T {
+        val owner = "org.jetbrains.kotlin.fir.declarations.OperatorFunctionChecks"
+        val value = try {
+            Class.forName(owner).getDeclaredField(field).apply { isAccessible = true }.get(null)
+        } catch (e: ReflectiveOperationException) {
+            fail(
+                "$owner.$field is what pins this DSL's operator names against the language's own. " +
+                    "The compiler on the test classpath no longer has it, so the set below is " +
+                    "unpinned until this test is pointed at whatever replaced it.",
+                e,
+            )
+        }
+        return read(requireNotNull(value) { "$owner.$field is null" })
+    }
+
+    /**
+     * The 1-based source lines of every *illegal function name* in a compiler's output — the
+     * diagnostic names no function, so the line is the only thing that attributes it. Every frontend
+     * this project measures prints `<file>:<line>:<column>`.
+     */
+    private fun illegalNameLines(messages: String): List<Int> =
+        messages.lineSequence()
+            .filter { "illegal function name" in it }
+            .map { line ->
+                val at = Regex("""\.kt:(\d+):\d+""").find(line)
+                requireNotNull(at) { "no source position in: $line" }.groupValues[1].toInt()
+            }
+            .sorted()
+            .toList()
 }
