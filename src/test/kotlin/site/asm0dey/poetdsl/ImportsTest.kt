@@ -230,7 +230,7 @@ class ImportsTest {
     }
 
     @Test
-    fun `an import coexists with the imports %T resolves for itself`() {
+    fun `an import coexists with the imports a type reference resolves for itself`() {
         val out = render {
             `import`("kotlin.math", "PI")
             `val`("s", STRING, init = "a".lit)
