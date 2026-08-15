@@ -2,6 +2,8 @@ package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.ABSTRACT
+import com.squareup.kotlinpoet.KModifier.ENUM as ENUM_MODIFIER
+import com.squareup.kotlinpoet.KModifier.INNER
 import com.squareup.kotlinpoet.KModifier.OVERRIDE
 import com.squareup.kotlinpoet.KModifier.PRIVATE
 import com.squareup.kotlinpoet.KModifier.PROTECTED
@@ -93,7 +95,7 @@ class AnonymousObjectTest {
         assertCompiles(out)
         assertFailsWith<IllegalStateException> {
             render {
-                `class`(com.squareup.kotlinpoet.KModifier.ENUM, "E") {
+                `class`(ENUM_MODIFIER, "E") {
                     enumEntry("A") { `val`(PROTECTED, "p", INT, init = 1.lit) }
                 }
             }
@@ -125,6 +127,96 @@ class AnonymousObjectTest {
         assertFailsWith<IllegalStateException> {
             render { `val`("v", init = anonymousObject { `constructor`(param("q", INT)) { } }) }
         }
+    }
+
+    /**
+     * The three refused classifier forms quote **three different sentences**, and which one a
+     * frontend prints is decided by the declared form and never by the container. E3's message
+     * branched on the container and so was wrong on four of its six cells. Measured, one file per
+     * cell, all three frontends 2.4.10, both bodies identical:
+     *
+     *     object { class N }      'Class' is prohibited here.
+     *     object { interface I }  'Interface' is prohibited here.
+     *     object { object O }     named object 'O' cannot be local. Try to use an anonymous object …
+     *
+     * The expectations below are the compiler's strings, transcribed from that run — not from the
+     * DSL's own output.
+     */
+    @Test
+    fun `each refused classifier form quotes its own frontend sentence`() {
+        val cls = assertFailsWith<IllegalStateException> {
+            render { `val`("v", init = anonymousObject { `class`("N") { } }) }
+        }
+        assertTrue("'Class' is prohibited here" in cls.message!!, cls.message!!)
+        val iface = assertFailsWith<IllegalStateException> {
+            render { `val`("v", init = anonymousObject { `interface`("I") { } }) }
+        }
+        assertTrue("'Interface' is prohibited here" in iface.message!!, iface.message!!)
+        val obj = assertFailsWith<IllegalStateException> {
+            render { `val`("v", init = anonymousObject { `object`("O") { } }) }
+        }
+        assertTrue("named object 'O' cannot be local" in obj.message!!, obj.message!!)
+        // …and the same three in the other body, since the frontends print the same sentences there.
+        val entryIface = assertFailsWith<IllegalStateException> {
+            render { `class`(ENUM_MODIFIER, "E") { enumEntry("A") { `interface`("I") { } } } }
+        }
+        assertTrue("'Interface' is prohibited here" in entryIface.message!!, entryIface.message!!)
+        val entryObj = assertFailsWith<IllegalStateException> {
+            render { `class`(ENUM_MODIFIER, "E") { enumEntry("A") { `object`("O") { } } } }
+        }
+        assertTrue("named object 'O' cannot be local" in entryObj.message!!, entryObj.message!!)
+    }
+
+    /**
+     * …and the one nested classifier it **does** hold, which the 192-cell sweep could not see because
+     * every one of its cells was a `val`, a `var` or a `fun`.
+     *
+     * `inner` is not a decoration on the refused shape; it changes what the declaration *is*. A plain
+     * `class N` in an anonymous body is a **local class** — *'Class' is prohibited here*, and even
+     * `public class N` is *modifier 'public' is not applicable to 'local class'*. Adding `inner`
+     * makes it a member of the anonymous class, which has an enclosing instance for it to be inner
+     * to, and the whole row goes clean. Measured, one file per cell, `kotlinc`, `kotlinc-js` and
+     * `kotlinc-wasm` 2.4.10:
+     *
+     *     val v = object { val id: Int = 7; inner class N { fun f(): Int = id }
+     *                      fun make(): Any = N() }                                    clean
+     *     val v = object { public inner class N }                                     clean
+     *     enum class E { A { inner class N { fun f(): Int = 1 }
+     *                        override fun g(): Int = N().f() }; abstract fun g(): Int }  clean
+     *
+     *     val v = object { class N { fun f(): Int = 1 } }        'Class' is prohibited here.
+     *     enum class E { A { class N { fun f(): Int = 1 } } }    'Class' is prohibited here.
+     *
+     * The capture in the first row is the part that matters: it disproves the refusal's own claim
+     * that an anonymous body "has no enclosing instance for it to be inner to".
+     */
+    @Test
+    fun `an anonymous object body holds an inner class, which captures its enclosing instance`() {
+        val out = render {
+            `fun`("f") {
+                `val`("v", init = anonymousObject {
+                    `val`("id", INT, init = 7.lit)
+                    `class`(INNER, "N") {
+                        `fun`("g", returns = INT) { ret(expression("id")) }
+                    }
+                })
+            }
+        }
+        assertTrue("inner class N" in out, out)
+        assertCompiles(out)
+        assertCompilesEverywhereButJvm(out)
+    }
+
+    /** The same construct in the other half of the family. See [EnumEntriesTest] for the entry side. */
+    @Test
+    fun `an inner class in an anonymous object body renders the visibility KotlinPoet writes`() {
+        val out = render {
+            `fun`("f") { `val`("v", init = anonymousObject { `class`(INNER, "N") { } }) }
+        }
+        // Whatever KotlinPoet writes here, the *render* is what has to compile — a `public` on a
+        // local class would not, which is exactly why this asserts the output rather than the input.
+        assertCompiles(out)
+        assertCompilesEverywhereButJvm(out)
     }
 
     /** The same render gap the enum entry hits, with the same canary — see [EnumEntriesTest]. */

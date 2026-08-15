@@ -3,6 +3,7 @@ package site.asm0dey.poetdsl
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.ABSTRACT
 import com.squareup.kotlinpoet.KModifier.ENUM
+import com.squareup.kotlinpoet.KModifier.INNER
 import com.squareup.kotlinpoet.KModifier.OVERRIDE
 import com.squareup.kotlinpoet.KModifier.PRIVATE
 import com.squareup.kotlinpoet.KModifier.PROTECTED
@@ -281,6 +282,33 @@ class EnumEntriesTest {
         assertFailsWith<IllegalStateException> {
             render { `class`(ENUM, "C") { enumEntry("A") { `constructor`(param("q", INT)) { } } } }
         }
+    }
+
+    /**
+     * …and the one nested classifier it **does** hold — the row the 192-cell sweep could not reach,
+     * because every one of its cells was a `val`, a `var` or a `fun` and no nested-class declaration
+     * form was ever built. See [AnonymousObjectTest] for the other half of the family and for the
+     * mechanism; the two positions agree here as they do everywhere else.
+     *
+     * Measured, one file per cell, all three frontends 2.4.10:
+     *
+     *     enum class E { A { inner class N { fun f(): Int = 1 }
+     *                        override fun g(): Int = N().f() }; abstract fun g(): Int }   clean
+     *     enum class E { A { public inner class N } }                                     clean
+     *     enum class E { A { class N { fun f(): Int = 1 } } }   'Class' is prohibited here.
+     */
+    @Test
+    fun `an entry body holds an inner class`() {
+        val out = render {
+            `class`(ENUM, "C") {
+                enumEntry("A") {
+                    `class`(INNER, "N") { `fun`("f", returns = INT) { ret(1.lit) } }
+                }
+            }
+        }
+        assertTrue("inner class N" in out, out)
+        assertCompiles(out)
+        assertCompilesEverywhereButJvm(out)
     }
 
     @Test

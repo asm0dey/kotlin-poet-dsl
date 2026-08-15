@@ -33,9 +33,13 @@ internal const val ANONYMOUS_OBJECT: String = "anonymous object"
  * but three**, and those three are `protected`, which has its own reader in [protectedAllowed]. Both
  * are the body of an anonymous class, which is why:
  *
- * - it holds **no nested classifier of any kind** — `A { class N }` is *'Class' is prohibited here*,
- *   `A { object O }` is *named object 'O' cannot be local*, `A { interface I }` is *'Interface' is
- *   prohibited here*, on all three frontends and in both positions;
+ * - it holds **no nested classifier except an `inner` class** — `A { class N }` is *'Class' is
+ *   prohibited here*, `A { object O }` is *named object 'O' cannot be local*, `A { interface I }` is
+ *   *'Interface' is prohibited here*, on all three frontends and in both positions; and
+ *   `A { inner class N }` is **clean**, on all three frontends and in both positions, because
+ *   `inner` makes the declaration a member of the anonymous class rather than a local class. E3
+ *   refused that row and the fix round measured it — see [Scope.innerAllowed] for the 128-cell
+ *   sweep, which is the one this list was written without;
  * - it holds **no constructor** — *objects cannot have constructors*;
  * - it holds **no companion object** — *modifier 'companion' is not applicable inside 'enum entry'*
  *   and *…inside 'local class'* respectively;
@@ -49,15 +53,47 @@ internal const val ANONYMOUS_OBJECT: String = "anonymous object"
 internal val Scope.isAnonymousBody: Boolean
     get() = this is TypeScope && (kindName == ENUM_ENTRY || kindName == ANONYMOUS_OBJECT)
 
-/** See [isAnonymousBody]; the noun the frontends print differs between the two positions. */
-internal fun anonymousBodyHoldsNo(construct: String, what: String, kindName: String): Nothing =
+/**
+ * See [isAnonymousBody].
+ *
+ * **The quoted sentence is keyed on the declared form, not on the container** — which is the
+ * opposite of what this function did when E3 shipped it, and it was wrong on four of its six cells.
+ * Measured, one file per cell, `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10, the two positions
+ * agreeing on every row:
+ *
+ *     object { class N }      'Class' is prohibited here.       A { class N }      — same sentence
+ *     object { interface I }  'Interface' is prohibited here.   A { interface I }  — same sentence
+ *     object { object O }     named object 'O' cannot be        A { object O }     — same sentence
+ *                             local. Try to use an anonymous
+ *                             object instead.
+ *
+ * So `'Class' is prohibited here` is right for a class in *either* body and wrong for an interface
+ * or an object in either; the container is what the *prose* names and the form is what the
+ * *diagnostic* does. [declaredKind] is this DSL's `kindName` for the declaration being refused —
+ * `"class"`, `"named object"` or `"interface"` — and [containerKind] is [TypeScope.kindName] for the
+ * body it is being written into.
+ */
+internal fun anonymousBodyHoldsNo(
+    construct: String,
+    what: String,
+    declaredKind: String,
+    containerKind: String,
+): Nothing =
     kindRefusal(
         construct,
-        "$what is declared in ${article(kindName)} $kindName, which is the body of an anonymous " +
-            "class and holds no nested classifier, no constructor and no companion object",
-        if (kindName == ENUM_ENTRY) "'Class' is prohibited here" else "cannot be local",
-        "Declare it in the enclosing type instead — an anonymous body holds members only.",
+        "$what is declared in ${article(containerKind)} $containerKind, which is the body of an " +
+            "anonymous class and holds no nested classifier, no constructor and no companion object",
+        anonymousBodyDiagnostic(declaredKind, what),
+        "Declare it in the enclosing type instead, or — for a class — declare it INNER, which is " +
+            "the one nested classifier an anonymous body does hold. See `innerAllowed`.",
     )
+
+/** See [anonymousBodyHoldsNo]: the frontends' own sentence for each of the three declared forms. */
+private fun anonymousBodyDiagnostic(declaredKind: String, what: String): String = when (declaredKind) {
+    "named object" -> "named object $what cannot be local. Try to use an anonymous object instead"
+    "interface" -> "'Interface' is prohibited here"
+    else -> "'Class' is prohibited here"
+}
 
 /**
  * What the generated `enumEntry` runs.

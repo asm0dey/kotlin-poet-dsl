@@ -101,9 +101,33 @@ private val CLASSIFIER_MODIFIERS: List<KModifier> = listOf(
  *
  * Nothing here is inherited: `class O { class M { inner class N } }` is clean, so an `inner` class
  * two levels inside an object is fine as long as its *immediate* container is a class.
+ *
+ * **…and an anonymous body is the third container that qualifies, which the E3 fix round measured
+ * after E3 shipped a false rejection of it.** An anonymous class *is* a class and *does* have an
+ * enclosing instance, so `inner` is clean in both bodies — and it is the **only** one of the 32
+ * `KModifier` values that is. Measured, one file per cell, `kotlinc`, `kotlinc-js` and
+ * `kotlinc-wasm` 2.4.10, 32 modifiers × {`class N`, `class N(val a: Int)`} × both bodies = 128
+ * cells, the two positions answering identically on every one:
+ *
+ *     val v = object { val id: Int = 7; inner class N { fun f(): Int = id }
+ *                      fun make(): Any = N() }                                       clean
+ *     val v = object { public inner class N }                                        clean
+ *     enum class E { A { inner class N { fun f(): Int = 1 }
+ *                        override fun g(): Int = N().f() }; abstract fun g(): Int }  clean
+ *
+ *     val v = object { class N }             'Class' is prohibited here.
+ *     val v = object { public class N }      modifier 'public' is not applicable to 'local class'.
+ *
+ * The mechanism, and the reason this is not a special case: **`inner` changes what the declaration
+ * is.** Without it a classifier in an anonymous body is a *local class* — which is what every one of
+ * the other 31 rows is refused as, *not applicable to 'local class'* — and a local class has no
+ * enclosing instance. With it the declaration is a **member** of the anonymous class, and the
+ * capture in the first row is the proof: `id` resolves. E3's refusal asserted the opposite ("has no
+ * enclosing instance for it to be inner to") and quoted *modifier 'inner' is not applicable inside
+ * 'anonymous object'*, a sentence no frontend prints for any input.
  */
 internal val Scope.innerAllowed: Boolean
-    get() = this is TypeScope && kindName == "class" &&
+    get() = this is TypeScope && (kindName == "class" || isAnonymousBody) &&
         KModifier.ANNOTATION !in builder.modifiers && KModifier.VALUE !in builder.modifiers
 
 /**
@@ -586,6 +610,11 @@ internal fun constructorVisibility(kindWord: String, allowed: String, diagnostic
  * Read off the **immediate** builder's own `INNER`, never inherited: the nested `inner class N` two
  * rows up is itself an `inner` container, and a plain `class` declared inside *it* is refused for
  * this same reason rather than for its grandparent's.
+ *
+ * An **anonymous body** answers `false` here too, for a different reason — its nested classifier
+ * would be a *local* class — and [declareType] asks this question only when `INNER` is absent, so
+ * the one shape both containers do hold reaches [innerAllowed] instead of this. That was already
+ * the wiring; what was wrong was [innerAllowed]'s own answer.
  */
 internal val Scope.nestedTypesAllowed: Boolean
     get() = !(this is TypeScope && (KModifier.INNER in builder.modifiers || isAnonymousBody))
@@ -597,7 +626,7 @@ internal val Scope.nestedTypesAllowed: Boolean
  */
 internal fun Scope.holdsNoNestedType(kindName: String, name: String): Nothing {
     if (this is TypeScope && isAnonymousBody) {
-        anonymousBodyHoldsNo("`$kindName`", "'$name'", this.kindName)
+        anonymousBodyHoldsNo("`$kindName`", "'$name'", kindName, this.kindName)
     }
     innerHoldsNoNestedType(kindName, name)
 }
