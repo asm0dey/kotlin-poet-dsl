@@ -2,6 +2,7 @@ package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.ANY
 import com.squareup.kotlinpoet.CodeBlock
+import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.TypeName
 
 // Deviation D26: what a type extends and implements.
@@ -227,8 +228,40 @@ internal fun enumEntryHasNoSupertype(construct: String): Nothing = kindRefusal(
         "which every entry then inherits.",
 )
 
-/** What the generated `superinterface` runs. */
-internal fun TypeScope.applySuperinterface(type: TypeName) {
+/**
+ * What the generated `superinterface` runs.
+ *
+ * [by] is E3's interface delegation — `class C(i: Iface) : Iface by i`, D31's "absent" row. It goes
+ * into `addSuperinterface(TypeName, CodeBlock)`, the two-argument overload `applySuperinterface`
+ * never called; KotlinPoet keeps the delegate in the same `Map<TypeName, CodeBlock?>` the duplicate
+ * check below already reads, with `null` for an undelegated one.
+ *
+ * Two containers refuse it and both are measured, one file per row, `kotlinc` / `kotlinc-js` /
+ * `kotlinc-wasm` 2.4.10:
+ *
+ *     interface F : Iface by D()                   delegation cannot be used in interfaces.
+ *     value class C(val a: Int) : Iface by D()     value class cannot implement an interface by
+ *                                                   delegation.
+ *
+ * and the controls, clean on all three (or on the two that can see them — see below):
+ *
+ *     class C(i: Iface) : Iface by i         object O : Iface by D()
+ *     class C(val i: Iface) : Iface by i     class C { companion object : Iface by D() }
+ *     class C : Iface by D()                 enum class E : Iface by D() { A }
+ *     data class C(val a: Int) : Iface by D()          abstract class C : Iface by D()
+ *     sealed class C : Iface by D()          class Outer { class C : Iface by D() }
+ *     class C : Base0(), Iface by D()        class C : Iface by D() { override fun g(): Int = 2 }
+ *     class C : Iface by D(), J { … }        interface F : Iface          — the delegation-free row
+ *
+ * **The `value class` row is one of the few in this project the JVM cannot judge**, D37's family
+ * again: on the JVM a `value class` without `@JvmInline` is *value classes without '@JvmInline'
+ * annotation are not yet supported* whatever else is wrong with it, so the delegation diagnostic is
+ * masked. Kotlin/JS and Kotlin/Wasm compile a plain `value class` and both print *value class cannot
+ * implement an interface by delegation*, while `value class C(val a: Int) : Iface { override … }` is
+ * clean on both. So the refusal rests on the two frontends that can see it, and the JVM agrees once
+ * `@JvmInline` is supplied.
+ */
+internal fun TypeScope.applySuperinterface(type: TypeName, by: Expr? = null) {
     // See [applySuperclass]'s first guard and [enumEntryHasNoSupertype].
     if (kindName == ENUM_ENTRY) enumEntryHasNoSupertype("superinterface")
     // The row that **rendered**: `annotation class N : Iface` is *annotation class cannot have
@@ -238,5 +271,55 @@ internal fun TypeScope.applySuperinterface(type: TypeName) {
     check(type !in builder.superinterfaces) {
         "superinterface: this $kindName already implements $type."
     }
-    builder.addSuperinterface(type)
+    if (by == null) {
+        builder.addSuperinterface(type)
+        return
+    }
+    check(kindName != "interface") {
+        "superinterface: an interface cannot delegate $type — *delegation cannot be used in " +
+            "interfaces* on the JVM, on Kotlin/JS and on Kotlin/Wasm alike, because an interface " +
+            "has no state to hold the delegate in. Drop the `by`, which leaves `: $type`, and let " +
+            "the implementing classes delegate."
+    }
+    if (KModifier.VALUE in builder.modifiers) {
+        kindRefusal(
+            "superinterface",
+            "this `value class` delegates $type, and a value class wraps one value with no room " +
+                "for a second reference to forward to",
+            "value class cannot implement an interface by delegation",
+            "Drop the `by` and implement $type's members directly — a `value class` may implement " +
+                "an interface, only not by delegation.",
+        )
+    }
+    // …and a **render gap**, found by building the control row rather than by reading anything.
+    // `enum class E : Iface by D() { A }` is clean on all three frontends, and KotlinPoet refuses it
+    // from `addSuperinterface` (`TypeSpec.kt:668`) as `IllegalArgumentException: delegation only
+    // allowed for classes and objects (found CLASS 'E')` — the forbidden exception type, with a
+    // message that contradicts itself because it prints the `Kind` rather than the reason. The
+    // condition is `isSimpleClass || kind == OBJECT`, and `isSimpleClass` is
+    // `kind == CLASS && !isEnum && !isAnnotation` (read off the bytecode, not the docs); an
+    // `annotation class` never reaches here, being refused by [supertypesAllowed] above. So `isEnum`
+    // — which KotlinPoet derives from this modifier — is the whole of what is left. D20's shape,
+    // with the canary in [DelegatedSuperinterfaceTest].
+    if (KModifier.ENUM in builder.modifiers) {
+        error(
+            "superinterface: this `enum class` delegates $type, which is valid Kotlin — " +
+                "`enum class E : Iface by D() { A }` is clean on the JVM, on Kotlin/JS and on " +
+                "Kotlin/Wasm alike — and KotlinPoet 2.3.0 cannot render it: `addSuperinterface` " +
+                "allows a delegate only for a simple class or an object, and derives `isEnum` from " +
+                "the ENUM modifier. Drop the `by` and implement $type's members on the enum, or on " +
+                "each entry.",
+        )
+    }
+    // `%L` of the expression's own code, the same shape `applySuperclass` uses for its arguments, so
+    // a `%T`/`%M` inside the delegate still resolves its import.
+    //
+    // **Ownership does not reach here, and that is the existing state rather than a decision this
+    // round took.** `checkOwned` is a [BlockScope] extension and a [TypeScope] has none, so a
+    // superclass's arguments have never been ownership-checked either; the delegate is the same
+    // expression in the same position and behaves identically. The common spelling —
+    // `class C(i: Iface) : Iface by i` — passes a handle owned by *this* type, which is exactly what
+    // a `TypeScope`-level check would have to accept. Recorded rather than retrofitted: a new
+    // ownership entry point in the last feature round is how a closed hole reopens.
+    builder.addSuperinterface(type, CodeBlock.of("%L", by.code))
 }

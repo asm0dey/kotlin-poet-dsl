@@ -182,7 +182,8 @@ class ShadowsTest {
         )
         assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
         assertTrue(
-            "'fun BlockScope.superinterface(type: TypeName): Nothing' is deprecated" in result.messages,
+            "'fun BlockScope.superinterface(type: TypeName, by: Expr? = ...): Nothing' is deprecated" in
+                result.messages,
             result.messages,
         )
         assertTrue(

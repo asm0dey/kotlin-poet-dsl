@@ -619,12 +619,20 @@ private val SUPERTYPES: List<Overload> = listOf(
             |
             |Called once per interface; a second call naming the same one is rejected rather than
             |silently dropped, which is what KotlinPoet's map of superinterfaces would do with it.
+            |
+            |[by] delegates the interface to an expression — `class C(i: Iface) : Iface by i`, the
+            |shape D31 filed as absent. A defaulted slot rather than a second construct, so the
+            |generated surface and the shadow list are both unchanged. It is refused in an interface
+            |body (*delegation cannot be used in interfaces*) and in a `value class` (*value class
+            |cannot implement an interface by delegation*), and allowed everywhere else a supertype
+            |is — a class, an object, a companion object, an `enum class` and a nested class alike,
+            |measured on all three frontends.
         """.trimMargin(),
         context = "context(t: TypeScope)",
         name = "superinterface",
-        params = listOf("type: TypeName"),
+        params = listOf("type: TypeName", "by: Expr? = null"),
         returns = null,
-        body = "t.applySuperinterface(type)",
+        body = "t.applySuperinterface(type, by)",
         shadow = "superinterface is only valid inside a class, object or interface body, on the " +
             "type itself. Written in a block it would silently attach to the enclosing type.",
     ),
