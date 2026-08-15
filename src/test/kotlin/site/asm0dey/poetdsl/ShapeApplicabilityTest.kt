@@ -1,10 +1,12 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.BOOLEAN
+import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.ABSTRACT
 import com.squareup.kotlinpoet.KModifier.INFIX
 import com.squareup.kotlinpoet.KModifier.OPERATOR
+import com.squareup.kotlinpoet.KModifier.OVERRIDE
 import com.squareup.kotlinpoet.KModifier.VARARG
 import com.squareup.kotlinpoet.STRING
 import kotlin.test.Test
@@ -242,15 +244,15 @@ class ShapeApplicabilityTest {
             render {
                 `interface`("Base") { `fun`(ABSTRACT, "f", returns = INT) { } }
                 `class`("Impl") {
-                    superinterface(com.squareup.kotlinpoet.ClassName("com.example", "Base"))
-                    `fun`(com.squareup.kotlinpoet.KModifier.OVERRIDE, "f", returns = INT) { ret(1.lit) }
+                    superinterface(ClassName("com.example", "Base"))
+                    `fun`(OVERRIDE, "f", returns = INT) { ret(1.lit) }
                 }
             },
         )
         // …and it still renders where no supertype declares it, because nothing here can tell.
         assertTrue(
             "override" in render {
-                `class`("C") { `fun`(com.squareup.kotlinpoet.KModifier.OVERRIDE, "g") { } }
+                `class`("C") { `fun`(OVERRIDE, "g") { } }
             },
         )
     }
