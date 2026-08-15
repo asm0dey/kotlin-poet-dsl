@@ -445,6 +445,9 @@ class ModifierApplicabilityTest {
         // …and the remedy names a spelling this DSL really has. The nearest valid neighbour: the
         // function the caller would get, written as one.
         assertTrue("`fun`(\"constructor\"" in m, m)
+        // …and the other half of the remedy, which names the modifier rather than "the modifier":
+        // a falsification patch that generalised it failed no test until this line existed.
+        assertTrue("drop FUN" in m, m)
         assertCompiles(render { `class`("C") { `fun`("constructor", param("q", INT)) { _ -> ret() } } })
     }
 
