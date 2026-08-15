@@ -543,6 +543,12 @@ class AnonymousObjectTest {
         )
         assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode, result.messages)
         assertTrue("`init` is only valid inside a class" in result.messages, result.messages)
+        // …and the message says what actually happened. E3's shadow text said "Written in a block
+        // it would silently attach an initializer block to the enclosing type", which is true of a
+        // *direct* block call and false here: this call is inside a genuine `TypeScope`, and if it
+        // resolved it would attach to the anonymous object, correctly. The shadow captures it
+        // anyway, and now says so. `@Deprecated` messages are part of the surface Task 22 locks.
+        assertTrue("lexically in a block" in result.messages, result.messages)
         // The control: the identical construct at file level, where no `BlockScope` is in scope,
         // reaches the real `init` and renders.
         assertCompiles(

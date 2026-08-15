@@ -206,8 +206,17 @@ internal fun TypeScope.addEnumEntry(
     // `applySuperclass`: KotlinPoet joins them itself, and `%L` of the expression's own code keeps
     // `%T`/`%M` placeholders intact so imports still resolve.
     args.forEach { entry.addSuperclassConstructorParameter(CodeBlock.of("%L", it.code)) }
-    if (body != null) {
-        val scope = TypeScope(
+    // The body runs into the entry's own [TypeScope] when there is one; the entry is registered the
+    // same way either way, which is why this is one `addEnumConstant` and not one per branch. It was
+    // two identical ones, and an `if` whose arms agree is a claim that they differ.
+    //
+    // `TypeScope.finish` is deliberately *not* called: every check in it is about a header this body
+    // has none of — a primary constructor, a superclass and its arguments, a secondary constructor's
+    // delegation — and all four constructs that could create one are refused above by
+    // [isAnonymousBody] and [supertypesAllowed]. Calling it would re-ask questions whose answers are
+    // already fixed.
+    body?.let {
+        TypeScope(
             entry,
             names.child(),
             id.child("enum entry $name"),
@@ -215,17 +224,9 @@ internal fun TypeScope.addEnumEntry(
             fileId,
             isExpect,
             isExternal,
-        )
-        scope.body()
-        // `TypeScope.finish` is deliberately *not* called: every check in it is about a header this
-        // body has none of — a primary constructor, a superclass and its arguments, a secondary
-        // constructor's delegation — and all four constructs that could create one are refused above
-        // by [isAnonymousBody] and [supertypesAllowed]. Calling it would re-ask questions whose
-        // answers are already fixed.
-        builder.addEnumConstant(name, entry.build())
-    } else {
-        builder.addEnumConstant(name, entry.build())
+        ).it()
     }
+    builder.addEnumConstant(name, entry.build())
 }
 
 /**

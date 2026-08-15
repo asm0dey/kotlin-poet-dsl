@@ -1,5 +1,6 @@
 package site.asm0dey.poetdsl
 
+import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.ContextParameter
 import com.squareup.kotlinpoet.ExperimentalKotlinPoetApi
 import com.squareup.kotlinpoet.FunSpec
@@ -170,11 +171,40 @@ internal fun checkContextProperty(construct: String, name: String, init: Expr?, 
  */
 @OptIn(ExperimentalKotlinPoetApi::class)
 internal fun FunSpec.Builder.applyContextParameters(contextParameters: List<ContextParameter>) {
-    if (contextParameters.isNotEmpty()) contextParameters(contextParameters)
+    if (contextParameters.isNotEmpty()) contextParameters(contextParameters.escaped())
 }
 
 /** See [applyContextParameters]. */
 @OptIn(ExperimentalKotlinPoetApi::class)
 internal fun PropertySpec.Builder.applyContextParameters(contextParameters: List<ContextParameter>) {
-    if (contextParameters.isNotEmpty()) contextParameters(contextParameters)
+    if (contextParameters.isNotEmpty()) contextParameters(contextParameters.escaped())
+}
+
+/**
+ * KotlinPoet escapes a `ParameterSpec`'s name, a property's, an enum entry's and a type's, and
+ * **not** a [ContextParameter]'s — so `contextParameter("a b", ctx)` rendered `context(a b: Ctx)`,
+ * which is *context parameters must be named. Use '_' to declare an anonymous context parameter* on
+ * the JVM, on Kotlin/JS and on Kotlin/Wasm alike. `context(`a b`: Ctx)` is clean on all three, and
+ * so is a backticked keyword, so this is output that exists rather than a shape to refuse.
+ *
+ * Escaped **where the value reaches KotlinPoet**, not in [contextParameter], for the reason the
+ * property family already knows: [checkContextParameters] compares a context parameter's name
+ * against a *value* parameter's, and a `ParameterSpec` holds its name unescaped. Escaping at
+ * construction would have made `context(c: Ctx) fun f(c: Int)` — *conflicting declarations* — stop
+ * colliding for any name that needed a backtick. So the descriptor holds the logical name and the
+ * render escapes it, which is exactly how [param] behaves.
+ *
+ * The escaping is **KotlinPoet's own**, reached through `%N` rather than reimplemented: E2f's rule
+ * says derive the set or pin it against its source, and a hand-written keyword list is the failure
+ * mode that rule exists for. Verified equal to `ParameterSpec`'s rendering on `"a b"`, `"object"`,
+ * `"class"`, `"if"`, `"a-b"`, `"ok"`, `"a1"` and `"É"`.
+ *
+ * `"_"` is the one exemption and it is a *meaning* rule, not a cosmetic one: `%N` renders it
+ * `` `_` ``, and Kotlin reads a backticked `_` as an ordinary parameter named `_` rather than as the
+ * anonymous context parameter this DSL documents. Both spellings compile; only one of them means
+ * what the caller asked for.
+ */
+@OptIn(ExperimentalKotlinPoetApi::class)
+private fun List<ContextParameter>.escaped(): List<ContextParameter> = map {
+    if (it.name == "_") it else ContextParameter(CodeBlock.of("%N", it.name).toString(), it.type)
 }

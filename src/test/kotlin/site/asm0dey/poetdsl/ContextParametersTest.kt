@@ -240,6 +240,84 @@ class ContextParametersTest {
         assertTrue("delegated properties are unsupported" in e.message!!, e.message!!)
     }
 
+    /**
+     * A context parameter's name is **escaped**, which E3's was not, and the asymmetry was with
+     * every other name this DSL emits: KotlinPoet backticks a `ParameterSpec`'s name, a property's,
+     * an enum entry's and a type's, and does nothing at all to a `ContextParameter`'s. So
+     * `contextParameter("a b", ctx)` rendered `context(a b: Ctx)`.
+     *
+     * Measured, one file per row, `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10:
+     *
+     *     context(a b: Ctx) fun f(): Int = 1          context parameters must be named. Use '_' to
+     *                                                 declare an anonymous context parameter.
+     *     context(`a b`: Ctx) fun f(): Int = 1        clean
+     *     context(`object`: Ctx) fun f(): Int = 1     clean
+     *     fun f(`a b`: Int): Int = `a b`              clean — the sibling `param` already renders
+     *
+     * so this is output that exists rather than a shape to refuse, and escaping is the two-directional
+     * answer. The escaper is KotlinPoet's own, reached through `%N`; this test pins that it agrees
+     * with `ParameterSpec`'s rendering rather than trusting a keyword list.
+     */
+    @Test
+    fun `a context parameter's name is escaped exactly as a value parameter's is`() {
+        val out = render {
+            `fun`("f", returns = INT, contextParameters = listOf(contextParameter("a b", ctx))) {
+                ret(1.lit)
+            }
+        }
+        assertTrue("context(`a b`: Ctx)" in out, out)
+        assertCompilesWithCtx(out)
+        assertCompilesEverywhereButJvm(out + "\nclass Ctx\n")
+        // A keyword too, and a property as well as a function.
+        val keyword = render {
+            `val`(
+                "p",
+                INT,
+                contextParameters = listOf(contextParameter("object", ctx)),
+                getter = { ret(1.lit) },
+            )
+        }
+        assertTrue("context(`object`: Ctx)" in keyword, keyword)
+        assertCompilesWithCtx(keyword)
+        // Pinned against KotlinPoet's own escaper rather than against a hand-written list: whatever
+        // `ParameterSpec` renders for a name is what a context parameter renders for it.
+        for (name in listOf("a b", "object", "class", "if", "a-b", "ok", "a1")) {
+            val asValueParameter = com.squareup.kotlinpoet.ParameterSpec.builder(name, INT).build()
+                .toString().substringBefore(":")
+            val asContextParameter = render {
+                `fun`("f", returns = INT, contextParameters = listOf(contextParameter(name, ctx))) {
+                    ret(1.lit)
+                }
+            }
+            assertTrue("context($asValueParameter: Ctx)" in asContextParameter, "$name: $asContextParameter")
+        }
+        // `_` is the one exemption, and it is a **meaning** rule: `%N` renders it `` `_` ``, which
+        // Kotlin reads as an ordinary parameter named `_` rather than as the anonymous context
+        // parameter this construct documents. Both compile; only one is what the caller asked for.
+        val anonymous = render {
+            `fun`("f", returns = INT, contextParameters = listOf(contextParameter("_", ctx))) {
+                ret(1.lit)
+            }
+        }
+        assertTrue("context(_: Ctx)" in anonymous, anonymous)
+        assertCompilesWithCtx(anonymous)
+        // …and the escaping happens at the render, not on the descriptor, so the *conflict* rules
+        // still compare logical names. This is the row that would have broken if the escape had
+        // gone into `contextParameter` itself.
+        val clash = assertFailsWith<IllegalStateException> {
+            render {
+                `fun`(
+                    "f",
+                    param("a b", INT),
+                    returns = INT,
+                    contextParameters = listOf(contextParameter("a b", ctx)),
+                ) { _ -> ret(1.lit) }
+            }
+        }
+        assertTrue("conflicting declarations" in clash.message!!, clash.message!!)
+        assertEquals("a b", contextParameter("a b", ctx).name)
+    }
+
     /** *conflicting declarations*, in both directions. */
     @Test
     fun `a repeated context parameter name and a clash with a value parameter are refused`() {

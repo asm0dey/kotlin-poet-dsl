@@ -82,6 +82,26 @@ private fun docFor(nm: Spelling, body: String): String =
 // --- one overload, and the two ways it is rendered -----------------------------------------------
 
 /**
+ * The half of every ADR 0002 shadow message that is about *resolution* rather than about the
+ * construct, spelled once because it is the same fact at all 126 of them.
+ *
+ * E3's wording — "Written in a block it would silently attach to the enclosing type" — is true of a
+ * **direct** block call and false of the case E3 itself created. A shadow is a `BlockScope`
+ * extension, and an extension receiver beats a context parameter in Kotlin's resolution, so a call
+ * inside a `typeSpec { }` or `anonymousObject { }` body written lexically in a block resolves to the
+ * shadow even though the call is in a genuine `TypeScope` and the construct would have attached
+ * correctly. Telling that caller their call "would silently attach to the enclosing type" sends them
+ * looking for a bug that is not there. Corrected here rather than later because Task 22 locks these
+ * strings permanently.
+ */
+private const val SHADOW_CAPTURE: String =
+    "Written directly in a block it would silently attach to the enclosing type; a call inside a " +
+        "`typeSpec` or `anonymousObject` body written lexically in a block lands here too, though " +
+        "the construct would have been valid there, because a shadow is a `BlockScope` extension " +
+        "and an extension receiver beats a context parameter (ADR 0002). Build that type outside " +
+        "the block, or splice it in with `+`."
+
+/**
  * A single generated declaration. [shadow], when set, is the message of the `BlockScope` shadow
  * that mirrors this exact signature — see [renderShadow].
  */
@@ -554,8 +574,7 @@ private fun ctorOverloads(): List<Overload> = CTOR_NAMES.flatMap { nm ->
                 // type's context parameter is still in scope there, so the call resolves and the
                 // constructor silently attaches to the enclosing type. Only the file-level direction
                 // fails on its own ("no context argument for 't: TypeScope' found").
-                shadow = "${nm.value} is only valid inside a class body. Written in a block it " +
-                    "would silently attach to the enclosing type.",
+                shadow = "${nm.value} is only valid inside a class body. " + SHADOW_CAPTURE,
             )
         }
     }
@@ -633,7 +652,7 @@ private val SUPERTYPES: List<Overload> = listOf(
         returns = null,
         body = "t.applySuperclass(type, args)",
         shadow = "superclass is only valid inside a class or object body, on the type itself. " +
-            "Written in a block it would silently attach to the enclosing type.",
+            SHADOW_CAPTURE + " `anonymousObject` takes its supertypes as parameters for that reason.",
     ),
     Overload(
         doc = """
@@ -657,7 +676,8 @@ private val SUPERTYPES: List<Overload> = listOf(
         returns = null,
         body = "t.applySuperinterface(type, by)",
         shadow = "superinterface is only valid inside a class, object or interface body, on the " +
-            "type itself. Written in a block it would silently attach to the enclosing type.",
+            "type itself. " + SHADOW_CAPTURE +
+            " `anonymousObject` takes its supertypes as parameters for that reason.",
     ),
 )
 
@@ -701,8 +721,8 @@ private val TYPE_BODY: List<Overload> = listOf(
         params = listOf("body: BlockScope.() -> Unit"),
         returns = null,
         body = "t.addInitializerBlock(body)",
-        shadow = "`init` is only valid inside a class, object or companion object body. Written in " +
-            "a block it would silently attach an initializer block to the enclosing type.",
+        shadow = "`init` is only valid inside a class, object or companion object body. " +
+            SHADOW_CAPTURE + " In an `anonymousObject` a property initializer does the same work.",
     ),
     Overload(
         doc = """
@@ -720,8 +740,7 @@ private val TYPE_BODY: List<Overload> = listOf(
         params = KDOC_PARAM + listOf("body: TypeScope.() -> Unit"),
         returns = null,
         body = "t.addCompanionObject(null, kdoc, body)",
-        shadow = "companionObject is only valid inside a class or interface body. Written in a " +
-            "block it would silently attach a companion object to the enclosing type.",
+        shadow = "companionObject is only valid inside a class or interface body. " + SHADOW_CAPTURE,
     ),
     Overload(
         doc = """
