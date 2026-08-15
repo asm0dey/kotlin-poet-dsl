@@ -702,22 +702,58 @@ internal val Scope.nestedTypesAllowed: Boolean
  * See [nestedTypesAllowed] and [isAnonymousBody]. Two containers refuse a nested classifier and they
  * refuse it for different reasons and with different sentences, so the message branches once here
  * rather than at each of the two call sites.
+ *
+ * [modifiers] are the refused declaration's own, and they are here because **this DSL's `kindName`
+ * is `"class"` for all six class-shaped kinds and the frontends' sentence is not**. Passed rather
+ * than read off a builder: at the splice there is no builder to read, only a `TypeSpec`.
  */
-internal fun Scope.holdsNoNestedType(kindName: String, name: String): Nothing {
+internal fun Scope.holdsNoNestedType(
+    kindName: String,
+    name: String,
+    modifiers: Collection<KModifier>,
+): Nothing {
+    val classifier = CLASSIFIER_MODIFIERS.firstOrNull { it in modifiers }
     if (this is TypeScope && isAnonymousBody) {
-        anonymousBodyHoldsNo("`$kindName`", "'$name'", kindName, this.kindName)
+        anonymousBodyHoldsNo("`$kindName`", "'$name'", kindName, this.kindName, classifier)
     }
-    innerHoldsNoNestedType(kindName, name)
+    innerHoldsNoNestedType(kindName, name, classifier)
 }
 
-/** See [nestedTypesAllowed]. */
-internal fun innerHoldsNoNestedType(kindName: String, name: String): Nothing = kindRefusal(
+/**
+ * See [nestedTypesAllowed].
+ *
+ * An `inner class` body names the declared form in its *'X' is prohibited here* sentence, and two of
+ * the six class-shaped kinds get a noun of their own there — the same defect [anonymousBodyDiagnostic]
+ * had, in the sibling container, found by running these rows rather than by reading the code.
+ * Measured, one file per row, `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10:
+ *
+ *     class O { inner class M { public annotation class N } }   'Annotation class' is prohibited here.
+ *     class O { inner class M { public enum class N } }         'Enum class' is prohibited here.
+ *     class O { inner class M { public sealed class N } }       'Class' is prohibited here.
+ *     class O { inner class M { public data class N(val a: Int) } }    — the same
+ *     class O { inner class M { public value class N(val a: Int) } }   — the same
+ *     class O { inner class M { public class N } }                     — the same
+ *
+ * So `sealed`, `data` and `value` are plain classes to this sentence and `annotation` and `enum` are
+ * not, which is not the split the *anonymous* body makes: there, `sealed` and `value` have sentences
+ * of their own and `enum`'s is a modifier-applicability one. Two containers, two tables, both
+ * measured.
+ */
+internal fun innerHoldsNoNestedType(kindName: String, name: String, classifier: KModifier?): Nothing = kindRefusal(
     "`$kindName`",
     "'$name' is declared inside an `inner class`, which holds no nested classifier",
     // Kotlin's own noun for the declaration it is refusing, which is not this DSL's `kindName` for
     // one of the four: a named object is *'Object'* there.
-    "'${if (kindName == "named object") "Object" else kindName.replaceFirstChar(Char::uppercase)}' " +
-        "is prohibited here",
+    "'${innerProhibitedNoun(kindName, classifier)}' is prohibited here",
     "Declare '$name' INNER as well — an `inner class` nested in an `inner class` is the one shape " +
         "Kotlin allows — or move it out to the enclosing class.",
 )
+
+/** See [innerHoldsNoNestedType]: the noun Kotlin puts in *'X' is prohibited here*. */
+private fun innerProhibitedNoun(kindName: String, classifier: KModifier?): String = when {
+    kindName == "named object" -> "Object"
+    kindName != "class" -> kindName.replaceFirstChar(Char::uppercase)
+    classifier == KModifier.ANNOTATION -> "Annotation class"
+    classifier == KModifier.ENUM -> "Enum class"
+    else -> "Class"
+}

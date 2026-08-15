@@ -157,7 +157,7 @@ internal fun Scope.declareType(
     // anonymous bodies.
     checkInnerKindPair("`$kindName`", name, modifiers.toList())
     if (!nestedTypesAllowed && KModifier.INNER !in modifiers.toList()) {
-        holdsNoNestedType(kindName, name)
+        holdsNoNestedType(kindName, name, modifiers.toList())
     }
     // Types only: Kotlin permits function overloads, so duplicate `fun` names are legal and
     // must never go through `declaredTypeNames`.

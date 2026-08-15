@@ -5,6 +5,10 @@ import com.squareup.kotlinpoet.KModifier.ABSTRACT
 import com.squareup.kotlinpoet.KModifier.ANNOTATION
 import com.squareup.kotlinpoet.KModifier.COMPANION
 import com.squareup.kotlinpoet.KModifier.ENUM as ENUM_MODIFIER
+import com.squareup.kotlinpoet.KModifier.DATA
+import com.squareup.kotlinpoet.KModifier.FUN
+import com.squareup.kotlinpoet.KModifier.SEALED
+import com.squareup.kotlinpoet.KModifier.VALUE
 import com.squareup.kotlinpoet.KModifier.INNER
 import com.squareup.kotlinpoet.KModifier.OVERRIDE
 import com.squareup.kotlinpoet.KModifier.PRIVATE
@@ -264,6 +268,78 @@ class AnonymousObjectTest {
         // local class would not, which is exactly why this asserts the output rather than the input.
         assertCompiles(out)
         assertCompilesEverywhereButJvm(out)
+    }
+
+    /**
+     * …and the same rule one level finer: **this DSL's `kindName` is `"class"` for all six
+     * class-shaped kinds, and the frontends' sentence is not.** An `annotation class` and an `enum
+     * class` in an anonymous body were both told *'Class' is prohibited here*, which no frontend
+     * prints for either. Measured on the **renders**, one file per row, `kotlinc`, `kotlinc-js` and
+     * `kotlinc-wasm` 2.4.10, all three identical and both bodies identical:
+     *
+     *     object { public annotation class N }         annotation class cannot be local.
+     *     object { public enum class N }               modifier 'enum' is not applicable to
+     *                                                  'local class'.
+     *     object { public sealed class N }             modifier 'sealed' is not applicable to
+     *                                                  'local class'.
+     *     object { public value class N(val a: Int) }  value class cannot be local or inner.
+     *     object { public data class N(val a: Int) }   'Class' is prohibited here.
+     *     object { public class N }                    'Class' is prohibited here.
+     *
+     * `data` is the one classifier kind that really is a plain class to this sentence — and `sealed`
+     * is one that is not, which the brief for this fix did not list.
+     */
+    @Test
+    fun `each classifier kind in an anonymous body quotes its own frontend sentence`() {
+        val rows = listOf(
+            Triple(ANNOTATION, "annotation class cannot be local", false),
+            Triple(ENUM_MODIFIER, "modifier 'enum' is not applicable to 'local class'", false),
+            Triple(SEALED, "modifier 'sealed' is not applicable to 'local class'", false),
+            Triple(VALUE, "value class cannot be local or inner", true),
+            Triple(DATA, "'Class' is prohibited here", true),
+        )
+        for ((modifier, sentence, withParam) in rows) {
+            val declare: TypeScope.() -> Unit = {
+                if (withParam) {
+                    `class`(modifier.toModifiers(), "N", param(ParamKind.VAL, "a", INT)) { }
+                } else {
+                    `class`(modifier.toModifiers(), "N") { }
+                }
+            }
+            val anon = assertFailsWith<IllegalStateException> {
+                render { `val`("v", init = anonymousObject(body = declare)) }
+            }
+            assertTrue(sentence in anon.message!!, anon.message!!)
+            val entry = assertFailsWith<IllegalStateException> {
+                render { `class`(ENUM_MODIFIER, "E") { enumEntry("A", body = declare) } }
+            }
+            assertTrue(sentence in entry.message!!, entry.message!!)
+        }
+        // …and the two forms no modifier moves: an `interface` keeps its sentence when it is a `fun
+        // interface`, and a named `object` keeps its when it is a `data object`. Measured.
+        val funInterface = assertFailsWith<IllegalStateException> {
+            render { `val`("v", init = anonymousObject { `interface`(FUN, "F") { } }) }
+        }
+        assertTrue("'Interface' is prohibited here" in funInterface.message!!, funInterface.message!!)
+        val dataObject = assertFailsWith<IllegalStateException> {
+            render { `val`("v", init = anonymousObject { `object`(DATA, "O") { } }) }
+        }
+        assertTrue("named object 'O' cannot be local" in dataObject.message!!, dataObject.message!!)
+        // The same six through the **splice**, which reads `TypeSpec.kind` — `CLASS` for an
+        // annotation and an enum builder alike, so it had the identical collapse.
+        val splicedAnnotation = assertFailsWith<IllegalStateException> {
+            render {
+                `fun`("f") {
+                    `val`(
+                        "v",
+                        init = anonymousObject {
+                            +TypeSpec.classBuilder("N").addModifiers(ANNOTATION).build()
+                        },
+                    )
+                }
+            }
+        }
+        assertTrue("annotation class cannot be local" in splicedAnnotation.message!!, splicedAnnotation.message!!)
     }
 
     /**

@@ -232,6 +232,43 @@ class KindBodyTest {
         )
     }
 
+    /**
+     * …and which noun *'X' is prohibited here* carries, which is the declared **kind** and not this
+     * DSL's `kindName`. Two of the six class-shaped kinds get a noun of their own, and the split is
+     * not the one the anonymous body makes. Measured, one file per row, all three frontends 2.4.10:
+     *
+     *     class O { inner class M { public annotation class N } }  'Annotation class' is prohibited
+     *                                                              here.
+     *     class O { inner class M { public enum class N } }        'Enum class' is prohibited here.
+     *     class O { inner class M { public sealed class N } }      'Class' is prohibited here.
+     *     class O { inner class M { public data class N(val a: Int) } }   — the same
+     *     class O { inner class M { public value class N(val a: Int) } }  — the same
+     */
+    @Test
+    fun `the prohibited-here noun inside an inner class is the declared kind's`() {
+        val rows = listOf(
+            Triple(ANNOTATION, "'Annotation class' is prohibited here", false),
+            Triple(ENUM, "'Enum class' is prohibited here", false),
+            Triple(SEALED, "'Class' is prohibited here", false),
+            Triple(DATA, "'Class' is prohibited here", true),
+            Triple(VALUE, "'Class' is prohibited here", true),
+        )
+        for ((modifier, sentence, withParam) in rows) {
+            val m = message {
+                `class`("O") {
+                    `class`(INNER, "M") {
+                        if (withParam) {
+                            `class`(modifier.toModifiers(), "N", param(VAL, "a", INT)) { }
+                        } else {
+                            `class`(modifier.toModifiers(), "N") { }
+                        }
+                    }
+                }
+            }
+            assertTrue(sentence in m, m)
+        }
+    }
+
     /** The control rows: what an `inner class` *does* still hold. */
     @Test
     fun `an inner class still holds members and another inner class`() {

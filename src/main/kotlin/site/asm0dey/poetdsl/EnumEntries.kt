@@ -78,12 +78,13 @@ internal fun anonymousBodyHoldsNo(
     what: String,
     declaredKind: String,
     containerKind: String,
+    classifier: KModifier?,
 ): Nothing =
     kindRefusal(
         construct,
         "$what is declared in ${article(containerKind)} $containerKind, which is the body of an " +
             "anonymous class and holds no nested classifier, no constructor and no companion object",
-        anonymousBodyDiagnostic(declaredKind, what),
+        anonymousBodyDiagnostic(declaredKind, what, classifier),
         "Declare it in the enclosing type instead, or — for a class — declare it INNER, which is " +
             "the one nested classifier an anonymous body does hold. See `innerAllowed`.",
     )
@@ -149,13 +150,45 @@ internal fun Scope.checkAnonymousBodyTypeSplice(spec: TypeSpec) {
         return
     }
     if (KModifier.COMPANION in spec.modifiers) companionNeedsAClassOrInterface("TypeSpec", name)
-    holdsNoNestedType(declaredKind, name)
+    holdsNoNestedType(declaredKind, name, spec.modifiers)
 }
 
-/** See [anonymousBodyHoldsNo]: the frontends' own sentence for each of the three declared forms. */
-private fun anonymousBodyDiagnostic(declaredKind: String, what: String): String = when (declaredKind) {
-    "named object" -> "named object $what cannot be local. Try to use an anonymous object instead"
-    "interface" -> "'Interface' is prohibited here"
+/**
+ * See [anonymousBodyHoldsNo]: the frontends' own sentence for each declared form.
+ *
+ * **The form is not this DSL's `kindName`, and that is what this used to key on.** `kindName` is
+ * `"class"` for all six class-shaped kinds, so an `annotation class` and an `enum class` were told
+ * *'Class' is prohibited here*, which no frontend prints for either. The verdict was right in every
+ * cell; the citation was invented — the failure this project's method exists to catch, and its third
+ * instance in these two containers.
+ *
+ * Measured, one file per row, `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10, both anonymous
+ * bodies identical on every row, and each sentence read off the **render** (KotlinPoet writes the
+ * `public`, which draws a *modifier 'public' is not applicable to 'local class'* of its own on every
+ * row but the annotation one; the sentence quoted here is the one that names the declared form,
+ * which is the same choice the plain-class row already made):
+ *
+ *     object { public annotation class N }         annotation class cannot be local.
+ *     object { public enum class N }               modifier 'enum' is not applicable to 'local class'.
+ *     object { public sealed class N }             modifier 'sealed' is not applicable to 'local class'.
+ *     object { public value class N(val a: Int) }  value class cannot be local or inner.
+ *     object { public data class N(val a: Int) }   'Class' is prohibited here.
+ *     object { public class N }                    'Class' is prohibited here.
+ *
+ * So `data` is the one classifier kind that really is a plain class to this sentence, and `sealed` —
+ * which the brief for this fix did not name — is one that is not. `interface` and `object` are
+ * unaffected by any modifier: `fun interface F` is still *'Interface' is prohibited here* and
+ * `data object O` still *named object 'O' cannot be local*, both measured.
+ */
+private fun anonymousBodyDiagnostic(declaredKind: String, what: String, classifier: KModifier?): String = when {
+    declaredKind == "named object" ->
+        "named object $what cannot be local. Try to use an anonymous object instead"
+    declaredKind == "interface" -> "'Interface' is prohibited here"
+    classifier == KModifier.ANNOTATION -> "annotation class cannot be local"
+    classifier == KModifier.ENUM -> "modifier 'enum' is not applicable to 'local class'"
+    classifier == KModifier.SEALED -> "modifier 'sealed' is not applicable to 'local class'"
+    classifier == KModifier.VALUE || classifier == KModifier.INLINE ->
+        "value class cannot be local or inner"
     else -> "'Class' is prohibited here"
 }
 
