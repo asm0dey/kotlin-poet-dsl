@@ -1,6 +1,7 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.CodeBlock
+import com.squareup.kotlinpoet.ContextParameter
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.ParameterSpec
@@ -803,6 +804,7 @@ internal fun buildFun(
     kdoc: String?,
     receiverKdoc: String?,
     returnsKdoc: String?,
+    contextParameters: List<ContextParameter>,
     parent: Scope?,
     body: BlockScope.(List<Expr>) -> Unit,
 ): FunSpec {
@@ -959,6 +961,16 @@ internal fun buildFun(
     // parameter colliding with an *enclosing* binding still renames, because there the output is
     // valid and only the name has to move. Function *names* are deliberately exempt from any such
     // check: Kotlin permits overloads.
+    // …and D43's two, which need both lists to see: a context parameter repeating another's name, and
+    // one colliding with a value parameter. Kotlin answers either with *conflicting declarations*.
+    if (contextParameters.isNotEmpty()) {
+        checkContextParameters(
+            if (kind == FunKind.CONSTRUCTOR) "`constructor`" else "`fun`",
+            name,
+            contextParameters,
+            params.map { it.name },
+        )
+    }
     params.map { it.name }.groupingBy { it }.eachCount().forEach { (paramName, count) ->
         check(count == 1) {
             "param: a parameter named \"$paramName\" is already declared in this function."
@@ -1098,6 +1110,7 @@ internal fun buildFun(
             annotations?.list?.forEach { addAnnotation(it) }
             addModifiers(modifiers.toList())
             addTypeVariables(typeVariables)
+            applyContextParameters(contextParameters)
             kdoc?.let { addKdoc(docBlock(it)) }
             // `receiver(type, kdoc)` and `returns(type, kdoc)` rather than an `@receiver`/`@return`
             // line written into `kdoc` by hand: KotlinPoet emits the tags in the order Kotlin
@@ -1368,10 +1381,11 @@ public fun funSpec(
     kdoc: String? = null,
     receiverKdoc: String? = null,
     returnsKdoc: String? = null,
+    contextParameters: List<ContextParameter> = emptyList(),
     body: BlockScope.() -> Unit,
 ): FunSpec = buildFun(
     name, FunKind.FUNCTION, null, modifiers, emptyList(), typeVariables, returns, receiver,
-    kdoc, receiverKdoc, returnsKdoc, null,
+    kdoc, receiverKdoc, returnsKdoc, contextParameters, null,
 ) { body() }
 
 /** [funSpec] with one parameter; the body receives its handle. */
@@ -1385,10 +1399,11 @@ public fun funSpec(
     kdoc: String? = null,
     receiverKdoc: String? = null,
     returnsKdoc: String? = null,
+    contextParameters: List<ContextParameter> = emptyList(),
     body: BlockScope.(Expr) -> Unit,
 ): FunSpec = buildFun(
     name, FunKind.FUNCTION, null, modifiers, listOf(p1), typeVariables, returns, receiver,
-    kdoc, receiverKdoc, returnsKdoc, null,
+    kdoc, receiverKdoc, returnsKdoc, contextParameters, null,
 ) { (a) -> body(a) }
 
 /**
@@ -1431,6 +1446,7 @@ public fun propertySpec(
     setterParam: String = "value",
     setter: (BlockScope.(Expr) -> Unit)? = null,
     kdoc: String? = null,
+    contextParameters: List<ContextParameter> = emptyList(),
     getter: (BlockScope.() -> Unit)? = null,
 ): PropertySpec {
     check(init == null || by == null) {
@@ -1445,7 +1461,7 @@ public fun propertySpec(
     // here. See this function's KDoc for what `modifiers = ABSTRACT` does and does not buy.
     checkProperty(
         "propertySpec", name, mutable, init, by, typeVariables, receiver, setter, getter,
-        modifiers, PropertyContainer.UNKNOWN,
+        modifiers, PropertyContainer.UNKNOWN, contextParameters,
     )
     val spec = PropertySpec.builder(name, type, modifiers.toList())
     spec.mutable(mutable)
@@ -1454,6 +1470,7 @@ public fun propertySpec(
     receiver?.let { spec.receiver(it) }
     init?.let { spec.initializer("%L", it.code) }
     by?.let { spec.delegate("%L", it.code) }
+    spec.applyContextParameters(contextParameters)
     spec.addAccessors(parent = null, name = name, type = type, setterParam = setterParam, setter = setter, getter = getter)
     return spec.build()
 }

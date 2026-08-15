@@ -1,6 +1,7 @@
 package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.CodeBlock
+import com.squareup.kotlinpoet.ContextParameter
 import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.LambdaTypeName
 import com.squareup.kotlinpoet.ParameterizedTypeName
@@ -128,6 +129,7 @@ private fun Scope.propertyOf(
     setter: (BlockScope.(Expr) -> Unit)?,
     getter: (BlockScope.() -> Unit)?,
     kdoc: String?,
+    contextParameters: List<ContextParameter>,
 ): PropertySpec {
     checkNotNull(type) {
         "Property '$name' requires an explicit type; KotlinPoet cannot infer it."
@@ -135,7 +137,7 @@ private fun Scope.propertyOf(
     val construct = if (mutable) "`var`" else "`val`"
     checkProperty(
         construct, name, mutable, init, by, typeVariables, receiver, setter, getter,
-        modifiers, propertyContainer(),
+        modifiers, propertyContainer(), contextParameters,
     )
     // An extension property is keyed by receiver *and* name: `val String.size` and `val Int.size`
     // are two different declarations and both are legal in one file, while two of the same name on
@@ -160,6 +162,7 @@ private fun Scope.propertyOf(
         .mutable(mutable)
         .apply {
             addTypeVariables(typeVariables)
+            applyContextParameters(contextParameters)
             receiver?.let { receiver(it) }
             init?.let { initializer("%L", it.code) }
             by?.let { delegate("%L", it.code) }
@@ -196,7 +199,7 @@ internal fun PropertySpec.Builder.addAccessors(
         getter(
             buildFun(
                 name, FunKind.GETTER, null, null, emptyList(), emptyList(), null, null,
-                null, null, null, parent,
+                null, null, null, emptyList(), parent,
             ) { body() },
         )
     }
@@ -204,7 +207,7 @@ internal fun PropertySpec.Builder.addAccessors(
         setter(
             buildFun(
                 name, FunKind.SETTER, null, null, listOf(param(setterParam, type)), emptyList(), null, null,
-                null, null, null, parent,
+                null, null, null, emptyList(), parent,
             ) { (value) -> body(value) },
         )
     }
@@ -511,6 +514,7 @@ internal fun checkProperty(
     getter: (BlockScope.() -> Unit)?,
     modifiers: Modifiers?,
     container: PropertyContainer,
+    contextParameters: List<ContextParameter>,
 ) {
     val declared = modifiers.toList()
     // The modifier family, before anything that reads the container: nineteen of the thirty-two
@@ -998,18 +1002,31 @@ internal fun checkProperty(
                 "fire there."
         }
     }
+    if (contextParameters.isNotEmpty()) {
+        checkContextParameters(construct, name, contextParameters, emptyList())
+        checkContextProperty(construct, name, init, by)
+    }
     // A property's type parameters take no declaration-site variance and no `reified`, for the same
     // reasons a function's do not.
     checkTypeVariables(construct, name, typeVariables, varianceAllowed = false, reifiedAllowed = false)
     if (typeVariables.isEmpty()) return
-    checkNotNull(receiver) {
-        "$construct: '$name' declares type parameters but has no receiver. Kotlin allows a property's " +
-            "type parameter only where its receiver type uses it."
+    // **E3 widened this, and E1 predicted it would.** The compiler's sentence is "Type parameter of a
+    // property must be used in its receiver type **or context parameters**", and E1 implemented the
+    // first half because the second had no construct behind it. It has one now:
+    // `context(c: Ctx<T>) val <T> p: Int get() = 1` is clean on all three frontends and was refused.
+    // So the question is "is it used in the receiver *or* in a context parameter", asked once per
+    // variable rather than as a receiver null-check followed by a loop.
+    val bindings = listOfNotNull(receiver) + contextParameters.map { it.type }
+    check(bindings.isNotEmpty()) {
+        "$construct: '$name' declares type parameters but has no receiver and no context parameters. " +
+            "Kotlin allows a property's type parameter only where its receiver type or a context " +
+            "parameter uses it."
     }
     typeVariables.forEach { variable ->
-        check(receiver.mentions(variable)) {
+        check(bindings.any { it.mentions(variable) }) {
             "$construct: type parameter \"${variable.name}\" of '$name' is not used in the receiver " +
-                "type. Kotlin allows a property's type parameter only where its receiver type uses it."
+                "type or in a context parameter. Kotlin allows a property's type parameter only " +
+                "where one of those uses it."
         }
     }
 }
@@ -1067,6 +1084,7 @@ internal fun Scope.bind(
     setter: (BlockScope.(Expr) -> Unit)? = null,
     getter: (BlockScope.() -> Unit)? = null,
     kdoc: String? = null,
+    contextParameters: List<ContextParameter> = emptyList(),
 ): Expr {
     check(init == null || by == null) {
         "Binding '$name' cannot have both an initializer and a delegate."
@@ -1084,6 +1102,13 @@ internal fun Scope.bind(
                 "A local binding ('$name') cannot have accessors, an extension receiver or type " +
                     "parameters; only a property can."
             }
+            // …nor context parameters, and for a reason of its own: `context(c: Ctx) val p: Int` in a
+            // block is a *local variable*, which Kotlin gives no context parameters at all, and
+            // `bindLocal` builds a `CodeBlock` with nowhere to put them, so they would be dropped
+            // silently. A local *function* may have them and `` `fun` `` still offers the slot there.
+            check(contextParameters.isEmpty()) {
+                "A local binding ('$name') cannot have context parameters; only a property can."
+            }
             // A local variable takes no KDoc either: `bindLocal` builds a `CodeBlock`, which has no
             // documentation slot, so the text would be silently dropped. Kotlin has no syntax for it
             // anyway — a KDoc comment on a local is just a comment.
@@ -1096,7 +1121,7 @@ internal fun Scope.bind(
         is FileScope -> {
             val spec = propertyOf(
                 mutable, annotations, modifiers, name, type, init, by,
-                typeVariables, receiver, setterParam, setter, getter, kdoc,
+                typeVariables, receiver, setterParam, setter, getter, kdoc, contextParameters,
             )
             builder.addProperty(spec)
             handle(spec.name, type, mutable, ownerOf(spec.name, receiver))
@@ -1105,7 +1130,7 @@ internal fun Scope.bind(
         is TypeScope -> {
             val spec = propertyOf(
                 mutable, annotations, modifiers, name, type, init, by,
-                typeVariables, receiver, setterParam, setter, getter, kdoc,
+                typeVariables, receiver, setterParam, setter, getter, kdoc, contextParameters,
             )
             builder.addProperty(spec)
             handle(spec.name, type, mutable, ownerOf(spec.name, receiver))

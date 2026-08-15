@@ -803,16 +803,18 @@ class AccessorsTest {
             }
         }
         assertEquals(
-            "`val`: type parameter \"T\" of 'stray' is not used in the receiver type. Kotlin allows " +
-                "a property's type parameter only where its receiver type uses it.",
+            "`val`: type parameter \"T\" of 'stray' is not used in the receiver type or in a " +
+                "context parameter. Kotlin allows a property's type parameter only where one of " +
+                "those uses it.",
             failure.message,
         )
         val noReceiver = assertFailsWith<IllegalStateException> {
             file("com.example", "A") { `val`("stray", t, typeVariables = listOf(t)) { ret(0.lit) } }
         }
         assertEquals(
-            "`val`: 'stray' declares type parameters but has no receiver. Kotlin allows a " +
-                "property's type parameter only where its receiver type uses it.",
+            "`val`: 'stray' declares type parameters but has no receiver and no context " +
+                    "parameters. Kotlin allows a property's type parameter only where its receiver " +
+                    "type or a context parameter uses it.",
             noReceiver.message,
         )
     }
@@ -876,8 +878,9 @@ class AccessorsTest {
             }.message,
         )
         assertEquals(
-            "propertySpec: type parameter \"T\" of 'stray' is not used in the receiver type. " +
-                "Kotlin allows a property's type parameter only where its receiver type uses it.",
+            "propertySpec: type parameter \"T\" of 'stray' is not used in the receiver type or in a " +
+                "context parameter. " +
+                "Kotlin allows a property's type parameter only where one of those uses it.",
             assertFailsWith<IllegalStateException> {
                 propertySpec(name = "stray", type = INT, receiver = STRING, typeVariables = listOf(t)) {
                     ret(0.lit)

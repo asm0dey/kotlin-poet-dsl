@@ -318,7 +318,7 @@ private fun BindConstruct.overloads(): List<Overload> = names.flatMap { nm ->
                 // E2b's slot goes *before* the getter, not after it: the getter is the trailing
                 // lambda, and a slot appended past it would stop `` `val`("x", INT) { … } `` from
                 // binding its block to the getter at all.
-            ) + KDOC_PARAM + listOf(
+            ) + KDOC_PARAM + CONTEXT_PARAMS + listOf(
                 "getter: (BlockScope.() -> Unit)? = null",
             ),
             returns = "Expr",
@@ -336,6 +336,7 @@ private fun BindConstruct.overloads(): List<Overload> = names.flatMap { nm ->
                 "    setter,\n" +
                 "    getter,\n" +
                 "    kdoc,\n" +
+                "    contextParameters,\n" +
                 ")",
         )
     }
@@ -406,6 +407,21 @@ private fun forwarder(arity: Int?): String = when {
 private val KDOC_PARAM: List<String> = listOf("kdoc: String? = null")
 
 /**
+ * E3's context-parameter slot, on `` `fun` ``/`func` and on `` `val` ``/`` `var` ``/`property`.
+ *
+ * A **defaulted** parameter like [typeVariablesParam] and [KDOC_PARAM], so it adds **zero** new
+ * declarations. Its position is the standing rule's — after every slot that was already there and
+ * before the body lambda — which for a binding means after `kdoc` and before the trailing `getter`,
+ * and for a function after `returnsKdoc`. A `List<ContextParameter>` cannot bind a lambda, so a
+ * trailing lambda still reaches the body and nothing that compiled before this moves.
+ *
+ * `` `constructor` ``, `` `class` ``, `` `object` ``, `` `interface` `` and `` `typealias` `` get no
+ * slot: context parameters are *unsupported* on a constructor, a class, an object and a type alias on
+ * all three frontends, so the absence of the slot is the guard.
+ */
+private val CONTEXT_PARAMS: List<String> = listOf("contextParameters: List<ContextParameter> = emptyList()")
+
+/**
  * The two KDoc tags KotlinPoet models as parameters of `returns`/`receiver` rather than as text —
  * `@return` and `@receiver`. Written as slots rather than left to the caller's own prose because
  * KotlinPoet emits the tags in the order Kotlin documents them (`@receiver`, then `@param` for each
@@ -458,7 +474,7 @@ private fun funOverloads(): List<Overload> = FUN_NAMES.flatMap { nm ->
                         // to a receiver type, rendering `fun String.f()` for code that asked for
                         // `fun f(): String`. D32's breaks were loud; that one would not be. See D33.
                         "receiver: TypeName? = null",
-                    ) + FUN_KDOC_PARAMS + listOf("body: ${bodyType(arity)}"),
+                    ) + FUN_KDOC_PARAMS + CONTEXT_PARAMS + listOf("body: ${bodyType(arity)}"),
                 returns = null,
                 body = """
                     |s.declareFun(
@@ -474,6 +490,7 @@ private fun funOverloads(): List<Overload> = FUN_NAMES.flatMap { nm ->
                     |        kdoc,
                     |        receiverKdoc,
                     |        returnsKdoc,
+                    |        contextParameters,
                     |        s,
                     |        ${forwarder(arity)},
                     |    ),
@@ -521,6 +538,12 @@ private fun ctorOverloads(): List<Overload> = CTOR_NAMES.flatMap { nm ->
                     |        kdoc,
                     |        null,
                     |        null,
+                    |        // A constructor takes **no** context parameters: `class C { context(c: Ctx)
+                    |        // constructor(x: Int) { } }` is *context parameters on constructors are
+                    |        // unsupported* on all three frontends, so `` `constructor` `` gets no slot
+                    |        // at all rather than a run-time check — the strongest form the guard takes,
+                    |        // and the same call E1 made for `object O<T>`.
+                    |        emptyList(),
                     |        t,
                     |        ${forwarder(arity)},
                     |    ),
@@ -797,6 +820,7 @@ private fun typeAliasOverloads(): List<Overload> = VARIANTS.map { v ->
 // --- files ----------------------------------------------------------------------------------------
 
 private val IMPORTS = listOf(
+    "com.squareup.kotlinpoet.ContextParameter",
     "com.squareup.kotlinpoet.KModifier",
     "com.squareup.kotlinpoet.ParameterSpec",
     "com.squareup.kotlinpoet.TypeName",

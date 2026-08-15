@@ -176,8 +176,9 @@ class TypesCompileTest {
 
         for (construct in listOf("`val`", "`var`")) {
             assertEquals(
-                "$construct: 'stray' declares type parameters but has no receiver. Kotlin allows a " +
-                    "property's type parameter only where its receiver type uses it.",
+                "$construct: 'stray' declares type parameters but has no receiver and no context " +
+                    "parameters. Kotlin allows a property's type parameter only where its receiver " +
+                    "type or a context parameter uses it.",
                 assertFailsWith<IllegalStateException> {
                     file("com.example", "A") {
                         bindFor(construct, "stray", INT, typeVariables = listOf(t)) { ret(0.lit) }
@@ -185,8 +186,9 @@ class TypesCompileTest {
                 }.message,
             )
             assertEquals(
-                "$construct: type parameter \"T\" of 'stray' is not used in the receiver type. Kotlin " +
-                    "allows a property's type parameter only where its receiver type uses it.",
+                "$construct: type parameter \"T\" of 'stray' is not used in the receiver type or in a " +
+                    "context parameter. Kotlin " +
+                    "allows a property's type parameter only where one of those uses it.",
                 assertFailsWith<IllegalStateException> {
                     file("com.example", "A") {
                         bindFor(construct, "stray", INT, receiver = STRING, typeVariables = listOf(t)) { ret(0.lit) }
