@@ -107,12 +107,17 @@ class KindBodyTest {
     // --- …and the pair half: which classifier kinds may be `inner` at all ----------------------
 
     /**
-     * `inner` is refused **on** five classifier kinds, in all three containers that take an `inner`
-     * class: a class body, an anonymous object's body and an enum entry's. Every row is a render
-     * this DSL emitted until this round — the E3 fix round widened [Scope.innerAllowed] to the two
-     * anonymous bodies, and every `inner` pair in those bodies went from refused to rendered with
-     * it, because its sweep was 32 *single* modifiers and a pair is not a coordinate of that
-     * product.
+     * `inner` is refused **on** six classifier kinds, in all three containers that take an `inner`
+     * class: a class body, an anonymous object's body and an enum entry's. Five of the six draw one
+     * sentence in every container and are the rows below; the sixth, `enum`, draws a different noun
+     * per container and has the test after this one. That the set is exactly six is neither written
+     * here nor read off the guard's own list — `the set of kinds inner is refused on is exactly six`
+     * derives it by sweeping every `KModifier`.
+     *
+     * Every row is a render this DSL emitted until the pre-lock round — the E3 fix round widened
+     * [Scope.innerAllowed] to the two anonymous bodies, and every `inner` pair in those bodies went
+     * from refused to rendered with it, because its sweep was 32 *single* modifiers and a pair is
+     * not a coordinate of that product.
      *
      * The quoted sentences are the compiler's, transcribed from a run over the **renders**, and the
      * render is not the input: KotlinPoet emits `public sealed inner class N` for
@@ -120,7 +125,7 @@ class KindBodyTest {
      * `inner sealed class N` and `sealed inner class N` draw the two halves of one sentence.
      */
     @Test
-    fun `inner is refused on the five classifier kinds it is incompatible with`() {
+    fun `inner is refused on five classifier kinds with one sentence in every container`() {
         data class Row(val modifier: KModifier, val sentence: String, val param: Boolean)
         val rows = listOf(
             Row(ANNOTATION, "modifier 'inner' is not applicable to 'annotation class'", false),
@@ -147,7 +152,7 @@ class KindBodyTest {
     }
 
     /**
-     * `enum` is the one of the five whose **noun** moves: the frontends call the declaration an
+     * `enum` is the sixth kind, and the one whose **noun** moves: the frontends call the declaration an
      * *enum class* in a class body and a *local class* in either anonymous body, because `enum`
      * makes it local there and `inner` cannot make it a member. Measured, one file per cell, all
      * three frontends:
@@ -169,9 +174,43 @@ class KindBodyTest {
     }
 
     /**
+     * **The set, derived rather than transcribed.** Three places in this project have carried a
+     * count of this one fact and no two agreed: the guard's own list held six kinds, the test above
+     * said five in its name, and `Kinds.kt` said the widening released "ten refusals". Every number
+     * was defensible in isolation and none of them said what it was counting, which is E2f's lesson
+     * — *when a guard's correctness depends on a set, derive the set or pin it against its source* —
+     * applied to the arithmetic instead of to the membership.
+     *
+     * So the membership is swept: every `KModifier` value, paired with `INNER` on a nested class in
+     * a class body, in both base forms. Exactly six draw the pair refusal, and this test names them.
+     * A seventh kind added to the guard's list fails here, and so does one dropped.
+     */
+    @Test
+    fun `the set of kinds inner is refused on is exactly six`() {
+        val refused = KModifier.entries.filter { it != INNER }.filter { other ->
+            listOf(false, true).any { withParam ->
+                val e = runCatching {
+                    render {
+                        `class`("C") {
+                            if (withParam) {
+                                `class`(Modifiers(setOf(INNER, other)), "N", param(VAL, "a", INT)) { }
+                            } else {
+                                `class`(Modifiers(setOf(INNER, other)), "N") { }
+                            }
+                        }
+                    }
+                }.exceptionOrNull()
+                e is IllegalStateException && "carries INNER and" in e.message.orEmpty()
+            }
+        }
+        assertEquals(listOf(SEALED, ANNOTATION, DATA, VALUE, INLINE, ENUM).sortedBy { it.name }, refused.sortedBy { it.name })
+    }
+
+    /**
      * The control rows, and they are what say this refuses the **pair** and not either half: an
-     * `inner` class still renders in all three containers, and each of the five kinds still renders
-     * without `inner`. Compiled, so "still renders" is not the whole claim.
+     * `inner` class still renders in all three containers, and each of the six kinds still renders
+     * without `inner` — five declarations, `inline` and `value` being one shape. Compiled, so
+     * "still renders" is not the whole claim.
      */
     @Test
     fun `an inner class and each classifier kind still render on their own`() {

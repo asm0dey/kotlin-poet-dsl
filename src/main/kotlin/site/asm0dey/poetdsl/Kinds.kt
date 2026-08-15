@@ -175,12 +175,22 @@ internal fun Scope.innerNeedsAnEnclosingClass(kindName: String, name: String): N
  * container: [innerAllowed] answers *may an `inner` class be declared here?*, and this answers *may
  * this classifier be `inner` at all?*
  *
- * **The E3 fix round widened [innerAllowed] to the two anonymous bodies correctly and turned ten
- * refusals into invalid renders doing it**, because at base every `inner` declaration in an
- * anonymous body was refused for the container's sake, and afterwards every one of them rendered.
- * Its 128-cell sweep could not see that: the cells were 32 **single** modifiers × 2 base forms × 2
- * bodies, so a *pair* is not a coordinate of that product — this project's recurring defect, for
- * the fourth time.
+ * **The E3 fix round widened [innerAllowed] to the two anonymous bodies correctly and turned
+ * twenty-two refused cells into invalid renders doing it**, because at base every `inner`
+ * declaration in an anonymous body was refused for the container's sake, and afterwards every one
+ * of them rendered. Its 128-cell sweep could not see that: the cells were 32 **single** modifiers ×
+ * 2 base forms × 2 bodies, so a *pair* is not a coordinate of that product — this project's
+ * recurring defect, for the fourth time.
+ *
+ * Twenty-two is measured, and it is the cell count of a **named** product, because this sentence
+ * used to say "ten" and nothing here said what a cell was. The product is `31 KModifier values ×
+ * {class N, class N(val a: Int)} × {an anonymous object's body, an enum entry's body}` = **124
+ * cells**, run through this DSL at `5f7fa80^` and at `5f7fa80` — the commit that widened the term —
+ * with every render compiled. At `5f7fa80^` all 124 are refused. At `5f7fa80` 54 render and 22 of
+ * those do not compile: `sealed`, `enum`, `annotation` and `external` in both base forms and both
+ * bodies (16), and `data`, `value` and `inline` in the parameterised form in both bodies (6).
+ * Eighteen of the 22 are the six kind pairs this table closes; the other four are `external`, which
+ * is D41's row and stays open.
  *
  * The sweep this table comes from is `inner × each of the other 31 KModifier values × {`class N`,
  * `class N(val a: Int)`} × {a class body, an anonymous object's body, an enum entry's body}`, each
@@ -201,7 +211,8 @@ internal fun Scope.innerNeedsAnEnclosingClass(kindName: String, name: String): N
  *     public inner inline class N(val a: Int) — the same sentence; `inline` is `value`'s old spelling
  *
  * and the controls, clean on all three frontends in all three containers: `public inner class N`,
- * `public inner class N(val a: Int)`, and each of the five kinds **without** `inner` in a class body
+ * `public inner class N(val a: Int)`, and each of the six kinds **without** `inner` in a class
+ * body — five declarations, because `inline` and `value` render the same shape
  * (`public annotation class N`, `public enum class N`, `public sealed class N`, `public data class
  * N(val a: Int)`, `public value class N(val a: Int)` — the last needing `@JvmInline` on the JVM,
  * D37's platform rule and not this DSL's business). So it is the pair that is refused and neither
