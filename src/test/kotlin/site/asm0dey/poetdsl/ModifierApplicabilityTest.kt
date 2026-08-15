@@ -818,6 +818,120 @@ class ModifierApplicabilityTest {
     }
 
     /**
+     * **A `fun interface` body is an interface body**, and the two rules above already reach it —
+     * E2e's closing judgement filed it as an open container and it is not one. `funInterface` is
+     * `kindName == "interface" && FUN in typeModifiers`, so every predicate keyed on `"interface"`
+     * fires there by construction. Verified both ways rather than argued: the language refuses the
+     * same six shapes it refuses in a plain interface, and this DSL refuses the same six.
+     *
+     * Measured, one file per row, all three frontends identical, each `fun interface` carrying the
+     * one abstract method that makes it one:
+     *
+     *     fun interface F { fun a(): Int ; internal fun g() { } }    modifier 'internal' is not
+     *     fun interface F { fun a(): Int ; internal class M }        applicable inside 'interface'.
+     *     fun interface F { fun a(): Int ; internal val p: Int get() = 1 }
+     *     fun interface F { fun a(): Int ; final fun g() { } }       …'final'…
+     *     fun interface F { fun a(): Int ; final class M }
+     *     fun interface F { fun a(): Int ; protected class M }       …'protected'…
+     *     fun interface F { fun a(): Int ; tailrec fun g(n: Int) { … } }  tailrec is prohibited on
+     *                                                                     open members.
+     *     fun interface F { fun a(): Int ; inline fun g() { } }      'inline' modifier on virtual
+     *                                                                members is prohibited.
+     *     fun interface F { fun a(): Int ; private val p: Int }      abstract property in interface
+     *                                                                cannot be private.
+     *
+     * and the controls, clean on all three: `class M`, `private class M`, `private tailrec fun`.
+     */
+    @Test
+    fun `a fun interface body is an interface body`() {
+        fun funInterface(member: TypeScope.() -> Unit): FileScope.() -> Unit = {
+            `interface`(FUN, "F") {
+                `fun`(ABSTRACT, "a", returns = INT) { }
+                member()
+            }
+        }
+        listOf<Pair<String, TypeScope.() -> Unit>>(
+            "internal fun" to { `fun`(INTERNAL, "g") { } },
+            "internal class" to { `class`(INTERNAL, "M") { } },
+            "internal val" to { `val`(INTERNAL, "p", INT, getter = { ret(1.lit) }) },
+        ).forEach { (label, member) ->
+            val m = message(funInterface(member))
+            assertTrue("modifier 'internal' is not applicable inside 'interface'" in m, "$label: $m")
+        }
+        listOf<Pair<String, TypeScope.() -> Unit>>(
+            "final fun" to { `fun`(FINAL, "g") { } },
+            "final class" to { `class`(FINAL, "M") { } },
+        ).forEach { (label, member) ->
+            val m = message(funInterface(member))
+            assertTrue("modifier 'final' is not applicable inside 'interface'" in m, "$label: $m")
+        }
+        val protectedClass = message(funInterface { `class`(PROTECTED, "M") { } })
+        assertTrue(
+            "modifier 'protected' is not applicable inside 'interface'" in protectedClass,
+            protectedClass,
+        )
+        val tailrec = message(funInterface { `fun`(TAILREC, "g", param("n", INT)) { _ -> } })
+        assertTrue("tailrec is prohibited on open members" in tailrec, tailrec)
+        val inline = message(funInterface { `fun`(INLINE, "g") { } })
+        assertTrue("'inline' modifier on virtual members is prohibited" in inline, inline)
+        val privateVal = message(funInterface { `val`(PRIVATE, "p", INT) })
+        assertTrue("abstract property in interface cannot be private" in privateVal, privateVal)
+        // …and the controls, which are what makes the claim two-directional.
+        val src = render {
+            `interface`(FUN, "F") {
+                `fun`(ABSTRACT, "a", returns = INT) { }
+                `class`("M") { }
+                `class`(PRIVATE, "Hidden") { }
+                `fun`(PRIVATE + TAILREC, "g", param("n", INT)) { _ -> }
+            }
+        }
+        assertCompiles(src)
+        assertCompilesEverywhereButJvm(src)
+    }
+
+    /**
+     * **An enum class body is clean, and E2e's closing judgement said it was a ~150-cell gap.** It is
+     * a class body for every rule this family holds: an `enum class` answers `kindName == "class"`,
+     * so [protectedAllowed], [internalAllowed] and [finalAllowed] all say yes there, and the language
+     * agrees with every one of them. Measured, one file per row, all three frontends identical, and
+     * **every row CLEAN**:
+     *
+     *     enum class E { X ; protected fun f() { } }          enum class E { X ; internal fun f() { } }
+     *     enum class E { X ; protected val p: Int = 1 }       enum class E { X ; internal class M }
+     *     enum class E { X ; protected class M }              enum class E { X ; final fun f() { } }
+     *     enum class E { X ; protected object O }             enum class E { X ; open fun f() { } }
+     *     enum class E { X ; protected interface I }          enum class E { X ; private class M }
+     *     enum class E { X ; inner class M }                  enum class E { X { override fun f() { } }
+     *     enum class E { X ; companion object {                ; abstract fun f() }
+     *                          const val C: Int = 1 } }
+     *
+     * This DSL renders all of them, so there is no defect for any rule E2e wrote and nothing for E3
+     * to inherit. **Enum *entries* are a different container** and stay open — this DSL builds none,
+     * which is E3's work; what is closed here is the enum class *body*.
+     */
+    @Test
+    fun `an enum class body is a class body`() {
+        val src = render {
+            `class`(ENUM, "E") {
+                `fun`(PROTECTED, "f") { }
+                `val`(PROTECTED, "p", INT, 1.lit)
+                `class`(PROTECTED, "M") { }
+                `object`(PROTECTED, "O") { }
+                `interface`(PROTECTED, "I") { }
+                `fun`(INTERNAL, "g") { }
+                `class`(INTERNAL, "N") { }
+                `fun`(FINAL, "h") { }
+                `fun`(OPEN, "i") { }
+                `class`(PRIVATE, "Hidden") { }
+                `class`(INNER, "Inner") { }
+                companionObject { `val`(CONST, "C", INT, 1.lit) }
+            }
+        }
+        assertCompiles(src)
+        assertCompilesEverywhereButJvm(src)
+    }
+
+    /**
      * **The annotation class body**, the third container position D42's matrix omitted — and the one
      * E2e's own amendment left out of the list of what it had omitted, which is the defect that round
      * was convened to fix, reproduced inside the fix.
