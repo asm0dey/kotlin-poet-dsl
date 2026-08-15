@@ -2,6 +2,7 @@ package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.ABSTRACT
+import com.squareup.kotlinpoet.KModifier.ANNOTATION
 import com.squareup.kotlinpoet.KModifier.COMPANION
 import com.squareup.kotlinpoet.KModifier.ENUM as ENUM_MODIFIER
 import com.squareup.kotlinpoet.KModifier.INNER
@@ -263,6 +264,54 @@ class AnonymousObjectTest {
         // local class would not, which is exactly why this asserts the output rather than the input.
         assertCompiles(out)
         assertCompilesEverywhereButJvm(out)
+    }
+
+    /**
+     * The `INNER` exemption at the **splice** is a class's, and it was being tested before the kind:
+     * `+TypeSpec.interfaceBuilder("I").addModifiers(INNER)` and the `object` equivalent returned
+     * early and rendered. The sentence a spliced one draws is the modifier-applicability one, not
+     * the container's — measured, one file per row, all three frontends 2.4.10, both bodies
+     * identical:
+     *
+     *     val v = object { public inner interface I }  modifier 'inner' is not applicable to
+     *                                                  'interface'.
+     *     val v = object { public inner object O }     …to 'standalone object'.
+     *     val v = object { public inner class N }      clean          ← the exemption itself
+     *
+     * …and a spliced `inner` **class** answers the pair rule, so `INNER + ANNOTATION` through the
+     * splice is refused with the same sentence the declared form draws. `typeSpec` builds a class,
+     * so the interface and object rows are raw KotlinPoet builders: that is the only spelling this
+     * shape has, and it is the one the splice exists to accept.
+     */
+    @Test
+    fun `a spliced inner spec is exempt only where inner is a class's modifier`() {
+        val splices: List<Pair<TypeSpec, String>> = listOf(
+            TypeSpec.interfaceBuilder("I").addModifiers(INNER).build() to
+                "modifier 'inner' is not applicable to 'interface'",
+            TypeSpec.objectBuilder("O").addModifiers(INNER).build() to
+                "modifier 'inner' is not applicable to 'standalone object'",
+            TypeSpec.classBuilder("N").addModifiers(INNER, ANNOTATION).build() to
+                "modifier 'inner' is not applicable to 'annotation class'",
+        )
+        for ((spec, sentence) in splices) {
+            val anon = assertFailsWith<IllegalStateException> {
+                render { `fun`("f") { `val`("v", init = anonymousObject { +spec }) } }
+            }
+            assertTrue(sentence in anon.message!!, anon.message!!)
+            val entry = assertFailsWith<IllegalStateException> {
+                render { `class`(ENUM_MODIFIER, "E") { enumEntry("A") { +spec } } }
+            }
+            assertTrue(sentence in entry.message!!, entry.message!!)
+        }
+        // The control, and it is the exemption this guard must not swallow: a spliced `inner` class
+        // still lands, in both bodies, and the render compiles.
+        val innerClass = TypeSpec.classBuilder("N").addModifiers(INNER).build()
+        val out = render { `fun`("f") { `val`("v", init = anonymousObject { +innerClass }) } }
+        assertTrue("inner class N" in out, out)
+        assertCompiles(out)
+        val entryOut = render { `class`(ENUM_MODIFIER, "E") { enumEntry("A") { +innerClass } } }
+        assertTrue("inner class N" in entryOut, entryOut)
+        assertCompiles(entryOut)
     }
 
     /** The same render gap the enum entry hits, with the same canary — see [EnumEntriesTest]. */

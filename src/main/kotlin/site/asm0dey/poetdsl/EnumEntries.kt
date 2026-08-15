@@ -114,9 +114,22 @@ internal fun Scope.checkAnonymousBodySplice(construct: String, member: String, m
 }
 
 /**
- * The [TypeSpec] half of [checkAnonymousBodySplice]. `INNER` is the exemption and it is the whole of
- * it — see [Scope.innerAllowed] for the 128-cell sweep that says so — so this returns for exactly
- * the shape the non-splice path lets through and refuses everything else with the same message.
+ * The [TypeSpec] half of [checkAnonymousBodySplice]. `INNER` is the exemption — see
+ * [Scope.innerAllowed] for the sweep that says so — and it is a **class**'s exemption, which is the
+ * term this was missing: it returned on `INNER` before asking what had been declared, so
+ * `+TypeSpec.interfaceBuilder("I").addModifiers(INNER)` and the `object` equivalent walked straight
+ * through and rendered `inner interface I` / `inner object O`. Measured, one file per row, all three
+ * frontends 2.4.10, in both anonymous bodies:
+ *
+ *     val v = object { public inner interface I }   modifier 'inner' is not applicable to
+ *                                                   'interface'.
+ *     val v = object { public inner object O }      …to 'standalone object'.
+ *     val v = object { public inner class N }       clean          ← the exemption, unchanged
+ *
+ * so the sentence is the **modifier-applicability** one and not the container's — asked through
+ * [checkModifiers], the same table the non-splice path runs, with `INNER` alone in the list because
+ * closing the splice boundary in general is a round of its own (D43). A spliced `inner` class then
+ * answers [checkInnerKindPair], for the same reason a declared one does.
  *
  * `TypeSpec.kind` is public API and is what names the declared form, which is what the frontends key
  * their sentence on: a spliced `interface` draws *'Interface' is prohibited here* and a spliced
@@ -124,14 +137,18 @@ internal fun Scope.checkAnonymousBodySplice(construct: String, member: String, m
  */
 internal fun Scope.checkAnonymousBodyTypeSplice(spec: TypeSpec) {
     if (this !is TypeScope || !isAnonymousBody) return
-    if (KModifier.INNER in spec.modifiers) return
     val name = spec.name ?: "<anonymous>"
-    if (KModifier.COMPANION in spec.modifiers) companionNeedsAClassOrInterface("TypeSpec", name)
     val declaredKind = when (spec.kind) {
         TypeSpec.Kind.OBJECT -> "named object"
         TypeSpec.Kind.INTERFACE -> "interface"
         TypeSpec.Kind.CLASS -> "class"
     }
+    if (KModifier.INNER in spec.modifiers) {
+        checkModifiers("TypeSpec", declarationForm(declaredKind), "'$name'", listOf(KModifier.INNER))
+        checkInnerKindPair("TypeSpec", name, spec.modifiers)
+        return
+    }
+    if (KModifier.COMPANION in spec.modifiers) companionNeedsAClassOrInterface("TypeSpec", name)
     holdsNoNestedType(declaredKind, name)
 }
 
