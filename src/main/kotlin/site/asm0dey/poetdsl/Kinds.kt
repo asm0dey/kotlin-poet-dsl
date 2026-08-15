@@ -311,6 +311,26 @@ internal fun missingReturnStatement(name: String, returnType: Any): Nothing = ki
  * One fact, one reader: [PropertyContainer] used to spell this list out privately, which is how the
  * property side came to have it and the function side came to have nothing at all.
  */
+/*
+ * E3 widened this by one term, and it is the round's clearest case for a control row.
+ *
+ * An **anonymous body** — an enum entry's or an anonymous object's — takes an `abstract` member, on
+ * all three frontends, where the identical member in a plain class does not. Measured, one file per
+ * row, `kotlinc` / `kotlinc-js` / `kotlinc-wasm` 2.4.10:
+ *
+ *     class C { abstract fun f(): Int }                 abstract function 'f' in non-abstract
+ *     class C { abstract val p: Int }                    class 'C'.  /  abstract property 'p' …
+ *
+ *     enum class E { A { abstract fun f(): Int } }      clean
+ *     enum class E { A { abstract val p: Int } }        clean
+ *     val v = object { abstract fun f(): Int }          clean
+ *     val v = object { abstract val p: Int }            clean
+ *
+ * Nothing about the anonymous class is abstract-friendly in any useful sense — an entry *is* an
+ * instance — but the frontends accept it, at the frontend and through codegen, and this project's
+ * standing rule is that a refusal needs a target that rejects the output. So the term is here rather
+ * than an argument for leaving it out.
+ */
 internal val Scope.abstractMemberAllowed: Boolean
     get() = this is TypeScope && (
         kindName == "interface" || (
@@ -319,6 +339,37 @@ internal val Scope.abstractMemberAllowed: Boolean
             }
             )
         )
+
+/**
+ * …and the second question the language measurement forced, which is **not** the one above: is an
+ * `abstract` member here refused by the *language* or merely unrenderable by KotlinPoet 2.3.0?
+ *
+ * In an anonymous body it is the second. `TypeSpec.Builder.build` raises
+ * `IllegalArgumentException: non-abstract type null cannot declare abstract function f`
+ * (`TypeSpec.kt:864`) for any builder that does not carry `ABSTRACT`, and an anonymous builder can
+ * never carry it — `addModifiers` is `check(!isAnonymousClass)` and throws for an empty list too, so
+ * there is no route to the shape at all. Global Constraint 26 forbids letting that
+ * `IllegalArgumentException` surface, and [abstractNeedsAnAbstractContainer]'s sentence would be a
+ * *false claim about the language*: the frontends accept the member (see [abstractMemberAllowed]'s
+ * rows), so quoting *abstract function 'f' in non-abstract class* would send the reader looking for
+ * a diagnostic no compiler prints.
+ *
+ * So this is D20's shape — valid Kotlin the backend cannot render — and it gets D20's treatment: a
+ * refusal that says so, and a canary test that fails when KotlinPoet fixes it.
+ */
+internal val Scope.abstractMemberIsUnrenderable: Boolean
+    get() = isAnonymousBody
+
+/** See [abstractMemberIsUnrenderable]. */
+internal fun abstractMemberIsUnrenderable(construct: String, name: String, kindName: String): Nothing = error(
+    "$construct: '$name' is ABSTRACT in ${article(kindName)} $kindName, which is valid Kotlin — " +
+        "`enum class E { A { abstract fun f(): Int } }` and `val v = object { abstract val p: Int }` " +
+        "are clean on the JVM, on Kotlin/JS and on Kotlin/Wasm alike — and KotlinPoet 2.3.0 cannot " +
+        "render it: `TypeSpec.Builder.build` requires the enclosing builder to carry ABSTRACT " +
+        "(\"non-abstract type null cannot declare abstract function\"), and an anonymous builder " +
+        "cannot, since `addModifiers` is `check(!isAnonymousClass)`. Drop ABSTRACT and give '$name' " +
+        "a body or a value.",
+)
 
 /**
  * See [abstractMemberAllowed].
@@ -537,7 +588,19 @@ internal fun constructorVisibility(kindWord: String, allowed: String, diagnostic
  * this same reason rather than for its grandparent's.
  */
 internal val Scope.nestedTypesAllowed: Boolean
-    get() = !(this is TypeScope && KModifier.INNER in builder.modifiers)
+    get() = !(this is TypeScope && (KModifier.INNER in builder.modifiers || isAnonymousBody))
+
+/**
+ * See [nestedTypesAllowed] and [isAnonymousBody]. Two containers refuse a nested classifier and they
+ * refuse it for different reasons and with different sentences, so the message branches once here
+ * rather than at each of the two call sites.
+ */
+internal fun Scope.holdsNoNestedType(kindName: String, name: String): Nothing {
+    if (this is TypeScope && isAnonymousBody) {
+        anonymousBodyHoldsNo("`$kindName`", "'$name'", this.kindName)
+    }
+    innerHoldsNoNestedType(kindName, name)
+}
 
 /** See [nestedTypesAllowed]. */
 internal fun innerHoldsNoNestedType(kindName: String, name: String): Nothing = kindRefusal(

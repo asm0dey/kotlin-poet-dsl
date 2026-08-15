@@ -709,6 +709,36 @@ private val TYPE_BODY: List<Overload> = listOf(
         shadow = "companionObject is only valid inside a class or interface body. Written in a " +
             "block it would silently attach a companion object to the enclosing type.",
     ),
+    Overload(
+        doc = """
+            |`RED(0xFF0000) { … }` — an entry of an `enum class`, D31's one **silent** failure.
+            |
+            |`` `class`(ENUM, "Color") { } `` already produced a valid enum builder — KotlinPoet
+            |derives `isEnum` from the modifier — and there was no way to put an entry in it, so the
+            |render was a correct but empty `enum class`. It is valid Kotlin, measured on all three
+            |frontends, which is why this is a construct and not a guard.
+            |
+            |[args] are the entry's own constructor arguments and are checked against the enum's
+            |primary constructor once the whole body has run, so a `constructorParam` written after
+            |the entry still supplies them. An entry with a [body] is an anonymous subclass of the
+            |enum, and its body is a strict subset of a class body: no nested classifier, no
+            |constructor, no companion object and no supertype of its own — an entry's supertype is
+            |the enum. `protected` is refused there and nowhere else in this DSL; the frontends say
+            |*modifier 'protected' is not applicable inside 'enum entry'*.
+            |
+            |An entry name shares a namespace with this enum's properties and nested types — Kotlin
+            |answers a collision with *conflicting declarations* — but not with its functions, which
+            |is measured rather than assumed.
+        """.trimMargin(),
+        context = "context(t: TypeScope)",
+        name = "enumEntry",
+        params = listOf("name: String", "vararg args: Expr") + KDOC_PARAM +
+            listOf("body: (TypeScope.() -> Unit)? = null"),
+        returns = null,
+        body = "t.addEnumEntry(name, args, kdoc, body)",
+        shadow = "enumEntry is only valid inside an enum class body. Written in a block it would " +
+            "silently attach an entry to the enclosing enum.",
+    ),
 )
 
 // --- files ----------------------------------------------------------------------------------------

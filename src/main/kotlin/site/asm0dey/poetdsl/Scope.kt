@@ -222,6 +222,15 @@ public class TypeScope internal constructor(
     internal val declaredConstructorParamNames: MutableSet<String> = mutableSetOf()
 
     /**
+     * Every `enumEntry` declared in this type, with the number of constructor arguments it was given
+     * (D43). Read once by [checkEnumEntryArgs] from [finish], because the enum's primary constructor
+     * can be written *after* the entry — a `constructorParam` at the end of the body still supplies
+     * it — so an eager check would answer on writing order alone. The same deferral D25's three
+     * checks take, for the same reason.
+     */
+    internal val enumEntryArgCounts: MutableList<Pair<String, Int>> = mutableListOf()
+
+    /**
      * Builds the type, after the one check that can only be made once the whole body has run.
      *
      * Superclass constructor arguments in the header need a primary constructor to hang from as
@@ -265,6 +274,9 @@ public class TypeScope internal constructor(
         if (KModifier.DATA in builder.modifiers && kindName == "class" && !hasCtor) {
             dataClassNeedsAParameter(kindName)
         }
+        // D43's deferred half, here for the reason the three below are: the enum's primary
+        // constructor can be written after the entry that calls it. See [checkEnumEntryArgs].
+        if (enumEntryArgCounts.isNotEmpty()) checkEnumEntryArgs()
         val secondaryCtors = builder.funSpecs.filter { it.isConstructor }
         check(builder.superclassConstructorParameters.isEmpty() || secondaryCtors.isEmpty() || hasCtor) {
             superclassArgsPlusSecondary(kindName)

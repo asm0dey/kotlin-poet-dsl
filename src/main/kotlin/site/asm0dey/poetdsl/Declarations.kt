@@ -150,7 +150,7 @@ internal fun Scope.declareType(
         innerNeedsAnEnclosingClass(kindName, name)
     }
     if (!nestedTypesAllowed && KModifier.INNER !in modifiers.toList()) {
-        innerHoldsNoNestedType(kindName, name)
+        holdsNoNestedType(kindName, name)
     }
     // Types only: Kotlin permits function overloads, so duplicate `fun` names are legal and
     // must never go through `declaredTypeNames`.
@@ -1213,6 +1213,12 @@ internal fun Scope.declareFun(spec: FunSpec) {
     // `IllegalArgumentException: non-abstract type N cannot declare abstract function f`. See [Kinds].
     if (!membersAllowed) annotationHoldsNoMembers("`fun`", "'${spec.name}'")
     if (KModifier.ABSTRACT in spec.modifiers && !abstractMemberAllowed) {
+        // Two reasons, two messages: an anonymous body **accepts** an abstract member on all three
+        // frontends and KotlinPoet cannot render one, so quoting the language rule there would quote
+        // a sentence no compiler prints. See [abstractMemberIsUnrenderable].
+        if (abstractMemberIsUnrenderable) {
+            abstractMemberIsUnrenderable("`fun`", spec.name, (this as TypeScope).kindName)
+        }
         abstractNeedsAnAbstractContainer("`fun`", spec.name)
     }
     when (this) {

@@ -53,6 +53,13 @@ internal fun superclassArgsPlusSecondary(kindName: String): String =
  * and an eager check here would reject valid Kotlin on writing order alone.
  */
 internal fun TypeScope.applySuperclass(type: TypeName, args: Array<out Expr>) {
+    // D43: an **enum entry**'s supertype is the enum, and there is no syntax for another —
+    // `enum class E { A : Iface { } }` is a *syntax error: Expecting ';' after the last enum entry*
+    // on all three frontends, so KotlinPoet's anonymous builder would render something with no
+    // spelling at all. An **anonymous object** is the opposite case and is exempt: `object : Base(1)`
+    // is exactly what `superclass` means there, which is why this reads `kindName` rather than
+    // [isAnonymousBody].
+    if (kindName == ENUM_ENTRY) enumEntryHasNoSupertype("superclass")
     check(kindName != "interface") {
         "superclass: an interface has no superclass. Use superinterface to extend another interface."
     }
@@ -202,8 +209,28 @@ internal fun nestedSupertypeRenderGap(kindName: String, type: TypeName): Nothing
     },
 )
 
+/**
+ * See [applySuperclass]'s first guard. An enum entry's supertype is the enum it belongs to, and
+ * Kotlin has no syntax for a second one: `enum class E { A : Iface { } }` is a **syntax error** —
+ * *Expecting ';' after the last enum entry or '}' to close enum class body* — on `kotlinc`,
+ * `kotlinc-js` and `kotlinc-wasm` 2.4.10 alike, which is one of the few rows in this project whose
+ * diagnostic is a parse failure rather than a rule. The controls are clean on all three:
+ * `enum class E : Iface { A }` — the supertype on the **enum**, which this DSL already spells — and
+ * `val v = object : Iface { }`, the anonymous object that is exempt from this refusal.
+ */
+internal fun enumEntryHasNoSupertype(construct: String): Nothing = kindRefusal(
+    construct,
+    "an `enum class` entry already extends the enum it belongs to, and Kotlin has no syntax for a " +
+        "second supertype on an entry",
+    "Expecting ';' after the last enum entry or '}' to close enum class body",
+    "Declare the supertype on the enum class itself — `class`(ENUM, …) { superinterface(…) } — " +
+        "which every entry then inherits.",
+)
+
 /** What the generated `superinterface` runs. */
 internal fun TypeScope.applySuperinterface(type: TypeName) {
+    // See [applySuperclass]'s first guard and [enumEntryHasNoSupertype].
+    if (kindName == ENUM_ENTRY) enumEntryHasNoSupertype("superinterface")
     // The row that **rendered**: `annotation class N : Iface` is *annotation class cannot have
     // supertypes* on all three frontends, where the `superclass` twin was at least refused. See
     // [Kinds].

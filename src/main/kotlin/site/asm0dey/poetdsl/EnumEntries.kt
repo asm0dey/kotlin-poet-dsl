@@ -1,0 +1,188 @@
+package site.asm0dey.poetdsl
+
+import com.squareup.kotlinpoet.CodeBlock
+import com.squareup.kotlinpoet.KModifier
+import com.squareup.kotlinpoet.TypeSpec
+
+// E3, deviation D43: the entries of an `enum class`, and the **anonymous body** family they belong to.
+//
+// D31's audit called this the one *silent* failure in the whole coverage sweep: `` `class`(ENUM,
+// "Color") { } `` already produced a valid enum builder — KotlinPoet derives `isEnum` from the
+// modifier, `TypeSpec.kt:539` — and nothing could put an entry in it, so the render was a correct
+// but empty `enum class`. **The render is valid Kotlin**: `enum class E` and `enum class E { }` are
+// both clean on `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10 (measured, one file per cell). So
+// the audit's "silent failure" is a *capability* gap and not a Global Constraint 26 violation, and
+// the fix is this construct rather than a guard on the empty enum — which would have refused output
+// every frontend accepts, the failure mode E2 took twelve rounds to stop shipping.
+//
+// The acceptance spec is the language-side measurement recorded in D43: 49 cells on what an entry
+// may carry, 192 cells of `KModifier` × declaration form × the two anonymous body positions, and 27
+// neighbouring rows. **All three frontends agreed on every one of the 268.**
+
+/** [TypeScope.kindName] for an enum entry's anonymous body. */
+internal const val ENUM_ENTRY: String = "enum entry"
+
+/** [TypeScope.kindName] for an anonymous object's body. */
+internal const val ANONYMOUS_OBJECT: String = "anonymous object"
+
+/**
+ * Whether this scope is an **anonymous body** — an enum entry's or an anonymous object's.
+ *
+ * One predicate because the measurement says one rule: across 192 cells (32 `KModifier` values × a
+ * `val`, a `var` and a `fun` × the two positions) the two bodies answer **identically on every cell
+ * but three**, and those three are `protected`, which has its own reader in [protectedAllowed]. Both
+ * are the body of an anonymous class, which is why:
+ *
+ * - it holds **no nested classifier of any kind** — `A { class N }` is *'Class' is prohibited here*,
+ *   `A { object O }` is *named object 'O' cannot be local*, `A { interface I }` is *'Interface' is
+ *   prohibited here*, on all three frontends and in both positions;
+ * - it holds **no constructor** — *objects cannot have constructors*;
+ * - it holds **no companion object** — *modifier 'companion' is not applicable inside 'enum entry'*
+ *   and *…inside 'local class'* respectively;
+ * - an **`abstract` member is allowed**, which is the surprise and the reason a control row is not
+ *   optional: `class C { abstract fun f(): Int }` is *abstract function 'f' in non-abstract class
+ *   'C'* and the identical member in either anonymous body is clean on all three frontends.
+ *
+ * Read off [TypeScope.kindName], never inherited: a nested classifier cannot be declared in one of
+ * these bodies at all, so there is nothing below to inherit it.
+ */
+internal val Scope.isAnonymousBody: Boolean
+    get() = this is TypeScope && (kindName == ENUM_ENTRY || kindName == ANONYMOUS_OBJECT)
+
+/** See [isAnonymousBody]; the noun the frontends print differs between the two positions. */
+internal fun anonymousBodyHoldsNo(construct: String, what: String, kindName: String): Nothing =
+    kindRefusal(
+        construct,
+        "$what is declared in ${article(kindName)} $kindName, which is the body of an anonymous " +
+            "class and holds no nested classifier, no constructor and no companion object",
+        if (kindName == ENUM_ENTRY) "'Class' is prohibited here" else "cannot be local",
+        "Declare it in the enclosing type instead — an anonymous body holds members only.",
+    )
+
+/**
+ * What the generated `enumEntry` runs.
+ *
+ * Three guards fire here and one is deferred to [TypeScope.finish], for the reason every deferred
+ * check there has: a `constructorParam` written *after* the entry still supplies the enum's primary
+ * constructor, so an eager argument check would answer on writing order alone (D25's shape).
+ *
+ * The entry's own [TypeScope] chains its [ScopeId] to the enum's, rather than re-parenting at the
+ * file the way [declareType] does for a nested type. That is measured, not chosen:
+ * `enum class E(val x: Int) { A(1) { fun f(): Int = x } }` is clean on all three frontends, where
+ * `class O(val id: Long) { class N { fun f(): Long = id } }` is *outer class … of non-inner class
+ * cannot be used as receiver*. An entry's body is an anonymous subclass, so it captures.
+ */
+internal fun TypeScope.addEnumEntry(
+    name: String,
+    args: Array<out Expr>,
+    kdoc: String?,
+    body: (TypeScope.() -> Unit)?,
+) {
+    // Without this, `` `class`("C") { enumEntry("A") } `` renders `public class C { A, }`, which no
+    // frontend accepts — KotlinPoet's `addEnumConstant` asks nothing about the builder's kind, and
+    // `isEnum` is derived from the ENUM modifier alone.
+    check(KModifier.ENUM in builder.modifiers) {
+        "enumEntry: '$name' is declared in ${containerLabel()}, and only an enum class has entries. " +
+            "Declare the container `class`(ENUM, …) — KotlinPoet derives `isEnum` from that modifier " +
+            "— or make '$name' an ordinary member."
+    }
+    // **Ordered before the two namespace checks below, and falsification is what said so.** An
+    // entry registers its name in `declaredPropertyNames` as well, so with the checks the other way
+    // round a second `enumEntry("A")` was caught by the *property* check and this one was
+    // unreachable — a guard whose counterpart makes its case unreachable, which one-at-a-time
+    // falsification exists to find. The messages are different and the entry's is the right one
+    // here.
+    //
+    // An entry name shares a namespace with the enum's **properties** and its **nested types**, and
+    // *not* with its functions: `enum class E { A; fun A(): Int = 1 }` is clean on all three
+    // frontends, while the `val A` and the `class A` forms are both *conflicting declarations*. Two
+    // registries rather than one, because that asymmetry is the whole content of the rule.
+    // KotlinPoet keeps entries in a `Map<String, TypeSpec>`, so a second entry of the same name
+    // silently overwrites the first and the enum renders one short. Kotlin's own answer is
+    // *conflicting declarations*.
+    check(name !in builder.enumConstants) {
+        "enumEntry: this enum class already declares an entry named \"$name\", and KotlinPoet keeps " +
+            "entries in a map, so the second would silently replace the first."
+    }
+    check(name !in declaredPropertyNames) {
+        "enumEntry: a property named \"$name\" is already declared in this enum class, and an entry " +
+            "and a property share a namespace (\"conflicting declarations\"). A *function* of the " +
+            "same name does not collide."
+    }
+    check(name !in declaredTypeNames) {
+        "enumEntry: a type named \"$name\" is already declared in this enum class, and an entry and " +
+            "a nested type share a namespace (\"conflicting declarations\")."
+    }
+    declaredPropertyNames += name
+    declaredTypeNames += name
+    enumEntryArgCounts += name to args.size
+
+    val entry = TypeSpec.anonymousClassBuilder()
+    kdoc?.let { entry.addKdoc(docBlock(it)) }
+    // One `CodeBlock` per argument, not one joined block — the same shape and the same reason as
+    // `applySuperclass`: KotlinPoet joins them itself, and `%L` of the expression's own code keeps
+    // `%T`/`%M` placeholders intact so imports still resolve.
+    args.forEach { entry.addSuperclassConstructorParameter(CodeBlock.of("%L", it.code)) }
+    if (body != null) {
+        val scope = TypeScope(
+            entry,
+            names.child(),
+            id.child("enum entry $name"),
+            ENUM_ENTRY,
+            fileId,
+            isExpect,
+            isExternal,
+        )
+        scope.body()
+        // `TypeScope.finish` is deliberately *not* called: every check in it is about a header this
+        // body has none of — a primary constructor, a superclass and its arguments, a secondary
+        // constructor's delegation — and all four constructs that could create one are refused above
+        // by [isAnonymousBody] and [supertypesAllowed]. Calling it would re-ask questions whose
+        // answers are already fixed.
+        builder.addEnumConstant(name, entry.build())
+    } else {
+        builder.addEnumConstant(name, entry.build())
+    }
+}
+
+/**
+ * The deferred half: every entry's argument count against the enum's primary constructor, answered in
+ * [TypeScope.finish] once the whole body has run.
+ *
+ * The rule is ordinary Kotlin constructor-call resolution and nothing enum-specific, which is what
+ * the 21-cell first axis of D43 establishes. This DSL's arguments are **positional** — `args` is a
+ * `vararg Expr`, and there is no spelling for a named one — so the condition is exactly decidable:
+ *
+ *     enum class E              { A(1) }              too many arguments for 'constructor(): E'.
+ *     enum class E(val x: Int)  { A }                 no value passed for parameter 'x'.
+ *     enum class E(val x: Int)  { A(1, 2) }           too many arguments for 'constructor(x: Int): E'.
+ *     enum class E(val x: Int = 1, val y: Int) { A(1) }   no value passed for parameter 'y'.
+ *
+ * and the controls, clean on all three frontends: `enum class E { A }`, `E { A() }`, `E(val x: Int)
+ * { A(1) }`, `E(val x: Int = 1) { A }`, `E(val x: Int, val y: Int = 2) { A(1) }`.
+ *
+ * **A `vararg` parameter switches the rule off entirely** rather than approximating it:
+ * `enum class E(vararg val x: Int) { A }` and `{ A(1, 2, 3) }` are both clean, so neither half of the
+ * count condition holds there and an approximation could only over-refuse.
+ */
+internal fun TypeScope.checkEnumEntryArgs() {
+    val params = if (hasCtor) ctor.parameters else emptyList()
+    if (params.any { KModifier.VARARG in it.modifiers }) return
+    val required = params.indexOfLast { it.defaultValue == null } + 1
+    enumEntryArgCounts.forEach { (name, given) ->
+        check(given <= params.size) {
+            "enumEntry: \"$name\" is given $given argument${if (given == 1) "" else "s"} and this " +
+                "enum class's primary constructor takes ${params.size}, so this is \"too many " +
+                "arguments for 'constructor(${params.joinToString { it.name }}): …'\" on the JVM, " +
+                "on Kotlin/JS and on Kotlin/Wasm alike. Drop the extra arguments, or declare the " +
+                "parameters with constructorParam or in the `class` signature."
+        }
+        check(given >= required) {
+            "enumEntry: \"$name\" is given $given argument${if (given == 1) "" else "s"} and this " +
+                "enum class's primary constructor needs ${required}, so this is \"no value passed " +
+                "for parameter '${params[given].name}'\" on the JVM, on Kotlin/JS and on " +
+                "Kotlin/Wasm alike. Pass the missing argument${if (required - given == 1) "" else "s"}, " +
+                "or give the parameter a `default`."
+        }
+    }
+}

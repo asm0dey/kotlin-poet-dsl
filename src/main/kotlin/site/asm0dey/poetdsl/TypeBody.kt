@@ -127,7 +127,7 @@ internal fun TypeScope.addCompanionObject(name: String?, kdoc: String?, body: Ty
     // A companion object is a nested classifier, so the `inner class` rule reaches it too — and by
     // the same route [declareType] takes, not by a second reading of `builder.modifiers` here. An
     // `inner class` passes the kind check above, since its `kindName` is `"class"`. See [Kinds].
-    if (!nestedTypesAllowed) innerHoldsNoNestedType("companion object", name ?: "Companion")
+    if (!nestedTypesAllowed) holdsNoNestedType("companion object", name ?: "Companion")
     check(!hasCompanionObject) {
         "companionObject: this $kindName already declares a companion object, and Kotlin allows one."
     }

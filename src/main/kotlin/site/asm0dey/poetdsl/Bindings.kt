@@ -261,6 +261,13 @@ internal fun PropertySpec.Builder.addAccessors(
  *   questions with separate call sites. Inherited to every nesting depth, exactly as `needsValue`'s
  *   `expect` term is.
  * @property abstractAllowed whether `ABSTRACT` is legal on a property here.
+ * @property abstractUnrenderable the container's noun when `ABSTRACT` is refused here by
+ *   **KotlinPoet** rather than by the language, and null otherwise — non-null in an anonymous body
+ *   only, where the frontends accept the member and
+ *   `TypeSpec.Builder.build` cannot produce it. Its own field beside [abstractAllowed] because it
+ *   answers a different question and prints a different sentence; folding the two together is how
+ *   this project has produced the same defect five rounds running. See
+ *   [Scope.abstractMemberIsUnrenderable].
  * @property expectAllowed whether `EXPECT` is legal on a property here — read off the **immediate**
  *   builder's own modifiers rather than [TypeScope.isExpect], and the difference is load-bearing in
  *   both directions. KotlinPoet hands a `TypeSpec`'s own `EXPECT` down to its direct members as an
@@ -303,6 +310,7 @@ internal class PropertyContainer(
     val backingFieldDenial: BackingFieldDenial?,
     val isExpectContext: Boolean,
     val abstractAllowed: Boolean,
+    val abstractUnrenderable: String?,
     val expectAllowed: Boolean,
     val externalAllowed: Boolean,
     val membersAllowed: Boolean,
@@ -335,6 +343,7 @@ internal class PropertyContainer(
             needsValue = false,
             isExpectContext = false,
             abstractAllowed = true,
+            abstractUnrenderable = null,
             expectAllowed = true,
             externalAllowed = true,
             membersAllowed = true,
@@ -362,6 +371,7 @@ private fun Scope.propertyContainer(): PropertyContainer {
             // of this function, and every other site in the family, read one fact from one place.
             isExpectContext = isExpectContainer,
             abstractAllowed = false,
+            abstractUnrenderable = null,
             expectAllowed = true,
             // The file level is the only place an `external` property renders the keyword and still
             // has a target that accepts it, and this branch *is* the file level. See D37.
@@ -424,6 +434,8 @@ private fun Scope.propertyContainer(): PropertyContainer {
         // property side refused what the function side handed to KotlinPoet's own
         // `IllegalArgumentException`. See [Kinds] for the measured rows.
         abstractAllowed = abstractMemberAllowed,
+        // …and the second question about the same modifier, read through its own predicate.
+        abstractUnrenderable = if (abstractMemberIsUnrenderable) kindName else null,
         // Both of these read the **immediate** builder's own modifiers, and not [TypeScope.isExpect]
         // or anything else inherited, because that is exactly what decides whether the keyword
         // reaches the output: KotlinPoet hands a `TypeSpec`'s own `EXPECT`/`EXTERNAL` down to its
@@ -590,6 +602,9 @@ internal fun checkProperty(
     // Not folded into the missing-value check below, because KotlinPoet's `require` is not either:
     // it reads the modifier alone, so `abstract val x: Int = 1` in a non-abstract class raises the
     // same `IllegalArgumentException` an uninitialized one does. See [PropertyContainer].
+    container.abstractUnrenderable?.let {
+        if (KModifier.ABSTRACT in declared) abstractMemberIsUnrenderable(construct, name, it)
+    }
     check(container.abstractAllowed || KModifier.ABSTRACT !in declared) {
         "$construct: '$name' is ABSTRACT, which Kotlin allows only in an interface or in an " +
             "ABSTRACT, SEALED or ENUM class — not at file level, not in an object or a companion " +
