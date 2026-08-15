@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.bcv)
+    `maven-publish`
 }
 
 group = "site.asm0dey"
@@ -34,6 +35,67 @@ dependencies {
 kotlin {
     explicitApi()
     jvmToolchain(17)
+}
+
+// Publishing. Configured only — nothing here publishes anywhere, and there is no repository block
+// for that reason; `publishToMavenLocal` is what this was verified with.
+//
+// The sources jar carries the generated sources too, because `kotlin.srcDir(generateArities)` puts
+// them in the main source set: 548 of the 774 public members a consumer sees live in `FunArity.kt`,
+// `CtorArity.kt`, `DeclarationVariants.kt` and `Shadows.kt`, and a sources jar without them would
+// be a sources jar for a quarter of the library.
+//
+// **The javadoc jar is empty and that is not an oversight.** This module has no Java sources, so
+// Gradle's `javadoc` task has nothing to read; producing real API documentation from the KDoc needs
+// Dokka, which is a build dependency nobody has asked for. The artifact exists because Maven
+// Central requires one to be present, and it is stated here rather than left to be discovered by
+// whoever opens it.
+java {
+    withSourcesJar()
+    withJavadocJar()
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+            artifactId = "kotlin-poet-dsl"
+            pom {
+                name = "kotlin-poet-dsl"
+                description = "A Kotlin DSL over KotlinPoet whose generator code reads like the " +
+                    "Kotlin it generates, and which refuses to render constructs no Kotlin " +
+                    "frontend accepts."
+                // Read off `git remote get-url origin`, which is where every coordinate below
+                // that is not the group or the artifact comes from.
+                url = "https://github.com/asm0dey/kotlin-poet-dsl"
+                licenses {
+                    license {
+                        name = "The Apache License, Version 2.0"
+                        url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
+                        distribution = "repo"
+                    }
+                }
+                developers {
+                    developer {
+                        // From this repository's own commit authorship, which is the only source
+                        // for it that exists here.
+                        id = "asm0dey"
+                        name = "Pavel Finkelshtein"
+                        email = "pavel.finkelshtein@gmail.com"
+                    }
+                }
+                scm {
+                    connection = "scm:git:https://github.com/asm0dey/kotlin-poet-dsl.git"
+                    developerConnection = "scm:git:ssh://git@github.com/asm0dey/kotlin-poet-dsl.git"
+                    url = "https://github.com/asm0dey/kotlin-poet-dsl"
+                }
+                // No `issueManagement` and no `organization`: Maven Central does not require them
+                // and this repository does not say what they are. What Central *does* require and
+                // this build does not have is a signature — `signing` needs a key, which is a
+                // deployment secret and not a build setting.
+            }
+        }
+    }
 }
 
 // E2c: the Kotlin/JS and Kotlin/Wasm frontends, reachable from a test.
