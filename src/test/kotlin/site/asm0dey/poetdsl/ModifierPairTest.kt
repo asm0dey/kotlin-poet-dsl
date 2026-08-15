@@ -91,9 +91,21 @@ class ModifierPairTest {
      *
      * `` `class`(Modifiers(setOf(PUBLIC, PRIVATE)), "M") `` rendered `public private class M`, which
      * no frontend accepts — the pair axis's first concrete Global Constraint 26 violation, found by
-     * measuring the neighbours rather than by reading the table. All six visibility pairs are refused
-     * now, on every form: a class, a member function and a member property were each measured with
-     * one sentence throughout.
+     * measuring the neighbours rather than by reading the table.
+     *
+     * **"On every form" was a sampled claim and it was false.** E3 measured a class, a member
+     * function and a member property, and `` `typealias` `` — the one construct E3 itself added —
+     * escaped, because it checks its modifiers against `TYPE_ALIAS_MODIFIERS` directly and never
+     * calls `checkModifiers`, which is where the pair rule hangs. So the enumeration is now
+     * **derived**: every construct in this DSL with a `Modifiers` slot, read off the generated
+     * overloads and the hand-written surface, is on the list below and every one of them is
+     * exercised. The list is `` `class` ``/`klass`, `` `object` ``, `` `interface` ``,
+     * `` `constructor` ``/`ctor`, `` `fun` ``/`func`, `property`/`` `val` ``/`` `var` ``,
+     * `` `typealias` ``, and the three detached builders `typeSpec`, `funSpec` and `propertySpec`.
+     * Nothing else takes one: a `param`'s modifier slot is a **single** `KModifier` restricted to
+     * `{VARARG, NOINLINE, CROSSINLINE}`, so `class C(public private val x: Int)` — *modifier 'public'
+     * is incompatible with 'private'* on all three frontends — has no spelling here at all, and an
+     * `enumEntry` and a `contextParameter` take no modifiers.
      */
     @Test
     fun `two visibilities on one declaration are refused, on every form`() {
@@ -119,6 +131,42 @@ class ModifierPairTest {
                 file("com.example", "A") {
                     `class`("C") { `val`(Modifiers(setOf(a, b)), "p", INT, init = 1.lit) }
                 }
+            }
+            // …and the seven forms E3's sample left out, each with the same pair.
+            val pair = Modifiers(setOf(a, b))
+            assertFailsWith<IllegalStateException>("object $a + $b") {
+                file("com.example", "A") { `object`(pair, "O") { } }
+            }
+            assertFailsWith<IllegalStateException>("interface $a + $b") {
+                file("com.example", "A") { `interface`(pair, "I") { } }
+            }
+            assertFailsWith<IllegalStateException>("constructor $a + $b") {
+                file("com.example", "A") {
+                    `class`("C") { `constructor`(pair, param("q", INT)) { } }
+                }
+            }
+            assertFailsWith<IllegalStateException>("var $a + $b") {
+                file("com.example", "A") {
+                    `class`("C") { `var`(pair, "p", INT, init = 1.lit) }
+                }
+            }
+            assertFailsWith<IllegalStateException>("typeSpec $a + $b") { typeSpec(pair, name = "C") { } }
+            assertFailsWith<IllegalStateException>("funSpec $a + $b") {
+                funSpec(pair, name = "f", returns = INT) { ret(1.lit) }
+            }
+            assertFailsWith<IllegalStateException>("propertySpec $a + $b") {
+                propertySpec(pair, "p", INT, init = 1.lit)
+            }
+            // `typealias` is the one E3 shipped open, and PROTECTED is subtracted from its rows for
+            // a reason of its own rather than as an exemption: KotlinPoet's `ALLOWABLE_MODIFIERS`
+            // has no PROTECTED at all, so a pair containing it draws the render-gap refusal first.
+            // The four pairs that do not contain it reach the pair rule and are asserted here; the
+            // full set, with the language rows and the controls, is in `TypeAliasesTest`.
+            if (a != KModifier.PROTECTED && b != KModifier.PROTECTED) {
+                val e2 = assertFailsWith<IllegalStateException>("typealias $a + $b") {
+                    file("com.example", "A") { `typealias`(pair, "S", com.squareup.kotlinpoet.STRING) }
+                }
+                assertTrue("one visibility" in e2.message!!, e2.message!!)
             }
         }
         // The control rows: one visibility on each of the three forms still renders and compiles.

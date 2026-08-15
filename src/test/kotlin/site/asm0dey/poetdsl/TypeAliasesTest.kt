@@ -8,6 +8,7 @@ import com.squareup.kotlinpoet.KModifier.ENUM
 import com.squareup.kotlinpoet.KModifier.INTERNAL
 import com.squareup.kotlinpoet.KModifier.PRIVATE
 import com.squareup.kotlinpoet.KModifier.PROTECTED
+import com.squareup.kotlinpoet.KModifier.PUBLIC
 import com.squareup.kotlinpoet.LIST
 import com.squareup.kotlinpoet.STRING
 import com.squareup.kotlinpoet.TypeAliasSpec
@@ -203,6 +204,54 @@ class TypeAliasesTest {
         }
         // The controls: the four KotlinPoet allows, all rendering.
         TYPE_ALIAS_MODIFIERS.forEach { m -> render { `typealias`(m, "S", STRING) } }
+    }
+
+    /**
+     * The pair axis's other live invalid render, and it shipped in the same commit range as the
+     * guard that was supposed to close the family.
+     *
+     * `` `typealias` `` checks its modifiers against `TYPE_ALIAS_MODIFIERS` directly and never calls
+     * `checkModifiers`, which is where E3 hung [checkVisibilityPair] — so every other form refused a
+     * visibility pair and the one construct E3 itself added rendered one. Measured, one file per
+     * row, `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10:
+     *
+     *     public private typealias S = String            modifier 'public' is incompatible with
+     *     class C { public private typealias S = String }  'private'.
+     *     public internal private typealias S = String   modifier 'public' is incompatible with
+     *                                                     'internal'.  — the first pair is reported
+     *
+     * and the controls, clean on all three:
+     *
+     *     public typealias S = String       internal typealias S = String
+     *     private typealias S = String      class C { private typealias S = String }
+     */
+    @Test
+    fun `two visibilities on a typealias are refused, at file level and in a class body`() {
+        val e = assertFailsWith<IllegalStateException> {
+            render { `typealias`(Modifiers(setOf(PUBLIC, PRIVATE)), "S", STRING) }
+        }
+        assertTrue("incompatible with" in e.message!!, e.message!!)
+        assertTrue("`typealias`" in e.message!!, e.message!!)
+        assertFailsWith<IllegalStateException> {
+            render { `class`("C") { `typealias`(Modifiers(setOf(PUBLIC, PRIVATE)), "S", STRING) } }
+        }
+        assertFailsWith<IllegalStateException> {
+            render { `typealias`(Modifiers(setOf(PUBLIC, INTERNAL, PRIVATE)), "S", STRING) }
+        }
+        // The controls: one visibility, at both positions, each rendering and compiling.
+        assertCompiles(render { `typealias`(PUBLIC, "S", STRING) })
+        assertCompiles(render { `typealias`(PRIVATE, "S", STRING) })
+        assertCompiles(render { `typealias`(INTERNAL, "S", STRING) })
+        assertCompiles(render { `class`("C") { `typealias`(PRIVATE, "S", STRING) } })
+        // …and the language rows, compiled by hand, so the expectation is not the DSL's own message.
+        assertTrue(
+            "odifier 'public' is incompatible with 'private'" in
+                compile("public private typealias S = String\n").messages,
+        )
+        assertTrue(
+            "odifier 'public' is incompatible with 'private'" in
+                compile("class C { public private typealias S = String }\n").messages,
+        )
     }
 
     /** The interface body's own rule, through the predicate `declareType` and `buildFun` share. */

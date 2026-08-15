@@ -104,6 +104,25 @@ internal fun Scope.declareTypeAlias(
         if (it == KModifier.PROTECTED) typeAliasProtectedIsUnrenderable(name)
         typeAliasModifierNotApplicable(name, it)
     }
+    // …and the **pair** half of the same axis, which this construct escaped when E3 shipped it.
+    //
+    // Every other declaration form reaches [checkVisibilityPair] through [checkModifiers]. A type
+    // alias cannot: [checkModifiers] runs [DeclarationForm]'s table, and a `typealias` has no row
+    // there — its allowed set is KotlinPoet's `ALLOWABLE_MODIFIERS`, read by reflection above, which
+    // is a *narrower* set than the language's and so cannot be folded into that table without
+    // turning the `PROTECTED` render gap into a language claim. So the pair rule is called directly,
+    // which is the whole fix: one fact, and every form that needs it asks for it.
+    //
+    // Measured, one file per row, `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10:
+    //
+    //     public private typealias S = String              modifier 'public' is incompatible with
+    //     class C { public private typealias S = String }   'private'.
+    //     public internal private typealias S = String     …with 'internal' — the first pair is
+    //                                                       the one reported
+    //
+    //     public typealias S = String     private typealias S = String     clean
+    //     internal typealias S = String   class C { private typealias S = String }   clean
+    checkVisibilityPair("`typealias`", "'$name'", declared)
     // Before the name is registered, so a refused alias does not burn one — the ordering Task 12
     // gave a rejected binding. The `when` at the bottom answers for a [BlockScope] too, which makes
     // it D17's exhaustiveness branch rather than a second reader: by the time it runs, the name is
