@@ -560,23 +560,25 @@ class ModifierApplicabilityTest {
      */
     @Test
     fun `protected is a companion object's to give`() {
-        assertCompiles(
-            render {
-                `class`("Outer") {
-                    companionObject {
-                        `val`(PROTECTED, "p", INT, 1.lit)
-                        `var`(PROTECTED, "v", INT, 1.lit)
-                        `fun`(PROTECTED, "f") { }
-                        `class`(PROTECTED, "M") { }
-                        `object`(PROTECTED, "Q") { }
-                        `interface`(PROTECTED, "I2") { }
-                    }
+        val src = render {
+            `class`("Outer") {
+                companionObject {
+                    `val`(PROTECTED, "p", INT, 1.lit)
+                    `var`(PROTECTED, "v", INT, 1.lit)
+                    `fun`(PROTECTED, "f") { }
+                    `class`(PROTECTED, "M") { }
+                    `object`(PROTECTED, "Q") { }
+                    `interface`(PROTECTED, "I2") { }
                 }
-                `interface`("I") { companionObject { `val`(PROTECTED, "q", INT, 1.lit) } }
-                // …one level down, where a container-keyed rule has inverted three times before.
-                `class`("Top") { `class`("Inner") { companionObject { `fun`(PROTECTED, "g") { } } } }
-            },
-        )
+            }
+            `interface`("I") { companionObject { `val`(PROTECTED, "q", INT, 1.lit) } }
+            // …one level down, where a container-keyed rule has inverted three times before.
+            `class`("Top") { `class`("Inner") { companionObject { `fun`(PROTECTED, "g") { } } } }
+        }
+        assertCompiles(src)
+        // E2f: the six rows that made this a false rejection were measured on all three frontends
+        // and pinned on one. The claim in the KDoc above is now the claim the suite makes.
+        assertCompilesEverywhereButJvm(src)
         // …and a standalone object still refuses it, which is the neighbour that keeps the rule
         // from being "any object".
         val m = message { `object`("O") { `val`(PROTECTED, "p", INT, 1.lit) } }
@@ -668,26 +670,28 @@ class ModifierApplicabilityTest {
      */
     @Test
     fun `internal and final still render everywhere an interface body is not`() {
-        assertCompiles(
-            render {
-                `interface`("I") {
-                    `fun`(PRIVATE, "f") { }
-                    `class`(PRIVATE, "M") { }
-                    `object`(PRIVATE, "Q") { }
-                    `interface`(PRIVATE, "J") { }
-                    `val`(PRIVATE, "p", INT, getter = { ret(1.lit) })
-                    companionObject {
-                        `val`(INTERNAL, "x", INT, 1.lit)
-                        `val`(FINAL, "y", INT, 1.lit)
-                    }
+        val src = render {
+            `interface`("I") {
+                `fun`(PRIVATE, "f") { }
+                `class`(PRIVATE, "M") { }
+                `object`(PRIVATE, "Q") { }
+                `interface`(PRIVATE, "J") { }
+                `val`(PRIVATE, "p", INT, getter = { ret(1.lit) })
+                companionObject {
+                    `val`(INTERNAL, "x", INT, 1.lit)
+                    `val`(FINAL, "y", INT, 1.lit)
                 }
-                `object`("O") { `val`(INTERNAL, "a", INT, 1.lit); `val`(FINAL, "b", INT, 1.lit) }
-                `class`("C") { `val`(INTERNAL, "a", INT, 1.lit); `val`(FINAL, "b", INT, 1.lit) }
-                `class`("D") { companionObject { `val`(INTERNAL, "a", INT, 1.lit); `val`(FINAL, "b", INT, 1.lit) } }
-                `class`(INTERNAL, "E") { }
-                `val`(INTERNAL, "top", INT, 1.lit)
-            },
-        )
+            }
+            `object`("O") { `val`(INTERNAL, "a", INT, 1.lit); `val`(FINAL, "b", INT, 1.lit) }
+            `class`("C") { `val`(INTERNAL, "a", INT, 1.lit); `val`(FINAL, "b", INT, 1.lit) }
+            `class`("D") { companionObject { `val`(INTERNAL, "a", INT, 1.lit); `val`(FINAL, "b", INT, 1.lit) } }
+            `class`(INTERNAL, "E") { }
+            `val`(INTERNAL, "top", INT, 1.lit)
+        }
+        assertCompiles(src)
+        // E2f: the row that keeps this keyed on the *immediate* container — an interface's own
+        // companion object taking `internal` and `final` — was a three-frontend claim pinned on one.
+        assertCompilesEverywhereButJvm(src)
         // …and the detached builders, which answer for no container at all.
         assertTrue("internal" in typeSpec(INTERNAL.toModifiers(), name = "M") { }.toString())
         assertTrue("internal" in funSpec(INTERNAL.toModifiers(), name = "f") { }.toString())
@@ -718,16 +722,17 @@ class ModifierApplicabilityTest {
                 message { `class`("O") { `interface`("I") { `fun`(TAILREC, "f", param("n", INT)) { _ -> } } } },
         )
         // The neighbours, compiled: `private` in the same container, and both modifiers in a class.
-        assertCompiles(
-            render {
-                `interface`("I") {
-                    `fun`(PRIVATE + TAILREC, "f", param("n", INT)) { _ -> }
-                    `fun`(PRIVATE + INLINE, "g") { }
-                }
-                `class`("C") { `fun`(TAILREC, "f", param("n", INT)) { _ -> }; `fun`(INLINE, "g") { } }
-                `object`("O") { `fun`(TAILREC, "h", param("n", INT)) { _ -> } }
-            },
-        )
+        val src = render {
+            `interface`("I") {
+                `fun`(PRIVATE + TAILREC, "f", param("n", INT)) { _ -> }
+                `fun`(PRIVATE + INLINE, "g") { }
+            }
+            `class`("C") { `fun`(TAILREC, "f", param("n", INT)) { _ -> }; `fun`(INLINE, "g") { } }
+            `object`("O") { `fun`(TAILREC, "h", param("n", INT)) { _ -> } }
+        }
+        assertCompiles(src)
+        // E2f: `private` being the one way out of *open member* is a language rule, not a JVM one.
+        assertCompilesEverywhereButJvm(src)
         assertTrue("tailrec" in funSpec(TAILREC.toModifiers(), name = "f") { }.toString())
     }
 
