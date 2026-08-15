@@ -27,6 +27,16 @@ import kotlin.test.assertTrue
  *
  * The blocks are read from the file rather than duplicated here on purpose. A copy in this file that
  * agreed with the compiler would say nothing about the copy a reader sees.
+ *
+ * **`README.md` is deliberately not a declared Gradle input to `test`.** It could be, and then an
+ * edit to the file would invalidate the task — but the task is the whole suite, so a typo fix would
+ * re-run 827 tests including the 153-pair census and its 363 frontend compiles. The trade is not
+ * worth it: `clean build` is this project's green signal and it always runs these assertions.
+ *
+ * The consequence is real and worth knowing: after editing `README.md` alone, `./gradlew test`
+ * reports success **without running this class** (measured — a deliberately wrong count returned
+ * BUILD SUCCESSFUL in 931ms, and the same edit failed under `--rerun-tasks`). If you change a number
+ * or a code block here, run `./gradlew test --rerun-tasks` or `clean test`.
  */
 @OptIn(ExperimentalCompilerApi::class)
 class ReadmeTest {
@@ -168,6 +178,12 @@ class ReadmeTest {
             .map { it.name.substringBefore('-').substringBefore('$') }
             .toSet()
         assertEquals(11, names.size, names.sorted().toString())
-        assertTrue("Eleven constructs" in readme, "the README's shadow-construct count moved")
+        assertTrue("eleven spellings" in readme, "the README's shadow-spelling count moved")
+        assertTrue("Nine constructs" in readme, "the README's shadow-construct count moved")
+        // The two counts the report once claimed were pinned and were not: 406 is the generated
+        // surface and 142 the shadow overloads, both asserted above against the artifact. Tying the
+        // README text to them is what makes that claim true.
+        assertTrue("406 of the 774" in readme, "the README's generated-surface count moved")
+        assertTrue("142 overloads" in readme, "the README's shadow-overload count moved")
     }
 }

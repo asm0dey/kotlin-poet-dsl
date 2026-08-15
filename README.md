@@ -141,8 +141,14 @@ rather than written out, which is why the variants and their `BlockScope` shadow
 
 ## What it guarantees
 
-**One thing, and it is narrow on purpose:** within the axes that have been measured, this DSL does
-not render Kotlin that no target platform compiles. It throws instead.
+**One thing, and it is narrow on purpose:** within the axes that have been measured, and **except for
+the cases listed under "What it still gets wrong"**, this DSL does not render Kotlin that no target
+platform compiles. It throws instead.
+
+Measured is not the same as guarded. Every cell below was measured; a handful were deliberately left
+unguarded — because deciding them needs information the DSL is never given, or because the rule that
+would close them has not been written. Those are enumerated rather than hidden, and they are the
+reason the sentence above has an exception clause.
 
 The axes, each measured cell by cell on the JVM, Kotlin/JS and Kotlin/Wasm frontends of Kotlin
 2.4.10, one file per cell:
@@ -226,8 +232,23 @@ everything else is open.
 everywhere, with or without `inner`. Closing it means a rule about every non-top-level `external`
 declaration including the platform split, which has not been written.
 
+**4b. `external` with an initializer, at the top level or detached.** `` `val`(EXTERNAL, "x", INT,
+init = 1.lit) `` renders `public external val x: Int = 1`, and the same holds for an `external class`
+whose member carries an initializer and for `propertySpec(EXTERNAL.toModifiers(), …, init = …)`. The
+JVM says *modifier 'external' is not applicable to 'property'*; Kotlin/JS and Kotlin/Wasm say *wrong
+initializer of external declaration. Must be ' = definedExternally'*. Invalid on all three. Deciding
+it means inspecting an `Expr`'s `CodeBlock` for that one spelling, which no rule here does.
+
 **5. `expect` + `actual` on one declaration** renders. It fails alongside the `expect` family's own
 container and file-layout errors, so it is left with that family rather than with the pair axis.
+
+**5b. `expect` on a nested classifier or on a member function.** `` `class`("Outer") { `class`(EXPECT,
+"N") { } } `` renders `public class Outer { public expect class N }`, and `` `class`("C") {
+`fun`(EXPECT, "f") { } } `` renders `public expect fun f()`; the interface and object spellings
+render too. `kotlinc -Xmulti-platform`: *modifier 'expect' is not applicable to 'nested class'* /
+*'member function'*. Twelve cells. A nested classifier of an `expect` container is implicitly
+`expect` and must not carry the keyword — the container rule is closed, this is the member's own
+modifier and it is not.
 
 **6. Local classes and local functions are unsupported.** Not because they are invalid Kotlin — they
 are perfectly valid — but because KotlinPoet 2.3.0 emits an explicit visibility on every type and an
@@ -235,7 +256,8 @@ implicit `public` on every function spliced into a code block, and Kotlin allows
 declaration. Both are refused with that reason, and the refusal is a render gap rather than a
 language claim.
 
-**7. Eleven constructs that belong to a type body have `@Deprecated(level = ERROR)` shadows on
+**7. Nine constructs that belong to a type body — eleven spellings, counting the `ctor` and
+`ctorParam` aliases — have `@Deprecated(level = ERROR)` shadows on
 `BlockScope`** — 142 overloads in all — so writing `` `constructor` { } `` in a function body is a
 *compile* error in your generator rather than a silently misplaced declaration. The shadows have one
 known false positive: a `typeSpec { }` written lexically inside a block resolves them too, because a
@@ -266,10 +288,15 @@ and stays possible; adding or removing a declaration is, and now fails loudly.
 ./gradlew publishToMavenLocal
 ```
 
-The suite compiles its own claims rather than comparing them to golden strings: 336 call sites run
-a real Kotlin frontend over rendered output, 44 of them on Kotlin/JS and Kotlin/Wasm as well as the
-JVM, plus the 153-pair census, which runs all three frontends over every one of its 121 renders. The
+The suite compiles its own claims rather than comparing them to golden strings: several hundred call
+sites run a real Kotlin frontend over rendered output — `grep -rc 'assertCompiles' src/test` for the
+current count — and 38 of them run Kotlin/JS and Kotlin/Wasm as well as the JVM. On top of that the
+153-pair census runs all three frontends over every one of its 121 renders on every build, and the
 generated sources are checked to regenerate byte-identically.
+
+(An earlier draft of this paragraph gave two exact counts. Neither was asserted by a test and two
+different greps produced two different answers, so they are gone — a number in this file that no
+command reproduces is the kind of claim the rest of the document exists to avoid.)
 
 ## Licence
 
