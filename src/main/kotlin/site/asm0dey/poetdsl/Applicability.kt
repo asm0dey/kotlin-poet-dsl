@@ -385,9 +385,25 @@ internal fun constNeedsATopLevelOrObjectContainer(construct: String, name: Strin
  * than from a compiler. A companion object is the one object whose members a subclass of the
  * enclosing type can see, which is exactly what `protected` is about; that it belongs to an
  * *interface* is no obstacle either (the last control row above).
+ *
+ * **E3 added the third container, and it is the one cell of 192 where the two anonymous bodies
+ * disagree.** Measured, one file per row, all three frontends identical:
+ *
+ *     val v = object { protected val p: Int = 1 }         clean
+ *     val v = object { protected fun f(): Int = 1 }       clean
+ *     val v = object { protected var p: Int = 1 }         clean
+ *     enum class E { A { protected val p: Int = 1 } }     modifier 'protected' is not applicable
+ *     enum class E { A { protected var p: Int = 1 } }      inside 'enum entry'.
+ *     enum class E { A { protected fun f(): Int = 1 } }
+ *
+ * So an anonymous object is `"class"`-like here and an enum entry is not, which is why
+ * [isAnonymousBody] — the predicate the other five questions share — is deliberately *not* what this
+ * one reads. Two questions, two readers, in a file whose own history is a false rejection that came
+ * from one predicate answering for a container nobody had compiled.
  */
 internal val Scope.protectedAllowed: Boolean
-    get() = this is TypeScope && (kindName == "class" || kindName == "companion object")
+    get() = this is TypeScope &&
+        (kindName == "class" || kindName == "companion object" || kindName == ANONYMOUS_OBJECT)
 
 /**
  * The property side of [protectedNeedsAClass], which reads a [PropertyContainer] rather than a
