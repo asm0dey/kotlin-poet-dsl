@@ -88,6 +88,53 @@ internal fun anonymousBodyHoldsNo(
             "the one nested classifier an anonymous body does hold. See `innerAllowed`.",
     )
 
+/**
+ * The anonymous body's own questions, asked of a **spliced** spec.
+ *
+ * `+FunSpec`, `+PropertySpec` and `+TypeSpec` put a pre-built spec straight into the innermost
+ * builder and ask the container nothing. That boundary is pre-existing and is **not** closed here in
+ * general — a `+typeSpec` into an `inner class` still renders `public class N`, as it did at base —
+ * but E3 added two containers and measured three rules for them, and the splice reached past all
+ * three. Two of the three were live: `ABSTRACT` raised KotlinPoet's own `IllegalArgumentException`
+ * (*non-abstract type null cannot declare abstract property p*, Global Constraint 26's forbidden
+ * type) and `PROTECTED` rendered `protected val p` / `protected fun g()` in an enum entry body,
+ * which is *modifier 'protected' is not applicable inside 'enum entry'* on all three frontends.
+ *
+ * **One fact, one reader**: every question below is answered by the predicate the non-splice path
+ * already uses, so the two routes cannot drift. [protectedAllowed] rather than [isAnonymousBody] is
+ * what asks the `PROTECTED` question, which is the whole reason those are two predicates — the same
+ * member is clean in an anonymous object's body and refused in an enum entry's.
+ */
+internal fun Scope.checkAnonymousBodySplice(construct: String, member: String, modifiers: Set<KModifier>) {
+    if (this !is TypeScope || !isAnonymousBody) return
+    if (KModifier.ABSTRACT in modifiers) abstractMemberIsUnrenderable(construct, member, kindName)
+    if (KModifier.PROTECTED in modifiers && !protectedAllowed) {
+        protectedNeedsAClass(construct, "'$member'", noun = null)
+    }
+}
+
+/**
+ * The [TypeSpec] half of [checkAnonymousBodySplice]. `INNER` is the exemption and it is the whole of
+ * it — see [Scope.innerAllowed] for the 128-cell sweep that says so — so this returns for exactly
+ * the shape the non-splice path lets through and refuses everything else with the same message.
+ *
+ * `TypeSpec.kind` is public API and is what names the declared form, which is what the frontends key
+ * their sentence on: a spliced `interface` draws *'Interface' is prohibited here* and a spliced
+ * named `object` draws *named object 'O' cannot be local*, neither of which is the class sentence.
+ */
+internal fun Scope.checkAnonymousBodyTypeSplice(spec: TypeSpec) {
+    if (this !is TypeScope || !isAnonymousBody) return
+    if (KModifier.INNER in spec.modifiers) return
+    val name = spec.name ?: "<anonymous>"
+    if (KModifier.COMPANION in spec.modifiers) companionNeedsAClassOrInterface("TypeSpec", name)
+    val declaredKind = when (spec.kind) {
+        TypeSpec.Kind.OBJECT -> "named object"
+        TypeSpec.Kind.INTERFACE -> "interface"
+        TypeSpec.Kind.CLASS -> "class"
+    }
+    holdsNoNestedType(declaredKind, name)
+}
+
 /** See [anonymousBodyHoldsNo]: the frontends' own sentence for each of the three declared forms. */
 private fun anonymousBodyDiagnostic(declaredKind: String, what: String): String = when (declaredKind) {
     "named object" -> "named object $what cannot be local. Try to use an anonymous object instead"

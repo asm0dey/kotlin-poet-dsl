@@ -2,11 +2,13 @@ package site.asm0dey.poetdsl
 
 import com.squareup.kotlinpoet.INT
 import com.squareup.kotlinpoet.KModifier.ABSTRACT
+import com.squareup.kotlinpoet.KModifier.COMPANION
 import com.squareup.kotlinpoet.KModifier.ENUM as ENUM_MODIFIER
 import com.squareup.kotlinpoet.KModifier.INNER
 import com.squareup.kotlinpoet.KModifier.OVERRIDE
 import com.squareup.kotlinpoet.KModifier.PRIVATE
 import com.squareup.kotlinpoet.KModifier.PROTECTED
+import com.squareup.kotlinpoet.TypeSpec
 import com.tschuchort.compiletesting.KotlinCompilation
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import kotlin.test.Test
@@ -165,6 +167,50 @@ class AnonymousObjectTest {
             render { `class`(ENUM_MODIFIER, "E") { enumEntry("A") { `object`("O") { } } } }
         }
         assertTrue("named object 'O' cannot be local" in entryObj.message!!, entryObj.message!!)
+        // …and `` `object`(COMPANION, …) ``, the second spelling of `companionObject`, which is the
+        // one that quotes a frontend sentence — and whose noun is the container's, differing
+        // between the two bodies:
+        //
+        //     val v = object { companion object }      modifier 'companion' is not applicable
+        //                                              inside 'local class'.
+        //     enum class E { A { companion object } }  …inside 'enum entry'.
+        //
+        // measured on all three frontends. An anonymous object was quoted "inside 'anonymous
+        // object'" until this round, which is a noun no frontend prints for any input.
+        // (`companionObject { }` itself refuses in prose, naming no diagnostic, and is unchanged.)
+        val anonCompanion = assertFailsWith<IllegalStateException> {
+            render { `val`("v", init = anonymousObject { `object`(COMPANION, "O") { } }) }
+        }
+        assertTrue("inside 'local class'" in anonCompanion.message!!, anonCompanion.message!!)
+        val entryCompanion = assertFailsWith<IllegalStateException> {
+            render { `class`(ENUM_MODIFIER, "E") { enumEntry("A") { `object`(COMPANION, "O") { } } } }
+        }
+        assertTrue("inside 'enum entry'" in entryCompanion.message!!, entryCompanion.message!!)
+        // The language rows, compiled by hand.
+        assertTrue(
+            "inside 'local class'" in compile("val v = object { companion object }\n").messages,
+        )
+        assertTrue(
+            "inside 'enum entry'" in
+                compile("enum class E { A { companion object } }\n").messages,
+        )
+        // …and the same three forms reaching the *splice* boundary keep their own sentences.
+        val splicedIface = assertFailsWith<IllegalStateException> {
+            render {
+                `fun`("f") {
+                    `val`("v", init = anonymousObject { +TypeSpec.interfaceBuilder("I").build() })
+                }
+            }
+        }
+        assertTrue("'Interface' is prohibited here" in splicedIface.message!!, splicedIface.message!!)
+        val splicedObj = assertFailsWith<IllegalStateException> {
+            render {
+                `fun`("f") {
+                    `val`("v", init = anonymousObject { +TypeSpec.objectBuilder("O").build() })
+                }
+            }
+        }
+        assertTrue("named object 'O' cannot be local" in splicedObj.message!!, splicedObj.message!!)
     }
 
     /**
@@ -289,6 +335,101 @@ class AnonymousObjectTest {
             render { `val`("v", base, init = anonymousObject(base, 1.lit)) },
             "open class Base(val n: Int)",
         )
+    }
+
+    // --- the splice boundary ---------------------------------------------------------------------
+
+    /**
+     * `+FunSpec`, `+PropertySpec` and `+TypeSpec` put a **pre-built** spec into the innermost
+     * builder, and they ask none of the container's questions. That boundary is pre-existing — a
+     * `+typeSpec` into an `inner class` renders `public class N` at base too — but E3's two new
+     * containers made it newly reachable for three rules E3 itself measured, and two of the three
+     * were reaching KotlinPoet's `IllegalArgumentException` or rendering invalid Kotlin.
+     *
+     * Measured at HEAD before the fix, one row per spelling:
+     *
+     *     anonymousObject { +propertySpec(ABSTRACT…, "p", INT) }   IllegalArgumentException:
+     *     anonymousObject { +funSpec(ABSTRACT…, name = "g") }       non-abstract type null cannot
+     *     enumEntry("A")  { +propertySpec(ABSTRACT…, …) }           declare abstract property p
+     *     enumEntry("A")  { +funSpec(ABSTRACT…, …) }
+     *
+     *     enumEntry("A")  { +propertySpec(PROTECTED…, "p", INT…) }  rendered `protected val p`
+     *     enumEntry("A")  { +funSpec(PROTECTED…, name = "g"…) }     rendered `protected fun g()`
+     *     anonymousObject { +typeSpec(name = "N") { } }             rendered `public class N`
+     *     enumEntry("A")  { +typeSpec(name = "N") { } }             rendered `public class N`
+     *
+     * and the language rows those last four stand on, all three frontends 2.4.10:
+     *
+     *     enum class E { A { protected val p: Int = 1 } }      modifier 'protected' is not
+     *     enum class E { A { protected fun g(): Int = 1 } }     applicable inside 'enum entry'.
+     *     val v = object { public class N }                    modifier 'public' is not applicable
+     *     enum class E { A { public class N } }                 to 'local class'.
+     *
+     * The brief named four of these eight; the `funSpec(PROTECTED)` row and both `+typeSpec` rows
+     * were found by building the neighbours it did not.
+     */
+    @Test
+    fun `the splice paths ask the anonymous body's own questions`() {
+        val abstractProperty = propertySpec(ABSTRACT.toModifiers(), "p", INT)
+        val abstractFunction = funSpec(ABSTRACT.toModifiers(), name = "g", returns = INT) { }
+        val protectedProperty = propertySpec(PROTECTED.toModifiers(), "p", INT, init = 1.lit)
+        val protectedFunction = funSpec(PROTECTED.toModifiers(), name = "g", returns = INT) { ret(1.lit) }
+        val plainType = typeSpec(name = "N") { }
+
+        // ABSTRACT — a render gap in both bodies, so the DSL's own message rather than KotlinPoet's.
+        for (spliced in listOf<TypeScope.() -> Unit>(
+            { +abstractProperty },
+            { +abstractFunction },
+        )) {
+            val anon = assertFailsWith<IllegalStateException> {
+                render { `fun`("f") { `val`("v", init = anonymousObject(body = spliced)) } }
+            }
+            assertTrue("KotlinPoet 2.3.0 cannot render it" in anon.message!!, anon.message!!)
+            val entry = assertFailsWith<IllegalStateException> {
+                render { `class`(ENUM_MODIFIER, "E") { enumEntry("A", body = spliced) } }
+            }
+            assertTrue("KotlinPoet 2.3.0 cannot render it" in entry.message!!, entry.message!!)
+        }
+
+        // PROTECTED — refused in an enum entry body, and **clean in an anonymous object's**, which
+        // is the control that stops this from being a false rejection.
+        for (spliced in listOf<TypeScope.() -> Unit>(
+            { +protectedProperty },
+            { +protectedFunction },
+        )) {
+            val entry = assertFailsWith<IllegalStateException> {
+                render { `class`(ENUM_MODIFIER, "E") { enumEntry("A", body = spliced) } }
+            }
+            assertTrue("'enum entry'" in entry.message!!, entry.message!!)
+            assertCompiles(render { `fun`("f") { `val`("v", init = anonymousObject(body = spliced)) } })
+        }
+
+        // A nested classifier — refused in both, with the INNER form as the control.
+        assertFailsWith<IllegalStateException> {
+            render { `fun`("f") { `val`("v", init = anonymousObject { +plainType }) } }
+        }
+        assertFailsWith<IllegalStateException> {
+            render { `class`(ENUM_MODIFIER, "E") { enumEntry("A") { +plainType } } }
+        }
+        val innerType = typeSpec(INNER.toModifiers(), name = "N") { }
+        assertCompiles(render { `fun`("f") { `val`("v", init = anonymousObject { +innerType }) } })
+        assertCompiles(render { `class`(ENUM_MODIFIER, "E") { enumEntry("A") { +innerType } } })
+    }
+
+    /**
+     * …and the residue, pinned rather than described: the splice boundary is **not** closed in
+     * general. A `+typeSpec` into an `inner class` still renders `public class N`, which is
+     * *'Class' is prohibited here* on all three frontends, exactly as it did at base. Only the two
+     * anonymous bodies ask their questions at the splice, because they are the two containers E3
+     * added and the three rules are the three E3 measured.
+     */
+    @Test
+    fun `the splice boundary is still open for the containers this round did not touch`() {
+        val out = render {
+            `class`("O") { `class`(INNER, "M") { +typeSpec(name = "N") { } } }
+        }
+        assertTrue("public class N" in out, out)
+        assertTrue("'Class' is prohibited here" in compile("class O { inner class M { class N } }\n").messages)
     }
 
     // --- ADR 0008 --------------------------------------------------------------------------------

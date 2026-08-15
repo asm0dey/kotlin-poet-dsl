@@ -463,6 +463,7 @@ public fun file(
 /** Emits [this] into the innermost scope's builder; a block body is not a legal target. */
 context(s: Scope)
 public operator fun FunSpec.unaryPlus() {
+    s.checkAnonymousBodySplice("FunSpec", name, modifiers)
     when (s) {
         is FileScope -> s.builder.addFunction(this)
         is TypeScope -> s.builder.addFunction(this)
@@ -491,6 +492,7 @@ public fun add(spec: FunSpec) {
 /** Emits [this] into the innermost scope's builder; a block body is not a legal target. */
 context(s: Scope)
 public operator fun TypeSpec.unaryPlus() {
+    s.checkAnonymousBodyTypeSplice(this)
     when (s) {
         is FileScope -> s.builder.addType(this)
         is TypeScope -> s.builder.addType(this)
@@ -519,6 +521,7 @@ public fun add(spec: TypeSpec) {
 /** Emits [this] into the innermost scope's builder; a block body is not a legal target. */
 context(s: Scope)
 public operator fun PropertySpec.unaryPlus() {
+    s.checkAnonymousBodySplice("PropertySpec", name, modifiers)
     when (s) {
         is FileScope -> s.builder.addProperty(this)
         is TypeScope -> s.builder.addProperty(this)

@@ -491,7 +491,22 @@ internal fun Scope.protectedNeedsAClass(construct: String, subject: String, noun
 private fun Scope.containerNoun(): String = when (this) {
     is FileScope -> "file"
     is BlockScope -> "local class"
-    is TypeScope -> if (kindName == "named object") "standalone object" else kindName
+    // An **anonymous object** is a local class to the frontends and they say so, which is not the
+    // noun `kindName` carries. Measured, one file per row, `kotlinc`, `kotlinc-js` and
+    // `kotlinc-wasm` 2.4.10:
+    //
+    //     val v = object { companion object }         modifier 'companion' is not applicable
+    //                                                 inside 'local class'.
+    //     enum class E { A { companion object } }     …inside 'enum entry'.
+    //
+    // So the entry keeps `kindName` and the anonymous object does not. `protected` never reaches
+    // here from an anonymous object — [protectedAllowed] admits it, because the frontends do — so
+    // `companion` is the one caller this row has, and it had a sentence no frontend prints.
+    is TypeScope -> when (kindName) {
+        "named object" -> "standalone object"
+        ANONYMOUS_OBJECT -> "local class"
+        else -> kindName
+    }
 }
 
 /**
