@@ -95,17 +95,41 @@ private fun docFor(nm: Spelling, body: String): String =
  * **direct** block call and false of the case E3 itself created. A shadow is a `BlockScope`
  * extension, and an extension receiver beats a context parameter in Kotlin's resolution, so a call
  * inside a `typeSpec { }` or `anonymousObject { }` body written lexically in a block resolves to the
- * shadow even though the call is in a genuine `TypeScope` and the construct would have attached
- * correctly. Telling that caller their call "would silently attach to the enclosing type" sends them
- * looking for a bug that is not there. Corrected here rather than later because Task 22 locks these
- * strings permanently.
+ * shadow even though the call is in a genuine `TypeScope`. Telling that caller their call "would
+ * silently attach to the enclosing type" sends them looking for a bug that is not there. Corrected
+ * here rather than later because Task 22 locks these strings permanently.
+ *
+ * **What this constant no longer says is "though the construct would have been valid there".** That
+ * clause was the fix round's own replacement text and it is false for 121 of the 124 shadows it
+ * reached: the two bodies it names are not equivalent, and a `constructor` and a `companionObject`
+ * are valid in a `typeSpec` body and invalid in an `anonymousObject`'s. Measured, one file per row,
+ * `kotlinc`, `kotlinc-js` and `kotlinc-wasm` 2.4.10, all three identical:
+ *
+ *     val v = object { constructor(q: Int) }   objects cannot have constructors.
+ *     val v = object { companion object }      modifier 'companion' is not applicable inside
+ *                                             'local class'.
+ *     val v = object { init { println(1) } }   clean          ← `init` is the one that *is* valid
+ *     enum class E { A { init { … } } }        clean            in both, and keeps the claim
+ *     class C { constructor(q: Int) { … }      clean          ← the `typeSpec` half, which is what
+ *               companion object }                              makes the split a split
+ *
+ * So the validity claim is a **per-construct** clause now, exactly as `superclass`, `superinterface`
+ * and `` `init` `` already had one. Writing it once for all of them was the same failure the round
+ * was fixing: a sentence derived from what the rule intends rather than from what a compiler prints.
  */
 private const val SHADOW_CAPTURE: String =
     "Written directly in a block it would silently attach to the enclosing type; a call inside a " +
-        "`typeSpec` or `anonymousObject` body written lexically in a block lands here too, though " +
-        "the construct would have been valid there, because a shadow is a `BlockScope` extension " +
-        "and an extension receiver beats a context parameter (ADR 0002). Build that type outside " +
-        "the block, or splice it in with `+`."
+        "`typeSpec` or `anonymousObject` body written lexically in a block lands here too, because " +
+        "a shadow is a `BlockScope` extension and an extension receiver beats a context parameter " +
+        "(ADR 0002). Build that type outside the block, or splice it in with `+`."
+
+/**
+ * [SHADOW_CAPTURE] plus the validity clause for a construct a `typeSpec` body holds and an
+ * `anonymousObject`'s does not — where [inAnonymousObject] says what the anonymous body does about
+ * it, in the frontends' own words. See [SHADOW_CAPTURE] for the rows.
+ */
+private fun capturedButValidInATypeSpec(inAnonymousObject: String): String =
+    "$SHADOW_CAPTURE In a `typeSpec` body the construct would have been valid; $inAnonymousObject"
 
 /**
  * A single generated declaration. [shadow], when set, is the message of the `BlockScope` shadow
@@ -159,10 +183,17 @@ private fun Overload.render(): String = buildString {
  * The parameter list is copied from the real overload, not re-derived: ADR 0002 measured that a
  * `vararg Any?` catch-all silently fails to shadow, because a trailing lambda does not bind into
  * it and resolution falls through to the real function. Only an exact match guards.
+ *
+ * The message is escaped rather than interpolated raw. Every shadow message was quote-free until a
+ * per-construct clause quoted a frontend's own sentence — *objects cannot have constructors* — and
+ * an unescaped `"` closes the string literal and renders a file that does not compile. Escaping here
+ * rather than avoiding the character keeps the quoted-diagnostic house style available to all of
+ * them.
  */
 private fun Overload.renderShadow(): String = buildString {
+    val message = shadow!!.replace("\\", "\\\\").replace("\"", "\\\"")
     appendLine("@Deprecated(")
-    appendLine("    \"$shadow\",")
+    appendLine("    \"$message\",")
     appendLine("    level = DeprecationLevel.ERROR,")
     appendLine(")")
     appendLine("public fun BlockScope.$name(")
@@ -580,7 +611,11 @@ private fun ctorOverloads(): List<Overload> = CTOR_NAMES.flatMap { nm ->
                 // type's context parameter is still in scope there, so the call resolves and the
                 // constructor silently attaches to the enclosing type. Only the file-level direction
                 // fails on its own ("no context argument for 't: TypeScope' found").
-                shadow = "${nm.value} is only valid inside a class body. " + SHADOW_CAPTURE,
+                shadow = "${nm.value} is only valid inside a class body. " + capturedButValidInATypeSpec(
+                    "an anonymous object holds no constructor — `val v = object { constructor(q: " +
+                        "Int) }` is \"objects cannot have constructors\" — and this DSL refuses one " +
+                        "in an `anonymousObject` body itself.",
+                ),
             )
         }
     }
@@ -658,7 +693,9 @@ private val SUPERTYPES: List<Overload> = listOf(
         returns = null,
         body = "t.applySuperclass(type, args)",
         shadow = "superclass is only valid inside a class or object body, on the type itself. " +
-            SHADOW_CAPTURE + " `anonymousObject` takes its supertypes as parameters for that reason.",
+            capturedButValidInATypeSpec(
+                "an `anonymousObject` takes its supertypes as parameters, for this reason.",
+            ),
     ),
     Overload(
         doc = """
@@ -682,8 +719,9 @@ private val SUPERTYPES: List<Overload> = listOf(
         returns = null,
         body = "t.applySuperinterface(type, by)",
         shadow = "superinterface is only valid inside a class, object or interface body, on the " +
-            "type itself. " + SHADOW_CAPTURE +
-            " `anonymousObject` takes its supertypes as parameters for that reason.",
+            "type itself. " + capturedButValidInATypeSpec(
+                "an `anonymousObject` takes its supertypes as parameters, for this reason.",
+            ),
     ),
 )
 
@@ -728,7 +766,9 @@ private val TYPE_BODY: List<Overload> = listOf(
         returns = null,
         body = "t.addInitializerBlock(body)",
         shadow = "`init` is only valid inside a class, object or companion object body. " +
-            SHADOW_CAPTURE + " In an `anonymousObject` a property initializer does the same work.",
+            SHADOW_CAPTURE + " In either body the construct would have been valid — `val v = " +
+            "object { init { … } }` is clean — so in an `anonymousObject` written in a block, " +
+            "which is where this is unreachable, a property initializer does the same work.",
     ),
     Overload(
         doc = """
@@ -746,7 +786,12 @@ private val TYPE_BODY: List<Overload> = listOf(
         params = KDOC_PARAM + listOf("body: TypeScope.() -> Unit"),
         returns = null,
         body = "t.addCompanionObject(null, kdoc, body)",
-        shadow = "companionObject is only valid inside a class or interface body. " + SHADOW_CAPTURE,
+        shadow = "companionObject is only valid inside a class or interface body. " +
+            capturedButValidInATypeSpec(
+                "an anonymous object holds none — `val v = object { companion object }` is " +
+                    "\"modifier 'companion' is not applicable inside 'local class'\" — and this " +
+                    "DSL refuses one in an `anonymousObject` body itself.",
+            ),
     ),
     Overload(
         doc = """
@@ -762,7 +807,12 @@ private val TYPE_BODY: List<Overload> = listOf(
         params = listOf("name: String") + KDOC_PARAM + listOf("body: TypeScope.() -> Unit"),
         returns = null,
         body = "t.addCompanionObject(name, kdoc, body)",
-        shadow = "companionObject is only valid inside a class or interface body. " + SHADOW_CAPTURE,
+        shadow = "companionObject is only valid inside a class or interface body. " +
+            capturedButValidInATypeSpec(
+                "an anonymous object holds none — `val v = object { companion object }` is " +
+                    "\"modifier 'companion' is not applicable inside 'local class'\" — and this " +
+                    "DSL refuses one in an `anonymousObject` body itself.",
+            ),
     ),
     Overload(
         doc = """
@@ -791,7 +841,11 @@ private val TYPE_BODY: List<Overload> = listOf(
             listOf("body: (TypeScope.() -> Unit)? = null"),
         returns = null,
         body = "t.addEnumEntry(name, args, kdoc, body)",
-        shadow = "enumEntry is only valid inside an enum class body. " + SHADOW_CAPTURE,
+        shadow = "enumEntry is only valid inside an enum class body. " +
+            capturedButValidInATypeSpec(
+                "an anonymous object has no entries — only a `class`(ENUM, …) has, which is " +
+                    "what a `typeSpec` body would have had to be for this call to land.",
+            ),
     ),
 )
 

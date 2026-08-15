@@ -45,6 +45,66 @@ class ShadowsTest {
     }
 
     /**
+     * The **validity** half of the same messages, which the shared clause got wrong in the other
+     * direction: it told all 124 callers the construct "would have been valid there" for a body it
+     * names two of — and a `typeSpec` body and an `anonymousObject`'s are not the same container.
+     * Measured in-suite below, and at a command line on `kotlinc`, `kotlinc-js` and `kotlinc-wasm`
+     * 2.4.10, all three identical:
+     *
+     *     val v = object { constructor(q: Int) }   objects cannot have constructors.
+     *     val v = object { companion object }      modifier 'companion' is not applicable inside
+     *                                              'local class'.
+     *     val v = object { init { println(1) } }   clean   ← the one construct valid in both
+     *     class C { constructor(q: Int) { … }      clean   ← the `typeSpec` half of the split
+     *               companion object }
+     *
+     * So 125 of the 126 carry "In a `typeSpec` body the construct would have been valid" plus what
+     * the anonymous body does instead, and `` `init` `` — the one that *is* valid in both — is the
+     * one that still says so.
+     */
+    @Test
+    fun `the validity clause is per construct, and each construct's is measured`() {
+        val messages = Class.forName("site.asm0dey.poetdsl.ShadowsKt")
+            .declaredMethods
+            .mapNotNull { it.getAnnotation(Deprecated::class.java)?.message }
+        val captured = messages.filter { "an extension receiver beats a context parameter (ADR 0002)" in it }
+        assertEquals(126, captured.size)
+        assertTrue(
+            captured.none { "lands here too, though the construct would have been valid there" in it },
+            "the unqualified claim is back",
+        )
+        // 120 `constructor`/`ctor`, both `companionObject`s, `enumEntry`, and the two supertypes.
+        assertEquals(
+            125,
+            captured.count { "In a `typeSpec` body the construct would have been valid" in it },
+        )
+        assertEquals(120, captured.count { "\"objects cannot have constructors\"" in it })
+        assertEquals(
+            2,
+            captured.count { "\"modifier 'companion' is not applicable inside 'local class'\"" in it },
+        )
+        assertEquals(1, captured.count { "an anonymous object has no entries" in it })
+        assertEquals(2, captured.count { "takes its supertypes as parameters" in it })
+        // …and `init`, the exception, which keeps the claim because the language keeps it.
+        assertEquals(1, captured.count { "In either body the construct would have been valid" in it })
+
+        // The rows the two clauses quote, compiled here rather than trusted. The leading character
+        // is dropped because kctfork's renderer capitalises the first letter of a diagnostic where
+        // command-line kotlinc does not — the suite's existing `"nresolved reference '*'"` idiom.
+        assertTrue(
+            "bjects cannot have constructors" in
+                compile("fun f() {\n  val v = object { constructor(q: Int) }\n  println(v)\n}\n").messages,
+        )
+        assertTrue(
+            "companion' is not applicable inside 'local class'" in
+                compile("fun f() {\n  val v = object { companion object }\n  println(v)\n}\n").messages,
+        )
+        // The controls, and they are what make the clause a split rather than a blanket denial.
+        assertCompiles("fun f() {\n  val v = object { init { println(1) } }\n  println(v)\n}\n")
+        assertCompiles("class C {\n  constructor(q: Int) { println(q) }\n\n  companion object\n}\n")
+    }
+
+    /**
      * The two the sweep above missed, through the route a consumer actually takes: a call in a block
      * body, compiled, with the deprecation message read out of the compiler's own output. An
      * out-of-project consumer compile printed the stale `enumEntry` text verbatim, which is what says
