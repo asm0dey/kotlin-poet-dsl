@@ -2,7 +2,7 @@
 kotlin = "2.4.10"
 kotlinpoet = "2.3.0"
 kctfork = "0.13.0"
-bcv = "0.18.1"
+bcv = "0.18.2"
 
 [libraries]
 kotlinpoet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinpoet" }
