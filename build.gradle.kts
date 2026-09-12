@@ -140,8 +140,8 @@ val wasmStdlib: Configuration = configurations.create("wasmStdlib") {
 }
 
 dependencies {
-    jsStdlib("org.jetbrains.kotlin:kotlin-stdlib-js:2.4.10")
-    wasmStdlib("org.jetbrains.kotlin:kotlin-stdlib-wasm-js:2.4.10")
+    jsStdlib("org.jetbrains.kotlin:kotlin-stdlib-js:2.4.20")
+    wasmStdlib("org.jetbrains.kotlin:kotlin-stdlib-wasm-js:2.4.20")
 }
 
 tasks.test {
